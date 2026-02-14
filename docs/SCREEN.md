@@ -23,6 +23,10 @@ Feather is a lightweight screen that displays basic information like print statu
 
 Guppy is also resource-friendly, but in addition to showing print information, it allows you to control the printer directly from the screen. You can pause, resume, or cancel prints using Guppy, making it a good choice if you want some interactive features while still saving memory.
 
+### Helix Screen
+
+[HelixScreen](https://helixscreen.org) is a full-featured touchscreen UI built specifically for Klipper printers. It provides comprehensive printer control including temperature management, motion controls, print monitoring with thumbnails, bed mesh visualization, filament management, input shaper calibration, and more — all optimized for the AD5M's 800×480 display and limited RAM. HelixScreen uses a memory-efficient native UI framework and coordinates carefully with ForgeX's boot sequence.
+
 ### Switching to Alternative Screens / Headless
 
 **Disabling the stock screen completely disables FlashForge's additional software.**  
@@ -50,6 +54,12 @@ To enable the Guppy screen, set the following mod parameter:
 
 ```bash
 SET_MOD PARAM="display" VALUE="GUPPY"
+```
+
+To enable HelixScreen, set the following mod parameter:
+
+```bash
+SET_MOD PARAM="display" VALUE="HELIX"
 ```
 
 This will disable the stock screen and activate the selected alternative screen immediately. **Make sure to wait until the current print finishes before doing this! :)**
@@ -91,6 +101,9 @@ Then edit the `variables.cfg` file to disable the `display` parameter manually:
 
 # Enable guppy screen using script
 /opt/config/mod/.shell/commands/zdisplay.sh guppy
+
+# Enable helix screen using script
+/opt/config/mod/.shell/commands/zdisplay.sh helix
 
 # Enable headless mode using script
 /opt/config/mod/.shell/commands/zdisplay.sh headless

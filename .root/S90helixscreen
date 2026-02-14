@@ -1,0 +1,128 @@
+#!/bin/sh
+#
+# Start HelixScreen
+#
+
+HELIX_DIR=/opt/helixscreen
+HELIX_BIN=$HELIX_DIR/bin/helix-screen
+HELIX_SPLASH=$HELIX_DIR/bin/helix-splash
+HELIX_WATCHDOG=$HELIX_DIR/bin/helix-watchdog
+PID_FILE=/run/helixscreen.pid
+SPLASH_PID_FILE=/run/helix-splash.pid
+WATCHDOG_PID_FILE=/run/helix-watchdog.pid
+NICENESS=10
+
+# Source platform hooks if available
+HOOKS_FILE=$HELIX_DIR/config/platform/hooks.sh
+if [ -f "$HOOKS_FILE" ]; then
+    . "$HOOKS_FILE"
+fi
+
+start_splash() {
+    if [ -x "$HELIX_SPLASH" ]; then
+        echo "Starting helix-splash..."
+        start-stop-daemon -S -b -m -p $SPLASH_PID_FILE --exec $HELIX_SPLASH
+    fi
+}
+
+stop_splash() {
+    if [ -f $SPLASH_PID_FILE ]; then
+        start-stop-daemon -K -q -p $SPLASH_PID_FILE
+        rm -f $SPLASH_PID_FILE
+    fi
+}
+
+start() {
+    echo "Starting HelixScreen..."
+
+    # Run platform pre-start hooks (sets active flag, etc.)
+    if type platform_pre_start >/dev/null 2>&1; then
+        platform_pre_start
+    fi
+
+    # Stop competing UIs (stock firmware, GuppyScreen, etc.)
+    if type platform_stop_competing_uis >/dev/null 2>&1; then
+        platform_stop_competing_uis
+    fi
+
+    # Enable backlight
+    if type platform_enable_backlight >/dev/null 2>&1; then
+        platform_enable_backlight
+    fi
+
+    # Show splash while waiting for services
+    start_splash
+
+    # Wait for Moonraker (reduces memory pressure on 107MB RAM)
+    if type platform_wait_for_services >/dev/null 2>&1; then
+        platform_wait_for_services
+    fi
+
+    # Wait for ForgeX boot sequence to complete
+    if type platform_wait_for_boot_complete >/dev/null 2>&1; then
+        platform_wait_for_boot_complete
+    fi
+
+    # Stop splash before starting main UI
+    stop_splash
+
+    # Start the main HelixScreen binary
+    start-stop-daemon -S -b -m -p $PID_FILE -N $NICENESS \
+        --exec $HELIX_BIN -- -v
+    [ $? = 0 ] && echo "OK" || echo "FAIL"
+
+    # Start watchdog if available
+    if [ -x "$HELIX_WATCHDOG" ]; then
+        start-stop-daemon -S -b -m -p $WATCHDOG_PID_FILE \
+            --exec $HELIX_WATCHDOG
+    fi
+}
+
+stop() {
+    echo "Stopping HelixScreen..."
+
+    # Stop watchdog first
+    if [ -f $WATCHDOG_PID_FILE ]; then
+        start-stop-daemon -K -q -p $WATCHDOG_PID_FILE
+        rm -f $WATCHDOG_PID_FILE
+    fi
+
+    # Stop main process
+    if [ -f $PID_FILE ]; then
+        start-stop-daemon -K -q -p $PID_FILE
+        [ $? = 0 ] && echo "OK" || echo "FAIL"
+        rm -f $PID_FILE
+    else
+        echo "Not running"
+    fi
+
+    # Stop splash if somehow still running
+    stop_splash
+
+    # Run platform post-stop hooks (removes active flag, etc.)
+    if type platform_post_stop >/dev/null 2>&1; then
+        platform_post_stop
+    fi
+}
+
+restart() {
+    stop
+    start
+}
+
+case "$1" in
+  start)
+    start
+    ;;
+  stop)
+    stop
+    ;;
+  restart|reload)
+    restart
+    ;;
+  *)
+    echo "Usage: $0 {start|stop|restart}"
+    exit 1
+esac
+
+exit $?

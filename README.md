@@ -34,7 +34,7 @@ It’s restorable though, but **it requires additional hardware** or soldering i
 - **Klipper** with many patches/fixes/plugins specially adapted for AD5M
 - **Moonraker**
 - **Fluidd** & **Mainsail**
-- Adapted **Guppy** and custom **Feather** screens
+- Adapted **Guppy**, **Helix**, and custom **Feather** screens
 - Originally developed **Power Loss Recovery** specially for AD5M
 - **OTA** updates for Firmware, Fluidd, Mainsall, Guppyscreen.
 - **Root** access (with zsh/.oh-my-zsh)
@@ -70,7 +70,7 @@ It’s restorable though, but **it requires additional hardware** or soldering i
 12. **Optional**: Learn about [Z-Offset](/docs/PRINTING.md#z-offset)
 13. **Optional**: Enable the mod’s [Camera](/docs/CAMERA.md#step-3-enable-mods-camera) implementation.   
 14. **Optional**: Configure your [LED lighting](/docs/PRINTING.md#led-light-control)     
-15. **Optional**: Enable [Feather/Guppy Screen](/docs/SCREEN.md#switching-to-feather-screen).   
+15. **Optional**: Enable [Feather/Guppy/Helix Screen](/docs/SCREEN.md#switching-to-alternative-screens--headless).   
 16. **Optional**: Enable [Bed Collision Protection](/docs/PRINTING.md#bed-collision-protection).   
 17. **Optional**: Enable [Bed Mesh Validation](/docs/PRINTING.md#bed-mesh-validation).
 18. **Optional**: Enable [Power Loss Recovery](docs/PRINTING.md#power-loss-recovery-resurrection).   
