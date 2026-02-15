@@ -191,7 +191,7 @@ RELEASE_TAG="${VERSION}-helixscreen"
 ARCHIVES=()
 
 for variant in "Adventurer5M" "Adventurer5MPro"; do
-    ARCHIVE_NAME="${variant}-ForgeX-${VERSION}.tgz"
+    ARCHIVE_NAME="${variant}-ForgeX-${VERSION}-helixscreen.tgz"
     ARCHIVE_PATH="$OUTPUT_DIR/$ARCHIVE_NAME"
 
     (cd "$WORK_DIR" && tar -czf "$ARCHIVE_PATH" .)
