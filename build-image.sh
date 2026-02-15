@@ -122,6 +122,8 @@ if [ -n "$HELIX_RELEASE" ]; then
     fi
     echo "  Using local release: $HELIX_RELEASE"
     TMP_RELEASE="$HELIX_RELEASE"
+    HELIX_TAG="${HELIX_RELEASE##*-}" # try to extract version from filename
+    HELIX_TAG="${HELIX_TAG%.tar.gz}"
 else
     HELIX_TAG=$(gh release view --repo "$HELIX_REPO" --json tagName --jq .tagName 2>/dev/null)
     if [ -z "$HELIX_TAG" ]; then
@@ -170,7 +172,8 @@ fi
 
 chmod +x "$HELIX_DIR/bin/"* 2>/dev/null || true
 
-HELIX_VER=$(cat "$HELIX_DIR/VERSION" 2>/dev/null || echo "unknown")
+# Version from tag (no VERSION file in release tarball)
+HELIX_VER="${HELIX_TAG:-unknown}"
 echo "  HelixScreen $HELIX_VER ready."
 
 # --- Step 3: Create mod_data directory ---
@@ -184,7 +187,7 @@ echo -e "${BLUE}[4/4] Creating image archive...${NC}"
 
 mkdir -p "$OUTPUT_DIR"
 
-RELEASE_TAG="v${VERSION}-helix-${HELIX_VER}"
+RELEASE_TAG="${VERSION}-helixscreen"
 ARCHIVES=()
 
 for variant in "Adventurer5M" "Adventurer5MPro"; do
