@@ -22,6 +22,17 @@ PAGES = frozenset((
 ))
 
 
+def _calibration_property(name):
+    """Declare one exact field shared with the calibration feature."""
+    def get_value(feature):
+        return getattr(feature._calibration_feature(), name)
+
+    def set_value(feature, value):
+        setattr(feature._calibration_feature(), name, value)
+
+    return property(get_value, set_value)
+
+
 class ZCalibrationFeature(FeatherZCalibrationMixin, FeatherControlsMixin,
                           FeatureHostProxy):
     name = "z"
@@ -34,20 +45,18 @@ class ZCalibrationFeature(FeatherZCalibrationMixin, FeatherControlsMixin,
         self.live_z_limit_warned = False
         self.z_weight_gauge = None
 
+    calibration_cancel_dispatched = _calibration_property(
+        "calibration_cancel_dispatched")
+    calibration_cancel_requested = _calibration_property(
+        "calibration_cancel_requested")
+    calibration_cancelled = _calibration_property("calibration_cancelled")
+    calibration_clean_nozzle = _calibration_property(
+        "calibration_clean_nozzle")
+    calibration_error = _calibration_property("calibration_error")
+    calibration_material = _calibration_property("calibration_material")
+
     def _calibration_feature(self):
         return self.feature_manager.get("calibration")
-
-    def __getattr__(self, name):
-        if name.startswith("calibration_"):
-            return getattr(self._calibration_feature(), name)
-        return FeatureHostProxy.__getattr__(self, name)
-
-    def __setattr__(self, name, value):
-        if (name.startswith("calibration_") and
-                "_host" in self.__dict__):
-            setattr(self._calibration_feature(), name, value)
-            return
-        FeatureHostProxy.__setattr__(self, name, value)
 
     def start_calibration(self):
         self._start_z_calibration()

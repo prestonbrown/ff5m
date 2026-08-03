@@ -6,7 +6,6 @@
 
 import errno
 import fcntl
-import importlib
 import logging
 import os
 import signal
@@ -78,40 +77,6 @@ EXACT_ACTIONS = {
     Page.CANCEL_CONFIRM: ("nav.back", "print.cancel.back", "print.cancel.confirm"),
     Page.CONTROL_MOVE: ("nav.back",),
     Page.CONTROL_HEAT: ("nav.back",),
-    Page.FILAMENT_MATERIAL: ("nav.back",),
-    Page.FILAMENT_ACTION: ("nav.back", "filament.load", "filament.unload",
-                           "filament.purge", "filament.done", "filament.resume"),
-    Page.CALIBRATION_HOME: (
-        "nav.back", "cal.prev", "cal.next", "cal.z", "cal.screws",
-        "cal.mesh", "cal.extruder", "cal.shaper", "cal.axes",
-        "cal.pid_bed", "cal.pid_extruder"),
-    Page.CALIBRATION_GUIDE: ("nav.back",),
-    Page.EXTRUDER_CALIBRATION: ("nav.back",),
-    Page.CALIBRATION_Z: ("nav.back",),
-    Page.Z_OFFSET_SUMMARY: ("nav.back",),
-    Page.Z_OFFSET_PAPER_BRIEFING: ("nav.back",),
-    Page.Z_OFFSET_PAPER: ("nav.back",),
-    Page.SAFE_Z_BRIEFING: ("nav.back",),
-    Page.SAFE_Z_CALIBRATION: ("nav.back",),
-    Page.LIVE_Z_OFFSET: (
-        "nav.back", "live_z.step.0005", "live_z.step.001",
-        "live_z.step.005", "live_z.closer", "live_z.farther",
-        "live_z.save", "live_z.warning.ok", "live_z.save.no",
-        "live_z.save.yes"),
-    Page.CALIBRATION_CONFIRM: ("nav.back", "cal.confirm", "cal.clean.skip"),
-    Page.CALIBRATION_PROGRESS: ("cal.cancel.heat",),
-    Page.CALIBRATION_RESULT: (
-        "cal.repeat", "cal.done", "cal.mesh.discard", "cal.mesh.save",
-        "cal.tuning.discard", "cal.tuning.save"),
-    Page.SETTINGS: ("nav.back", "settings.brightness.minus",
-                    "settings.brightness.plus", "settings.led.minus",
-                    "settings.led.plus", "settings.sound", "settings.theme",
-                    "settings.mod"),
-    Page.MOD_SETTINGS: ("nav.back", "mod.prev", "mod.next"),
-    Page.PARAMETER_OPTIONS: ("nav.back", "mod.cancel", "mod.apply",
-                    "mod.options.prev", "mod.options.next"),
-    Page.MOD_VALUE: ("nav.back", "mod.cancel", "mod.save", "mod.backspace",
-                     "mod.sign", "mod.dot"),
     Page.NETWORK_HOME: ("nav.back", "net.scan", "net.ethernet", "net.retry"),
     Page.WIFI_SCAN: ("nav.back", "net.prev", "net.next", "net.rescan"),
     Page.WIFI_PASSWORD: ("nav.back", "net.connect", "net.password.toggle"),
@@ -170,62 +135,6 @@ FEATURE_SPECS = (
 
 
 class FeatherScreen(FeatherPagesMixin, FeatherControlsMixin):
-    def __getattr__(self, name):
-        """Lazy compatibility for callers of the former scenario mixins.
-
-        Product routing goes through feature_manager. Keeping this fallback
-        lets external controller tests and extensions call an old scenario
-        helper explicitly without reintroducing startup imports.
-        """
-        if (name.startswith("_render_z") or
-                name.startswith("_render_safe_z") or
-                name.startswith("_safe_z") or
-                name.startswith("_z_") or name.startswith("_start_z_") or
-                name.startswith("_run_z_") or name.startswith("_choose_z_") or
-                name.startswith("_capture_z_") or
-                name.startswith("_restore_z_") or
-                name.startswith("_begin_safe_z") or
-                name.startswith("_continue_after_safe_z") or
-                name.startswith("_skip_safe_z") or
-                name.startswith("_probe_safe_z") or
-                name.startswith("_adjust_safe_z") or
-                name.startswith("_save_safe_z") or
-                name.startswith("_enter_z_zone") or
-                name.startswith("_probe_z_zone") or
-                name.startswith("_move_z_") or
-                name.startswith("_reset_z_") or
-                name.startswith("_accept_z_") or
-                name.startswith("_finish_z_") or
-                name.startswith("_save_z_") or
-                name.startswith("_cancel_z_")):
-            module = importlib.import_module(
-                _feature_module("feather_z_calibration"))
-            descriptor = module.FeatherZCalibrationMixin.__dict__.get(name)
-            if descriptor is not None:
-                return descriptor.__get__(self, type(self))
-        if (name.startswith("_extruder_") or
-                name.startswith("_render_extruder") or
-                name.startswith("_start_extruder") or
-                name.startswith("_runtime_rotation") or
-                name.startswith("_refresh_extruder") or
-                name.startswith("_cold_extrusion") or
-                name.startswith("_prepare_extruder") or
-                name.startswith("_set_extruder") or
-                name.startswith("_poll_extruder") or
-                name.startswith("_append_extruder") or
-                name.startswith("_save_extruder") or
-                name.startswith("_show_extruder") or
-                name.startswith("_restore_extruder") or
-                name.startswith("_cancel_extruder") or
-                name.startswith("_handle_extruder")):
-            module = importlib.import_module(
-                _feature_module("feather_extruder_calibration"))
-            descriptor = module.FeatherExtruderCalibrationMixin.__dict__.get(
-                name)
-            if descriptor is not None:
-                return descriptor.__get__(self, type(self))
-        raise AttributeError(name)
-
     def __init__(self, config):
         self.printer = config.get_printer()
         self.reactor = self.printer.get_reactor()
@@ -1029,26 +938,17 @@ class FeatherScreen(FeatherPagesMixin, FeatherControlsMixin):
                     self.file_page = 0
                     self.file_source = "internal"
                     self._show_page(Page.FILE_BROWSER)
-            elif owner is not None and owner.handle_action(self.page, action):
-                pass
+            elif owner is not None:
+                if not owner.handle_action(self.page, action):
+                    raise KeyError(
+                        "Feature %s did not handle action %s" %
+                        (owner.name, action))
             elif action.startswith("file."):
                 self._handle_file_action(action)
             elif action.startswith("print."):
                 self._handle_print_action(action)
             elif action.startswith("heat."):
                 self._handle_heat_action(action)
-            elif action.startswith("filament."):
-                self._handle_filament_action(action)
-            elif action.startswith("cal."):
-                self._handle_calibration_action(action)
-            elif action.startswith("extruder."):
-                self._handle_extruder_calibration_action(action)
-            elif action.startswith("live_z."):
-                self._handle_live_z_action(action)
-            elif action.startswith("settings."):
-                self._handle_settings_action(action)
-            elif action.startswith("mod."):
-                self._handle_mod_action(action)
             elif action.startswith("recovery."):
                 self._handle_recovery_action(action)
             elif action.startswith("prompt."):
@@ -1069,23 +969,10 @@ class FeatherScreen(FeatherPagesMixin, FeatherControlsMixin):
         if action in EXACT_ACTIONS.get(page, ()):
             return True
         return ((page == Page.FILE_BROWSER and action.startswith("file.item"))
-                or (page == Page.FILAMENT_MATERIAL
-                    and action.startswith("filament.")
-                    and action.split(".", 1)[1] in self.heating_materials)
-                or (page == Page.CALIBRATION_CONFIRM and
-                    action.startswith("cal.material.") and
-                    action.rsplit(".", 1)[1] in self.heating_materials)
-                or (page == Page.MOD_SETTINGS and action.startswith("mod.item."))
-                or (page == Page.PARAMETER_OPTIONS and action.startswith("mod.option."))
-                or (page == Page.MOD_VALUE and
-                    (action.startswith("mod.key.") or
-                     is_keyboard_action(action)))
                 or (page == Page.WIFI_SCAN and action.startswith("net.item"))
                 or (page == Page.WIFI_PASSWORD and is_keyboard_action(action))
                 or (page == Page.ACTION_PROMPT
-                    and action.startswith("prompt.button."))
-                or (page == Page.EXTRUDER_CALIBRATION
-                    and action.startswith("extruder.")))
+                    and action.startswith("prompt.button.")))
 
     def _show_page(self, page):
         if (page != Page.ERROR
@@ -1129,40 +1016,6 @@ class FeatherScreen(FeatherPagesMixin, FeatherControlsMixin):
             self._render_move()
         elif page == Page.CONTROL_HEAT:
             self._render_heat()
-        elif page == Page.CALIBRATION_HOME:
-            self._render_calibration_home()
-        elif page == Page.CALIBRATION_GUIDE:
-            self._render_calibration_guide()
-        elif page == Page.EXTRUDER_CALIBRATION:
-            self._render_extruder_calibration()
-        elif page == Page.CALIBRATION_Z:
-            self._render_z_summary()
-        elif page == Page.Z_OFFSET_SUMMARY:
-            self._render_z_summary()
-        elif page == Page.Z_OFFSET_PAPER_BRIEFING:
-            self._render_z_paper_briefing()
-        elif page == Page.Z_OFFSET_PAPER:
-            self._render_z_paper()
-        elif page == Page.SAFE_Z_BRIEFING:
-            self._render_safe_z_briefing()
-        elif page == Page.SAFE_Z_CALIBRATION:
-            self._render_safe_z()
-        elif page == Page.LIVE_Z_OFFSET:
-            self._render_live_z_offset()
-        elif page == Page.CALIBRATION_CONFIRM:
-            self._render_calibration_confirm()
-        elif page == Page.CALIBRATION_PROGRESS:
-            self._render_calibration_progress()
-        elif page == Page.CALIBRATION_RESULT:
-            self._render_calibration_result()
-        elif page == Page.SETTINGS:
-            self._render_settings()
-        elif page == Page.MOD_SETTINGS:
-            self._render_mod_settings()
-        elif page == Page.PARAMETER_OPTIONS:
-            self._render_parameter_options()
-        elif page == Page.MOD_VALUE:
-            self._render_mod_value()
         elif page == Page.NETWORK_HOME:
             self._render_network_home()
         elif page == Page.WIFI_SCAN:
@@ -1184,9 +1037,10 @@ class FeatherScreen(FeatherPagesMixin, FeatherControlsMixin):
 
     def _go_back(self):
         manager = getattr(self, "feature_manager", None)
-        if manager is not None and manager.owner_name(self.page) is not None:
-            feature = manager.peek(manager.owner_name(self.page))
-            if feature is not None and feature.back(self.page):
+        if manager is not None:
+            owner_name = manager.owner_name(self.page)
+            if owner_name is not None:
+                manager.get(owner_name).back(self.page)
                 return
         if (self.page == Page.FILE_BROWSER
                 and getattr(self, "file_source", "internal") == "usb"):
@@ -1196,14 +1050,8 @@ class FeatherScreen(FeatherPagesMixin, FeatherControlsMixin):
             self._show_page(Page.FILE_BROWSER)
         elif self.page == Page.FILE_CONFIRM:
             self._show_page(Page.FILE_BROWSER)
-        elif self.page in (Page.CONTROL_HOME, Page.FILAMENT_MATERIAL):
-            if self.page == Page.FILAMENT_MATERIAL and self.filament_from_pause:
-                self._show_page(self.page_for_print_state())
-            elif self.page == Page.FILAMENT_MATERIAL:
-                self._show_page(getattr(
-                    self, "filament_return_page", Page.MAIN_MENU))
-            else:
-                self._show_page(Page.MAIN_MENU)
+        elif self.page == Page.CONTROL_HOME:
+            self._show_page(Page.MAIN_MENU)
         elif self.page == Page.NETWORK_HOME:
             self._show_page(getattr(
                 self, "network_parent_page", Page.MAIN_MENU))
@@ -1215,48 +1063,6 @@ class FeatherScreen(FeatherPagesMixin, FeatherControlsMixin):
         elif self.page == Page.CONTROL_MOVE:
             self._show_page(getattr(
                 self, "move_return_page", Page.CONTROL_HOME))
-        elif self.page in (Page.CALIBRATION_HOME, Page.SETTINGS):
-            self._show_page(Page.CONTROL_HOME)
-        elif self.page == Page.CALIBRATION_GUIDE:
-            self._show_page(Page.CALIBRATION_HOME)
-        elif self.page == Page.EXTRUDER_CALIBRATION:
-            self._cancel_extruder_calibration()
-        elif self.page == Page.MOD_SETTINGS:
-            self._show_page(Page.SETTINGS)
-        elif self.page in (Page.PARAMETER_OPTIONS, Page.MOD_VALUE):
-            self._show_page(getattr(
-                self, "mod_return_page", Page.MOD_SETTINGS))
-        elif self.page == Page.FILAMENT_ACTION:
-            self._show_page(Page.FILAMENT_MATERIAL)
-        elif self.page in (Page.CALIBRATION_Z, Page.Z_OFFSET_SUMMARY):
-            if self.z_calibration.results:
-                self.z_calibration.dialog = "discard"
-                self._render_z_summary()
-            elif (self.page == Page.Z_OFFSET_SUMMARY
-                  and self.z_calibration.active):
-                self._begin_safe_z_calibration(preserve_result=True)
-            else:
-                self._cancel_z_calibration()
-        elif self.page == Page.SAFE_Z_BRIEFING:
-            self._cancel_z_calibration()
-        elif self.page == Page.SAFE_Z_CALIBRATION:
-            self._run_blocking_gcode(
-                "MOVE_SAFE Z=%g ABSOLUTE=1 F=600" %
-                self._safe_z_preparation_height(),
-                "LIFTING Z...")
-            self._show_page(Page.SAFE_Z_BRIEFING)
-        elif self.page == Page.Z_OFFSET_PAPER_BRIEFING:
-            self._show_page(Page.Z_OFFSET_SUMMARY)
-        elif self.page == Page.Z_OFFSET_PAPER:
-            self.z_calibration.dialog = None
-            self._run_blocking_gcode(
-                self._safe_z_move_command(), "LIFTING Z...")
-            self._show_page(Page.Z_OFFSET_SUMMARY)
-        elif self.page == Page.LIVE_Z_OFFSET:
-            self.live_z_dialog = None
-            self._show_page(self.page_for_print_state())
-        elif self.page == Page.CALIBRATION_CONFIRM:
-            self._show_page(Page.CALIBRATION_HOME)
         elif self.page == Page.RECOVERY_CONFIRM:
             self._show_page(Page.RECOVERY_PROMPT)
         elif self.page in (Page.WIFI_SCAN, Page.WIFI_PASSWORD):
@@ -1956,20 +1762,3 @@ class FeatherScreen(FeatherPagesMixin, FeatherControlsMixin):
 
 def load_config(config):
     return FeatherScreen(config)
-
-
-def __getattr__(name):
-    """Expose legacy session classes without importing scenarios at startup."""
-    targets = {
-        "ZCalibrationSession": (
-            _feature_module("feather_z_calibration"), "ZCalibrationSession"),
-        "ExtruderCalibrationSession": (
-            _feature_module("feather_extruder_calibration"),
-            "ExtruderCalibrationSession"),
-    }
-    target = targets.get(name)
-    if target is None:
-        raise AttributeError(name)
-    value = getattr(importlib.import_module(target[0]), target[1])
-    globals()[name] = value
-    return value

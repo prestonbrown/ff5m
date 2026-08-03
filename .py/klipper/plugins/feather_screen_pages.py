@@ -5,7 +5,6 @@
 ## This file may be distributed under the terms of the GNU GPLv3 license
 
 import errno
-import importlib
 import logging
 import os
 import signal
@@ -14,58 +13,21 @@ import time
 
 try:
     from .ui import Page, PrintState, ThemeColor, ThemeRole
+    from .ui.lazy import LazyModule
     from .feather_keyboard import TEXT_KEYBOARD, is_keyboard_action
     from .feather_files import FileEntry, scan_gcode_files
     from .feather_pagination import Pagination, pagination_footer
 except (ImportError, ValueError):
     from ui import Page, PrintState, ThemeColor, ThemeRole
+    from ui.lazy import LazyModule
     from feather_keyboard import TEXT_KEYBOARD, is_keyboard_action
     from feather_files import FileEntry, scan_gcode_files
     from feather_pagination import Pagination, pagination_footer
 
 
-class _LazyModule:
-    """Import a UI module only when its screen is first used."""
-
-    __slots__ = ("_suffix", "_module")
-
-    def __init__(self, suffix):
-        self._suffix = suffix
-        self._module = None
-
-    def _load(self):
-        if self._module is None:
-            name = ("%s.%s" % (__package__, self._suffix)
-                    if __package__ else self._suffix)
-            self._module = importlib.import_module(name)
-        return self._module
-
-    def __getattr__(self, name):
-        return getattr(self._load(), name)
-
-
-home_page = _LazyModule("ff5m_ui.home.page")
-home_state = _LazyModule("ff5m_ui.home.state")
-
-
-class _LazyModUI:
-    """Do not import Mod Settings helpers before Settings is opened."""
-
-    _module = None
-
-    def _load(self):
-        if self._module is None:
-            name = ("%s.feather_mod_settings" % __package__
-                    if __package__ else "feather_mod_settings")
-            self._module = importlib.import_module(name)
-        return self._module
-
-    def __getattr__(self, name):
-        return getattr(self._load(), name)
-
-
-mod_ui = _LazyModUI()
-
+home_page = LazyModule("ff5m_ui.home.page", package=__package__)
+home_state = LazyModule("ff5m_ui.home.state", package=__package__)
+mod_ui = LazyModule("feather_mod_settings", package=__package__)
 
 FILE_ROWS = 5
 NETWORK_HELPER = "/root/printer_data/scripts/commands/znetwork.sh"

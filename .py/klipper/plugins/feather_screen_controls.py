@@ -5,7 +5,6 @@
 ## This file may be distributed under the terms of the GNU GPLv3 license
 
 import logging
-import importlib
 import math
 import re
 import time
@@ -15,6 +14,7 @@ try:
         Back, Command, Increment, Navigate, Page, PrintState, Replace,
         SetValue, ThemeColor, Toggle, state_spec,
     )
+    from .ui.lazy import LazyModule
     from .ff5m_ui.keys import AppPage
     from .ff5m_ui.move.geometry import (
         JOYSTICK_XY_CENTER, JOYSTICK_XY_RADIUS,
@@ -34,6 +34,7 @@ except (ImportError, ValueError):
         Back, Command, Increment, Navigate, Page, PrintState, Replace,
         SetValue, ThemeColor, Toggle, state_spec,
     )
+    from ui.lazy import LazyModule
     from ff5m_ui.keys import AppPage
     from ff5m_ui.move.geometry import (
         JOYSTICK_XY_CENTER, JOYSTICK_XY_RADIUS,
@@ -50,23 +51,8 @@ except (ImportError, ValueError):
     )
 
 
-class _LazyZOffsetUI:
-    """Delay the product Z package until a Z feature page is used."""
-
-    _module = None
-
-    def _load(self):
-        if self._module is None:
-            name = ("%s.ff5m_ui.z_offset.runtime" % __package__
-                    if __package__ else "ff5m_ui.z_offset.runtime")
-            self._module = importlib.import_module(name)
-        return self._module
-
-    def __getattr__(self, name):
-        return getattr(self._load(), name)
-
-
-z_offset_ui = _LazyZOffsetUI()
+z_offset_ui = LazyModule(
+    "ff5m_ui.z_offset.runtime", package=__package__)
 SAFE_Z_ADJUST_STEP = 1.0
 
 

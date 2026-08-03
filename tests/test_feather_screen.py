@@ -22,6 +22,7 @@ SPEC.loader.exec_module(FEATHER)
 UI = __import__("ui")
 from ff5m_ui.move import runtime as MOVE_LAYOUT
 from ff5m_ui.z_offset import runtime as Z_OFFSET_LAYOUT
+from feather_feature_z import ZCalibrationFeature
 
 # Unit controllers created with __new__ do not receive klippy:ready. Give
 # those isolated fixtures the same catalog that config/material.cfg provides;
@@ -388,53 +389,58 @@ class FeatherUtilitiesTest(unittest.TestCase):
         self.assertFalse(allowed(FEATHER.Page.IDLE_HOME, "nav.settings"))
         self.assertTrue(allowed(FEATHER.Page.MAIN_MENU, "nav.filament"))
         self.assertTrue(allowed(FEATHER.Page.CONTROL_HOME, "nav.calibration"))
-        self.assertTrue(allowed(FEATHER.Page.CALIBRATION_CONFIRM,
-                                "cal.material.PETG"))
-        self.assertTrue(allowed(FEATHER.Page.EXTRUDER_CALIBRATION,
-                                "extruder.feed100"))
+        # Feature-owned actions never fall back to the controller table.
+        self.assertFalse(allowed(FEATHER.Page.CALIBRATION_CONFIRM,
+                                 "cal.material.PETG"))
+        self.assertFalse(allowed(FEATHER.Page.EXTRUDER_CALIBRATION,
+                                 "extruder.feed100"))
         self.assertFalse(allowed(FEATHER.Page.CALIBRATION_HOME,
                                  "extruder.feed100"))
         # Declarative pages accept only actions registered in their real tree.
         self.assertFalse(allowed(FEATHER.Page.Z_OFFSET_SUMMARY,
                                  "z.zone.front_left"))
         self.assertFalse(allowed(FEATHER.Page.Z_OFFSET_PAPER, "z.probe"))
-        controller = FEATHER.FeatherScreen.__new__(FEATHER.FeatherScreen)
-        controller.page = FEATHER.Page.Z_OFFSET_SUMMARY
+        host = type("Host", (), {})()
+        host.page = FEATHER.Page.Z_OFFSET_SUMMARY
+        z_feature = ZCalibrationFeature(host)
         self.assertEqual(
-            controller._resolve_semantic_ui_action(
+            z_feature.resolve_semantic_action(
+                host.page,
                 Z_OFFSET_LAYOUT.ZONE_ACTIONS["front_left"].wire_id),
             Z_OFFSET_LAYOUT.ZONE_ACTIONS["front_left"])
-        controller.page = FEATHER.Page.Z_OFFSET_PAPER
+        host.page = FEATHER.Page.Z_OFFSET_PAPER
         self.assertEqual(
-            controller._resolve_semantic_ui_action(
-                Z_OFFSET_LAYOUT.PROBE.wire_id),
+            z_feature.resolve_semantic_action(
+                host.page, Z_OFFSET_LAYOUT.PROBE.wire_id),
             Z_OFFSET_LAYOUT.PROBE)
-        self.assertTrue(allowed(FEATHER.Page.LIVE_Z_OFFSET,
-                                "live_z.closer"))
-        self.assertTrue(allowed(FEATHER.Page.LIVE_Z_OFFSET,
-                                "live_z.save"))
+        self.assertFalse(allowed(FEATHER.Page.LIVE_Z_OFFSET,
+                                 "live_z.closer"))
+        self.assertFalse(allowed(FEATHER.Page.LIVE_Z_OFFSET,
+                                 "live_z.save"))
         self.assertFalse(allowed(FEATHER.Page.Z_OFFSET_SUMMARY,
                                  "live_z.closer"))
         self.assertFalse(allowed(FEATHER.Page.LIVE_Z_OFFSET, "z.probe"))
         self.assertFalse(allowed(FEATHER.Page.CONTROL_MOVE,
                                  "z.zone.front_left"))
         self.assertFalse(allowed(FEATHER.Page.SETTINGS, "cal.confirm"))
-        self.assertTrue(allowed(FEATHER.Page.SETTINGS, "settings.mod"))
+        self.assertFalse(allowed(FEATHER.Page.SETTINGS, "settings.mod"))
         self.assertFalse(allowed(FEATHER.Page.SETTINGS, "settings.led"))
-        self.assertTrue(allowed(FEATHER.Page.SETTINGS,
-                                "settings.led.minus"))
-        self.assertTrue(allowed(FEATHER.Page.SETTINGS,
-                                "settings.led.plus"))
-        self.assertTrue(allowed(FEATHER.Page.MOD_SETTINGS, "mod.item.12"))
+        self.assertFalse(allowed(FEATHER.Page.SETTINGS,
+                                 "settings.led.minus"))
+        self.assertFalse(allowed(FEATHER.Page.SETTINGS,
+                                 "settings.led.plus"))
+        self.assertFalse(allowed(FEATHER.Page.MOD_SETTINGS, "mod.item.12"))
         self.assertFalse(allowed(FEATHER.Page.PARAMETER_OPTIONS, "mod.item.12"))
-        self.assertTrue(allowed(FEATHER.Page.PARAMETER_OPTIONS, "mod.option.2"))
-        self.assertTrue(allowed(FEATHER.Page.MOD_VALUE, "mod.key.7"))
-        self.assertTrue(allowed(
+        self.assertFalse(allowed(FEATHER.Page.PARAMETER_OPTIONS,
+                                 "mod.option.2"))
+        self.assertFalse(allowed(FEATHER.Page.MOD_VALUE, "mod.key.7"))
+        self.assertFalse(allowed(
             FEATHER.Page.MOD_VALUE, "keyboard.key.hash"))
         self.assertTrue(allowed(
             FEATHER.Page.WIFI_PASSWORD, "keyboard.backspace"))
         self.assertFalse(allowed(
             FEATHER.Page.MOD_SETTINGS, "keyboard.key.hash"))
+
         self.assertFalse(allowed(FEATHER.Page.MOD_SETTINGS, "mod.save"))
 
     def test_network_status_parser_is_bounded_to_public_fields(self):

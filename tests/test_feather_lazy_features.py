@@ -15,8 +15,67 @@ sys.path.insert(0, str(PLUGINS))
 
 import feather_screen as FEATHER  # noqa: E402
 from feather_feature_manager import (  # noqa: E402
-    FeatureLoadError, FeatureSpec, LazyFeatureManager,
+    FeatureHostProxy, FeatureLoadError, FeatureSpec, LazyFeatureManager,
 )
+from ui.lazy import LazyModule, resolve_lazy_export  # noqa: E402
+
+
+class SharedLazyImportTest(unittest.TestCase):
+    def test_module_proxy_imports_only_on_first_attribute_access(self):
+        module = types.SimpleNamespace(first=1, second=2)
+        with mock.patch("ui.lazy.importlib.import_module",
+                        return_value=module) as importer:
+            proxy = LazyModule("test.lazy_target")
+            importer.assert_not_called()
+
+            self.assertEqual(proxy.first, 1)
+            self.assertEqual(proxy.second, 2)
+
+        importer.assert_called_once_with("test.lazy_target")
+
+    def test_module_proxy_qualifies_name_internally(self):
+        module = types.SimpleNamespace(value=3)
+        with mock.patch("ui.lazy.importlib.import_module",
+                        return_value=module) as importer:
+            proxy = LazyModule("feature.runtime", package="extras")
+            self.assertEqual(proxy.value, 3)
+
+        importer.assert_called_once_with("extras.feature.runtime")
+
+    def test_failed_proxy_import_can_be_retried(self):
+        module = types.SimpleNamespace(value="ready")
+        with mock.patch(
+                "ui.lazy.importlib.import_module",
+                side_effect=(ImportError("not ready"), module)) as importer:
+            proxy = LazyModule("test.retry_target")
+            with self.assertRaises(ImportError):
+                proxy.value
+            self.assertEqual(proxy.value, "ready")
+
+        self.assertEqual(importer.call_count, 2)
+
+    def test_lazy_export_resolves_alias_and_caches_public_value(self):
+        namespace = {"__name__": "test.facade"}
+        module = types.SimpleNamespace(INTERNAL=object())
+        exports = {"PUBLIC": ("implementation", "INTERNAL")}
+        with mock.patch("ui.lazy.importlib.import_module",
+                        return_value=module) as importer:
+            first = resolve_lazy_export(
+                namespace, "PUBLIC", exports, "test.facade")
+            second = resolve_lazy_export(
+                namespace, "PUBLIC", exports, "test.facade")
+
+        self.assertIs(first, module.INTERNAL)
+        self.assertIs(second, first)
+        self.assertIs(namespace["PUBLIC"], first)
+        importer.assert_called_once_with("test.facade.implementation")
+
+    def test_unknown_lazy_export_uses_normal_module_attribute_contract(self):
+        with self.assertRaisesRegex(
+                AttributeError, "test.facade.*MISSING"):
+            resolve_lazy_export(
+                {"__name__": "test.facade"}, "MISSING", {})
+
 
 
 class LazyImportContractTest(unittest.TestCase):
@@ -39,14 +98,17 @@ blocked = (
     'feather_mod_settings',
 )
 assert not [name for name in blocked if name in sys.modules]
-z_offset_modules = set(
-    name for name in sys.modules if name.startswith('ff5m_ui.z_offset'))
-assert z_offset_modules == {
-    'ff5m_ui.z_offset', 'ff5m_ui.z_offset.constants',
-}, z_offset_modules
+assert 'ff5m_ui.z_offset.constants' in sys.modules
+assert not [name for name in sys.modules
+            if name.startswith('ff5m_ui.z_offset.') and
+            (name.endswith('.page') or name.endswith('.runtime') or
+             name.endswith('.actions') or name.endswith('.common'))]
 assert not [name for name in sys.modules
             if name.startswith('ff5m_ui.filament')]
 assert 'ff5m_ui.heat.page' not in sys.modules
+assert '__getattr__' not in feather_screen.FeatherScreen.__dict__
+assert not hasattr(feather_screen, 'ZCalibrationSession')
+assert not hasattr(feather_screen, 'ExtruderCalibrationSession')
 """)
 
     def test_controller_construction_keeps_product_features_cold(self):
@@ -118,11 +180,11 @@ blocked = (
     'feather_mod_settings',
 )
 assert not [name for name in blocked if name in sys.modules]
-z_offset_modules = set(
-    name for name in sys.modules if name.startswith('ff5m_ui.z_offset'))
-assert z_offset_modules == {
-    'ff5m_ui.z_offset', 'ff5m_ui.z_offset.constants',
-}, z_offset_modules
+assert 'ff5m_ui.z_offset.constants' in sys.modules
+assert not [name for name in sys.modules
+            if name.startswith('ff5m_ui.z_offset.') and
+            (name.endswith('.page') or name.endswith('.runtime') or
+             name.endswith('.actions') or name.endswith('.common'))]
 assert not [name for name in sys.modules
             if name.startswith('ff5m_ui.filament')]
 assert 'ff5m_ui.heat.page' not in sys.modules
@@ -181,11 +243,10 @@ from ff5m_ui.z_offset.constants import (
 
 assert PAPER_DEFAULT_STEP in PAPER_STEPS
 assert Z_WEIGHT_DANGER > 0
-loaded = set(
-    name for name in sys.modules if name.startswith('ff5m_ui.z_offset'))
-assert loaded == {
-    'ff5m_ui.z_offset', 'ff5m_ui.z_offset.constants',
-}, loaded
+assert 'ff5m_ui.z_offset.constants' in sys.modules
+assert not [name for name in sys.modules
+            if name.startswith('ff5m_ui.z_offset.') and
+            name != 'ff5m_ui.z_offset.constants']
 """)
 
     def test_z_offset_public_actions_remain_lazy_exports(self):
@@ -246,6 +307,24 @@ with tempfile.TemporaryDirectory() as directory:
             env=environment, stdout=subprocess.PIPE,
             stderr=subprocess.PIPE, text=True)
         self.assertEqual(result.returncode, 0, result.stderr)
+
+
+class FeatureHostProxyTest(unittest.TestCase):
+    def test_shared_controller_fields_are_explicit_properties(self):
+        host = types.SimpleNamespace(
+            page=1, previous_page=0, print_status_text="idle")
+        proxy = FeatureHostProxy(host)
+
+        proxy.page = 2
+        proxy.previous_page = 1
+        proxy.print_status_text = "printing"
+        proxy.local_state = "feature-only"
+
+        self.assertEqual(host.page, 2)
+        self.assertEqual(host.previous_page, 1)
+        self.assertEqual(host.print_status_text, "printing")
+        self.assertFalse(hasattr(host, "local_state"))
+        self.assertEqual(proxy.local_state, "feature-only")
 
 
 class FeatureManagerTest(unittest.TestCase):

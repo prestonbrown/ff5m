@@ -23,6 +23,17 @@ from ff5m_ui.filament import runtime as FILAMENT_UI
 from ff5m_ui.filament.actions import select as select_filament
 from ff5m_ui.z_offset import runtime as Z_OFFSET_UI
 from feather_feature_filament import FilamentFeature
+from feather_feature_z import ZCalibrationFeature
+from feather_z_calibration import (
+    FeatherZCalibrationMixin, ZCalibrationSession)
+from feather_extruder_calibration import FeatherExtruderCalibrationMixin
+
+
+class ScenarioController(FeatherZCalibrationMixin,
+                         FeatherExtruderCalibrationMixin,
+                         FEATHER.FeatherScreen):
+    """Test harness for scenario implementations no longer on the host."""
+
 
 FILES = __import__("feather_files")
 PAGES = __import__("feather_screen_pages")
@@ -115,7 +126,7 @@ class UsbReactor:
 
 
 def base_controller(state="idle"):
-    controller = FEATHER.FeatherScreen.__new__(FEATHER.FeatherScreen)
+    controller = ScenarioController.__new__(ScenarioController)
     controller.reactor = Reactor()
     controller.reactor.register_callback = lambda callback, waketime=None: None
     controller.gcode = GCodeRecorder()
@@ -1138,7 +1149,7 @@ class MotionHeatSettingsTest(unittest.TestCase):
         self.assertEqual(len(notices), 1)
 
     def test_joystick_uses_feather_limits_and_actual_z_limits(self):
-        controller = FEATHER.FeatherScreen.__new__(FEATHER.FeatherScreen)
+        controller = ScenarioController.__new__(ScenarioController)
         controller.reactor = Reactor()
 
         class Kinematics:
@@ -1213,7 +1224,7 @@ class MotionHeatSettingsTest(unittest.TestCase):
         self.assertNotIn(HEAT_UI.HeatCommand.PREHEAT, actions)
 
     def test_move_offers_only_combined_homing_commands(self):
-        controller = FEATHER.FeatherScreen.__new__(FEATHER.FeatherScreen)
+        controller = ScenarioController.__new__(ScenarioController)
         controller.jog_step = 1.0
         controller._require_idle = lambda: None
         blocking = []
@@ -1556,7 +1567,7 @@ class FilamentAndCalibrationWorkflowTest(unittest.TestCase):
         controller = base_controller()
         controller.params = type("Params", (), {
             "variables": {"safe_z": 8.0}})()
-        controller.z_calibration = FEATHER.ZCalibrationSession()
+        controller.z_calibration = ZCalibrationSession()
         controller.z_calibration.begin(
             0.0, None, "", -0.25, False, safe_z=8.0)
         controller.probe = StatusObject({"last_z_result": -0.4})
@@ -1601,7 +1612,7 @@ class FilamentAndCalibrationWorkflowTest(unittest.TestCase):
 
     def test_safe_z_stage_can_be_skipped_without_changing_setting(self):
         controller = base_controller()
-        controller.z_calibration = FEATHER.ZCalibrationSession()
+        controller.z_calibration = ZCalibrationSession()
         controller.z_calibration.begin(
             0.0, None, "", -0.25, False, safe_z=9.0)
         pages = []
@@ -1620,7 +1631,7 @@ class FilamentAndCalibrationWorkflowTest(unittest.TestCase):
     def test_zone_selection_back_returns_to_saved_safe_z_without_repreparing(self):
         controller = base_controller()
         controller.page = FEATHER.Page.Z_OFFSET_SUMMARY
-        controller.z_calibration = FEATHER.ZCalibrationSession()
+        controller.z_calibration = ZCalibrationSession()
         controller.z_calibration.begin(
             0.0, None, "", -0.25, False, safe_z=6.0)
         controller.z_calibration.prepared = True
@@ -1633,9 +1644,11 @@ class FilamentAndCalibrationWorkflowTest(unittest.TestCase):
         controller._run_blocking_gcode = (
             lambda command, message: moves.append((command, message)))
         controller._show_page = pages.append
-        controller._render_safe_z = lambda: None
+        feature = ZCalibrationFeature(controller)
+        feature.z_calibration = controller.z_calibration
+        feature._render_safe_z = lambda: None
 
-        controller._go_back()
+        feature.back(FEATHER.Page.Z_OFFSET_SUMMARY)
 
         self.assertEqual(moves, [(
             "G28\nMOVE_SAFE Z=12 ABSOLUTE=1 F=600\n"
@@ -1645,8 +1658,8 @@ class FilamentAndCalibrationWorkflowTest(unittest.TestCase):
         self.assertEqual(pages, [FEATHER.Page.SAFE_Z_CALIBRATION])
         self.assertTrue(controller.z_calibration.safe_z_ready)
 
-        controller._handle_z_offset_command(Z_OFFSET_UI.SAFE_HIGHER)
-        controller._handle_z_offset_command(Z_OFFSET_UI.SAFE_SAVE)
+        feature._handle_z_offset_command(Z_OFFSET_UI.SAFE_HIGHER)
+        feature._handle_z_offset_command(Z_OFFSET_UI.SAFE_SAVE)
 
         self.assertEqual(controller.gcode.commands[-2:], [
             "MOVE_SAFE Z=7.000000 ABSOLUTE=1 F=300",
@@ -1757,7 +1770,7 @@ class FilamentAndCalibrationWorkflowTest(unittest.TestCase):
 
     def test_paper_closer_moves_to_smaller_local_z_without_loader(self):
         controller = base_controller()
-        controller.z_calibration = FEATHER.ZCalibrationSession()
+        controller.z_calibration = ZCalibrationSession()
         controller.z_calibration.begin(0.2, None, "", -0.25, False)
         controller.z_calibration.choose_zone("center")
         controller.z_calibration.set_trigger(-0.5)
@@ -1776,7 +1789,7 @@ class FilamentAndCalibrationWorkflowTest(unittest.TestCase):
 
     def test_paper_farther_moves_to_larger_local_z(self):
         controller = base_controller()
-        controller.z_calibration = FEATHER.ZCalibrationSession()
+        controller.z_calibration = ZCalibrationSession()
         controller.z_calibration.begin(0.2, None, "", -0.25, False)
         controller.z_calibration.choose_zone("center")
         controller.z_calibration.set_trigger(-0.5)
@@ -1859,7 +1872,7 @@ class FilamentAndCalibrationWorkflowTest(unittest.TestCase):
 
     def test_z_offset_entry_opens_preparation_without_moving_or_live_change(self):
         controller = base_controller()
-        controller.z_calibration = FEATHER.ZCalibrationSession()
+        controller.z_calibration = ZCalibrationSession()
         controller.toolhead = StatusObject({
             "homed_axes": "", "position": (20.0, 30.0, 0.0, 0.0)})
         pages = []
@@ -1877,7 +1890,7 @@ class FilamentAndCalibrationWorkflowTest(unittest.TestCase):
         controller = base_controller()
         controller.params = type("Params", (), {
             "variables": {"safe_z": 12.5}})()
-        controller.z_calibration = FEATHER.ZCalibrationSession()
+        controller.z_calibration = ZCalibrationSession()
         controller.z_calibration.begin(
             0.2, None, "", -0.25, False, safe_z=12.5)
         controller.z_calibration.prepared = True
@@ -1903,7 +1916,7 @@ class FilamentAndCalibrationWorkflowTest(unittest.TestCase):
 
     def test_zone_selection_opens_paper_briefing_for_each_zone(self):
         controller = base_controller()
-        controller.z_calibration = FEATHER.ZCalibrationSession()
+        controller.z_calibration = ZCalibrationSession()
         controller.z_calibration.begin(0.2, None, "", -0.25, False)
         pages = []
         moves = []
@@ -1929,7 +1942,7 @@ class FilamentAndCalibrationWorkflowTest(unittest.TestCase):
 
     def test_z_offset_reset_moves_to_zero_candidate_position(self):
         controller = base_controller()
-        controller.z_calibration = FEATHER.ZCalibrationSession()
+        controller.z_calibration = ZCalibrationSession()
         controller.z_calibration.begin(0.2, None, "", -0.25, False)
         controller.z_calibration.choose_zone("front_left")
         controller.z_calibration.set_trigger(-0.5)
@@ -1945,7 +1958,7 @@ class FilamentAndCalibrationWorkflowTest(unittest.TestCase):
 
     def test_probe_uses_two_samples_records_trigger_and_retracts_half_mm(self):
         controller = base_controller()
-        controller.z_calibration = FEATHER.ZCalibrationSession()
+        controller.z_calibration = ZCalibrationSession()
         controller.z_calibration.begin(0.2, None, "", -0.25, False)
         controller.z_calibration.choose_zone("front_right")
         controller.probe = StatusObject({"last_z_result": -0.625})
@@ -1967,7 +1980,7 @@ class FilamentAndCalibrationWorkflowTest(unittest.TestCase):
 
     def test_manual_paper_start_moves_to_half_safe_z_and_enables_controls(self):
         controller = base_controller()
-        controller.z_calibration = FEATHER.ZCalibrationSession()
+        controller.z_calibration = ZCalibrationSession()
         controller.z_calibration.begin(0.2, None, "", -0.25, False)
         controller.z_calibration.choose_zone("front_right")
         controller._render_z_paper = lambda: None
@@ -1988,7 +2001,7 @@ class FilamentAndCalibrationWorkflowTest(unittest.TestCase):
 
     def test_manual_paper_start_tracks_custom_safe_z(self):
         controller = base_controller()
-        controller.z_calibration = FEATHER.ZCalibrationSession()
+        controller.z_calibration = ZCalibrationSession()
         controller.z_calibration.begin(
             0.2, None, "", -0.25, False, safe_z=7.5)
         controller.z_calibration.choose_zone("center")
@@ -2010,7 +2023,7 @@ class FilamentAndCalibrationWorkflowTest(unittest.TestCase):
             "busy_notice": lambda self, label: notices.append(label),
             "clear_busy_notice": lambda self: notices.append("clear"),
         })()
-        controller.z_calibration = FEATHER.ZCalibrationSession()
+        controller.z_calibration = ZCalibrationSession()
         controller.z_calibration.begin(0.2, None, "", -0.25, False)
         controller.z_calibration.choose_zone("center")
         controller.z_calibration.set_trigger(-0.5)

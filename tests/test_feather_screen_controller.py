@@ -33,8 +33,15 @@ from ff5m_ui.filament import actions as FILAMENT_ACTIONS
 from ff5m_ui.home import state as HOME_STATE
 from ui.font_metrics import get_font_metrics
 from feather_feature_filament import FilamentFeature
+from feather_z_calibration import (
+    FeatherZCalibrationMixin, ZCalibrationSession)
+from feather_extruder_calibration import FeatherExtruderCalibrationMixin
 
 
+class ScenarioController(FeatherZCalibrationMixin,
+                         FeatherExtruderCalibrationMixin,
+                         FEATHER.FeatherScreen):
+    """Test harness for scenario implementations no longer on the host."""
 
 
 class BedMeshState(StatusObject):
@@ -51,7 +58,7 @@ class BedMeshState(StatusObject):
 
 class ControllerSafetyTest(unittest.TestCase):
     def test_home_cards_register_navigation_without_icon_font(self):
-        controller = FEATHER.FeatherScreen.__new__(FEATHER.FeatherScreen)
+        controller = ScenarioController.__new__(ScenarioController)
         controller.renderer = FEATHER.FeatherRenderer()
         controller.reactor = Reactor()
         controller._update_dashboard = lambda eventtime: None
@@ -71,7 +78,7 @@ class ControllerSafetyTest(unittest.TestCase):
         self.assertIn("nav.job", drawing)
 
     def test_move_caution_loads_existing_auto_bed_profile(self):
-        controller = FEATHER.FeatherScreen.__new__(FEATHER.FeatherScreen)
+        controller = ScenarioController.__new__(ScenarioController)
         controller.reactor = Reactor()
         controller.gcode = GCodeRecorder()
         controller.bed_mesh = StatusObject({
@@ -91,7 +98,7 @@ class ControllerSafetyTest(unittest.TestCase):
         self.assertEqual(len(notices), 1)
 
     def test_move_caution_can_unload_active_bed_profile(self):
-        controller = FEATHER.FeatherScreen.__new__(FEATHER.FeatherScreen)
+        controller = ScenarioController.__new__(ScenarioController)
         controller.reactor = Reactor()
         controller.gcode = GCodeRecorder()
         controller.move_caution_acknowledged = False
@@ -110,7 +117,7 @@ class ControllerSafetyTest(unittest.TestCase):
         self.assertEqual(len(notices), 1)
 
     def test_move_caution_dismissal_resets_after_z_becomes_safe(self):
-        controller = FEATHER.FeatherScreen.__new__(FEATHER.FeatherScreen)
+        controller = ScenarioController.__new__(ScenarioController)
         controller.bed_mesh = StatusObject({
             "profile_name": "", "profiles": {"auto": {"points": []}}})
         controller.move_caution_acknowledged = False
@@ -129,7 +136,7 @@ class ControllerSafetyTest(unittest.TestCase):
                          (True, "available"))
 
     def test_every_page_routes_to_a_renderer(self):
-        controller = FEATHER.FeatherScreen.__new__(FEATHER.FeatherScreen)
+        controller = ScenarioController.__new__(ScenarioController)
         controller.page = FEATHER.Page.IDLE_HOME
         called = []
         routes = {
@@ -171,6 +178,22 @@ class ControllerSafetyTest(unittest.TestCase):
             FEATHER.Page.MESSAGE: "_render_message",
             FEATHER.Page.ERROR: "_render_error",
         }
+        feature_pages = {
+            page for spec in FEATHER.FEATURE_SPECS for page in spec.pages
+        }
+
+        class Feature:
+            def render(self, page):
+                getattr(controller, routes[page])()
+
+        class FeatureManager:
+            def owner_name(self, page):
+                return "test" if page in feature_pages else None
+
+            def get_for_page(self, page):
+                return Feature()
+
+        controller.feature_manager = FeatureManager()
         for method in set(routes.values()):
             setattr(controller, method,
                     lambda method=method: called.append(method))
@@ -180,7 +203,7 @@ class ControllerSafetyTest(unittest.TestCase):
             self.assertEqual(called, [method], page)
 
     def test_active_print_keeps_menu_available_on_home_page(self):
-        controller = FEATHER.FeatherScreen.__new__(FEATHER.FeatherScreen)
+        controller = ScenarioController.__new__(ScenarioController)
         controller.renderer = FEATHER.FeatherRenderer()
         controller.print_state = FEATHER.PrintState.PRINTING
         controller.page = FEATHER.Page.IDLE_HOME
@@ -201,7 +224,7 @@ class ControllerSafetyTest(unittest.TestCase):
         self.assertNotIn("global.abort", "\n".join(drawing))
 
     def test_safety_composes_armed_pages_and_global_printer_activity(self):
-        controller = FEATHER.FeatherScreen.__new__(FEATHER.FeatherScreen)
+        controller = ScenarioController.__new__(ScenarioController)
         controller.reactor = Reactor()
         controller.page = FEATHER.Page.MAIN_MENU
         controller.print_state = FEATHER.PrintState.IDLE
@@ -279,7 +302,7 @@ class ControllerSafetyTest(unittest.TestCase):
             FEATHER.Page.FILE_CONFIRM).visible)
 
     def test_active_process_shows_abort_on_every_live_page_except_home(self):
-        controller = FEATHER.FeatherScreen.__new__(FEATHER.FeatherScreen)
+        controller = ScenarioController.__new__(ScenarioController)
         controller.reactor = Reactor()
         controller.page = FEATHER.Page.MAIN_MENU
         controller.print_state = FEATHER.PrintState.PRINTING
@@ -291,7 +314,7 @@ class ControllerSafetyTest(unittest.TestCase):
                              page != FEATHER.Page.IDLE_HOME, page)
 
     def test_feature_armed_policy_failure_is_fail_safe(self):
-        controller = FEATHER.FeatherScreen.__new__(FEATHER.FeatherScreen)
+        controller = ScenarioController.__new__(ScenarioController)
         controller.reactor = Reactor()
         controller.page = FEATHER.Page.SETTINGS
         controller.print_state = FEATHER.PrintState.IDLE
@@ -311,7 +334,7 @@ class ControllerSafetyTest(unittest.TestCase):
         logged.assert_called_once()
 
     def test_short_gcode_state_does_not_flash_abort(self):
-        controller = FEATHER.FeatherScreen.__new__(FEATHER.FeatherScreen)
+        controller = ScenarioController.__new__(ScenarioController)
         controller.reactor = Reactor()
         controller.page = FEATHER.Page.MAIN_MENU
         controller.print_state = FEATHER.PrintState.IDLE
@@ -364,7 +387,7 @@ class ControllerSafetyTest(unittest.TestCase):
         self.assertNotIn("global.abort", "\n".join(batches[-1]))
 
     def test_dashboard_refresh_redraws_only_changed_panel(self):
-        controller = FEATHER.FeatherScreen.__new__(FEATHER.FeatherScreen)
+        controller = ScenarioController.__new__(ScenarioController)
         controller.page = FEATHER.Page.IDLE_HOME
         controller.renderer = FEATHER.FeatherRenderer()
         batches = []
@@ -392,7 +415,7 @@ class ControllerSafetyTest(unittest.TestCase):
         self.assertNotIn("-p 542 112", update)
 
     def test_dashboard_worst_case_content_is_bounded(self):
-        controller = FEATHER.FeatherScreen.__new__(FEATHER.FeatherScreen)
+        controller = ScenarioController.__new__(ScenarioController)
         controller.page = FEATHER.Page.IDLE_HOME
         controller.print_state = FEATHER.PrintState.PREPARING
         controller.renderer = FEATHER.FeatherRenderer()
@@ -448,7 +471,7 @@ class ControllerSafetyTest(unittest.TestCase):
             209)
 
     def test_dashboard_clock_uses_header_contrast_and_stable_width_font(self):
-        controller = FEATHER.FeatherScreen.__new__(FEATHER.FeatherScreen)
+        controller = ScenarioController.__new__(ScenarioController)
         controller.page = FEATHER.Page.IDLE_HOME
         controller.renderer = FEATHER.FeatherRenderer()
         colors = dict(UI.FALLBACK_THEME)
@@ -499,7 +522,7 @@ class ControllerSafetyTest(unittest.TestCase):
                               HOME_STATE.DashboardState)
 
     def test_calibration_menu_paginates_available_workflows(self):
-        controller = FEATHER.FeatherScreen.__new__(FEATHER.FeatherScreen)
+        controller = ScenarioController.__new__(ScenarioController)
         controller.renderer = FEATHER.FeatherRenderer()
         batches = []
         controller.renderer.send = batches.append
@@ -522,7 +545,7 @@ class ControllerSafetyTest(unittest.TestCase):
         self.assertIn("cal.pid_extruder", controller.renderer._buttons)
 
     def test_extruder_opens_guided_workflow_and_axes_keeps_measurement_guide(self):
-        controller = FEATHER.FeatherScreen.__new__(FEATHER.FeatherScreen)
+        controller = ScenarioController.__new__(ScenarioController)
         controller.renderer = FEATHER.FeatherRenderer()
         batches = []
         controller.renderer.send = batches.append
@@ -541,7 +564,7 @@ class ControllerSafetyTest(unittest.TestCase):
         self.assertEqual(pages[-1], FEATHER.Page.CALIBRATION_GUIDE)
 
     def test_pid_confirm_uses_selected_material_temperature(self):
-        controller = FEATHER.FeatherScreen.__new__(FEATHER.FeatherScreen)
+        controller = ScenarioController.__new__(ScenarioController)
         controller.renderer = FEATHER.FeatherRenderer()
         batches = []
         controller.renderer.send = batches.append
@@ -565,8 +588,7 @@ class ControllerSafetyTest(unittest.TestCase):
         )
         for kind, expected in cases:
             with self.subTest(kind=kind):
-                controller = FEATHER.FeatherScreen.__new__(
-                    FEATHER.FeatherScreen)
+                controller = ScenarioController.__new__(ScenarioController)
                 controller.calibration_kind = kind
                 controller.calibration_material = "PETG"
                 controller.calibration_error = None
@@ -584,7 +606,7 @@ class ControllerSafetyTest(unittest.TestCase):
                     pages, [FEATHER.Page.CALIBRATION_RESULT])
 
     def test_tuning_result_can_save_or_return_without_saving(self):
-        controller = FEATHER.FeatherScreen.__new__(FEATHER.FeatherScreen)
+        controller = ScenarioController.__new__(ScenarioController)
         controller.renderer = FEATHER.FeatherRenderer()
         batches = []
         controller.renderer.send = batches.append
@@ -619,11 +641,11 @@ class ControllerSafetyTest(unittest.TestCase):
             self.assertIn('_PRINT_STATUS S="%s"' % status, macros)
 
     def test_z_offset_summary_registers_all_positions(self):
-        controller = FEATHER.FeatherScreen.__new__(FEATHER.FeatherScreen)
+        controller = ScenarioController.__new__(ScenarioController)
         controller.renderer = FEATHER.FeatherRenderer()
         batches = []
         controller.renderer.send = batches.append
-        controller.z_calibration = FEATHER.ZCalibrationSession()
+        controller.z_calibration = ZCalibrationSession()
         controller.z_calibration.begin(
             0.125, None, "adaptive", -0.25, True)
 
@@ -640,12 +662,12 @@ class ControllerSafetyTest(unittest.TestCase):
         self.assertIn("--batch button -p 65 334 -s 670 82", drawing)
 
     def test_z_paper_controls_are_disabled_until_probe_or_manual_start(self):
-        controller = FEATHER.FeatherScreen.__new__(FEATHER.FeatherScreen)
+        controller = ScenarioController.__new__(ScenarioController)
         controller.renderer = FEATHER.FeatherRenderer()
         batches = []
         controller.renderer.send = batches.append
         controller.reactor = Reactor()
-        controller.z_calibration = FEATHER.ZCalibrationSession()
+        controller.z_calibration = ZCalibrationSession()
         controller.z_calibration.begin(0.0, None, "", -0.25, False)
         controller.z_calibration.choose_zone("center")
         controller._z_weight_gauge_commands = lambda eventtime: []
@@ -658,11 +680,11 @@ class ControllerSafetyTest(unittest.TestCase):
             self.assertNotIn(action, drawing)
 
     def test_safe_z_pages_explain_measurement_and_gate_adjustment_until_probe(self):
-        controller = FEATHER.FeatherScreen.__new__(FEATHER.FeatherScreen)
+        controller = ScenarioController.__new__(ScenarioController)
         controller.renderer = FEATHER.FeatherRenderer()
         batches = []
         controller.renderer.send = batches.append
-        controller.z_calibration = FEATHER.ZCalibrationSession()
+        controller.z_calibration = ZCalibrationSession()
         controller.z_calibration.begin(
             0.0, None, "", -0.25, False, safe_z=8.0)
 
@@ -687,7 +709,7 @@ class ControllerSafetyTest(unittest.TestCase):
             self.assertIn(action, after_probe)
 
     def test_live_z_offset_page_separates_saved_current_and_unsaved(self):
-        controller = FEATHER.FeatherScreen.__new__(FEATHER.FeatherScreen)
+        controller = ScenarioController.__new__(ScenarioController)
         controller.renderer = FEATHER.FeatherRenderer()
         batches = []
         controller.renderer.send = batches.append
@@ -718,7 +740,7 @@ class ControllerSafetyTest(unittest.TestCase):
         self.assertIn("-c ff4d5a", drawing)
 
     def test_live_z_offset_load_warning_has_explicit_choice(self):
-        controller = FEATHER.FeatherScreen.__new__(FEATHER.FeatherScreen)
+        controller = ScenarioController.__new__(ScenarioController)
         controller.renderer = FEATHER.FeatherRenderer()
         batches = []
         controller.renderer.send = batches.append
@@ -742,7 +764,7 @@ class ControllerSafetyTest(unittest.TestCase):
         self.assertNotIn("global.abort", controller.renderer._buttons)
 
     def test_weight_gauge_uses_history_and_expands_without_clamping(self):
-        controller = FEATHER.FeatherScreen.__new__(FEATHER.FeatherScreen)
+        controller = ScenarioController.__new__(ScenarioController)
         controller.renderer = FEATHER.FeatherRenderer()
         controller.reactor = Reactor()
         controller.weight_sensor = StatusObject({
@@ -797,7 +819,7 @@ class ControllerSafetyTest(unittest.TestCase):
         self.assertEqual(gauge["initial"], 100.0)
 
     def test_weight_gauge_ignores_uninitialized_sensor_extrema(self):
-        controller = FEATHER.FeatherScreen.__new__(FEATHER.FeatherScreen)
+        controller = ScenarioController.__new__(ScenarioController)
         controller.reactor = Reactor()
         controller.weight_sensor = StatusObject({
             "temperature": 0.0,
@@ -816,7 +838,7 @@ class ControllerSafetyTest(unittest.TestCase):
         })
 
     def test_weight_gauge_turns_red_only_above_four_hundred(self):
-        controller = FEATHER.FeatherScreen.__new__(FEATHER.FeatherScreen)
+        controller = ScenarioController.__new__(ScenarioController)
         controller.renderer = FEATHER.FeatherRenderer()
         self.assertTrue(controller.renderer.set_theme("SYNTH"))
         primary = controller.renderer.color(UI.ThemeColor.PRIMARY)
@@ -844,7 +866,7 @@ class ControllerSafetyTest(unittest.TestCase):
             any("-c %s" % danger_color in line for line in danger))
 
     def test_screw_calibration_confirm_offers_clean_and_cooldown_paths(self):
-        controller = FEATHER.FeatherScreen.__new__(FEATHER.FeatherScreen)
+        controller = ScenarioController.__new__(ScenarioController)
         controller.renderer = FEATHER.FeatherRenderer()
         batches = []
         controller.renderer.send = batches.append
@@ -865,7 +887,7 @@ class ControllerSafetyTest(unittest.TestCase):
         self.assertIn("--border b47aff", drawing)
 
     def test_mesh_cleaning_uses_complete_shared_material_selector(self):
-        controller = FEATHER.FeatherScreen.__new__(FEATHER.FeatherScreen)
+        controller = ScenarioController.__new__(ScenarioController)
         controller.renderer = FEATHER.FeatherRenderer()
         batches = []
         controller.renderer.send = batches.append
@@ -880,7 +902,7 @@ class ControllerSafetyTest(unittest.TestCase):
         self.assertIn("--border b47aff", drawing)
 
     def test_empty_heating_disables_mesh_but_preserves_no_clean_screws(self):
-        controller = FEATHER.FeatherScreen.__new__(FEATHER.FeatherScreen)
+        controller = ScenarioController.__new__(ScenarioController)
         controller.heating_materials = ()
         controller.heating_profiles = {}
         controller.renderer = FEATHER.FeatherRenderer()
@@ -906,7 +928,7 @@ class ControllerSafetyTest(unittest.TestCase):
         self.assertIn(":cal.confirm", screws)
 
     def test_screw_calibration_marks_only_current_phase_with_accent(self):
-        controller = FEATHER.FeatherScreen.__new__(FEATHER.FeatherScreen)
+        controller = ScenarioController.__new__(ScenarioController)
         controller.renderer = FEATHER.FeatherRenderer()
         controller.calibration_kind = "screws"
         controller.calibration_clean_nozzle = True
@@ -921,8 +943,7 @@ class ControllerSafetyTest(unittest.TestCase):
     def test_calibration_heating_offers_m108_cancel_and_global_abort(self):
         for kind in ("screws", "mesh", "z"):
             with self.subTest(kind=kind):
-                controller = FEATHER.FeatherScreen.__new__(
-                    FEATHER.FeatherScreen)
+                controller = ScenarioController.__new__(ScenarioController)
                 controller.renderer = FEATHER.FeatherRenderer()
                 controller.calibration_kind = kind
                 controller.calibration_repeat_probe = False
@@ -945,7 +966,7 @@ class ControllerSafetyTest(unittest.TestCase):
                     "--batch button -p 648 7 -s 132 46", drawing)
 
     def test_z_preparation_has_clean_and_no_clean_command_paths(self):
-        controller = FEATHER.FeatherScreen.__new__(FEATHER.FeatherScreen)
+        controller = ScenarioController.__new__(ScenarioController)
         controller.calibration_material = "ABS-PC"
         controller._limited_preheat = lambda material: (270, 105)
         controller.params = type("Params", (), {
@@ -972,7 +993,7 @@ class ControllerSafetyTest(unittest.TestCase):
         self.assertIn("LOAD_CELL_TARE", no_clean)
 
     def test_z_progress_stages_match_cleaning_choice(self):
-        controller = FEATHER.FeatherScreen.__new__(FEATHER.FeatherScreen)
+        controller = ScenarioController.__new__(ScenarioController)
         controller.renderer = FEATHER.FeatherRenderer()
         controller.calibration_kind = "z"
         controller.calibration_clean_nozzle = True
@@ -988,7 +1009,7 @@ class ControllerSafetyTest(unittest.TestCase):
 
     def test_z_session_captures_runtime_and_exact_mesh_before_clearing(self):
         mesh_object = object()
-        controller = FEATHER.FeatherScreen.__new__(FEATHER.FeatherScreen)
+        controller = ScenarioController.__new__(ScenarioController)
         controller.reactor = DeferredReactor()
         controller.gcode = GCodeRecorder()
         controller.gcode_move = StatusObject({
@@ -997,7 +1018,7 @@ class ControllerSafetyTest(unittest.TestCase):
         controller.probe = type("Probe", (), {"z_offset": -0.25})()
         controller.params = type("Params", (), {
             "variables": {"load_zoffset": 1}})()
-        controller.z_calibration = FEATHER.ZCalibrationSession()
+        controller.z_calibration = ZCalibrationSession()
         controller._require_idle = lambda: None
         pages = []
         controller._show_page = pages.append
@@ -1025,7 +1046,7 @@ class ControllerSafetyTest(unittest.TestCase):
                     raise RuntimeError("clear failed")
 
         mesh_object = object()
-        controller = FEATHER.FeatherScreen.__new__(FEATHER.FeatherScreen)
+        controller = ScenarioController.__new__(ScenarioController)
         controller.reactor = Reactor()
         controller.gcode = FailClear()
         controller.gcode_move = StatusObject({
@@ -1036,7 +1057,7 @@ class ControllerSafetyTest(unittest.TestCase):
         controller.probe = type("Probe", (), {"z_offset": -0.25})()
         controller.params = type("Params", (), {
             "variables": {"load_zoffset": 0}})()
-        controller.z_calibration = FEATHER.ZCalibrationSession()
+        controller.z_calibration = ZCalibrationSession()
         controller._require_idle = lambda: None
 
         with self.assertRaisesRegex(RuntimeError, "clear failed"):
@@ -1058,15 +1079,14 @@ class ControllerSafetyTest(unittest.TestCase):
                 (None, ""), (object(), "auto"),
                 (object(), "adaptive-run")):
             with self.subTest(profile=profile or "absent"):
-                controller = FEATHER.FeatherScreen.__new__(
-                    FEATHER.FeatherScreen)
+                controller = ScenarioController.__new__(ScenarioController)
                 controller.reactor = Reactor()
                 controller.gcode = GCodeRecorder()
                 controller.toolhead = StatusObject({
                     "homed_axes": "xyz",
                     "position": (0.0, 0.0, 0.2, 0.0)})
                 controller.bed_mesh = BedMeshState(None, "")
-                controller.z_calibration = FEATHER.ZCalibrationSession()
+                controller.z_calibration = ZCalibrationSession()
                 controller.z_calibration.begin(
                     0.321, original, profile, -0.25, False)
 
@@ -1083,13 +1103,13 @@ class ControllerSafetyTest(unittest.TestCase):
                 self.assertFalse(controller.z_calibration.active)
 
     def test_z_save_applies_runtime_persists_offset_and_auto_load(self):
-        controller = FEATHER.FeatherScreen.__new__(FEATHER.FeatherScreen)
+        controller = ScenarioController.__new__(ScenarioController)
         controller.reactor = Reactor()
         controller.gcode = GCodeRecorder()
         controller.toolhead = StatusObject({
             "homed_axes": "xyz", "position": (0.0, 0.0, 0.2, 0.0)})
         controller.bed_mesh = BedMeshState(None, "")
-        controller.z_calibration = FEATHER.ZCalibrationSession()
+        controller.z_calibration = ZCalibrationSession()
         controller.z_calibration.begin(
             -0.100, None, "", -0.25, True)
 
@@ -1102,7 +1122,7 @@ class ControllerSafetyTest(unittest.TestCase):
         self.assertIn("TURN_OFF_HEATERS", command)
 
     def test_z_pressure_dialog_is_suppressed_during_probe_then_rearms(self):
-        controller = FEATHER.FeatherScreen.__new__(FEATHER.FeatherScreen)
+        controller = ScenarioController.__new__(ScenarioController)
         controller.reactor = Reactor()
         controller.page = FEATHER.Page.Z_OFFSET_PAPER
         controller.weight_sensor = StatusObject({
@@ -1111,7 +1131,7 @@ class ControllerSafetyTest(unittest.TestCase):
             "measured_max_temp": 850.0,
         })
         controller.z_weight_gauge = None
-        controller.z_calibration = FEATHER.ZCalibrationSession()
+        controller.z_calibration = ZCalibrationSession()
         controller.z_calibration.begin(
             0.0, None, "", -0.25, False)
         rendered = []
@@ -1144,7 +1164,7 @@ class ControllerSafetyTest(unittest.TestCase):
                     raise RuntimeError("cancelled")
 
         original_mesh = object()
-        controller = FEATHER.FeatherScreen.__new__(FEATHER.FeatherScreen)
+        controller = ScenarioController.__new__(ScenarioController)
         controller.reactor = Reactor()
         controller.gcode = AbortPreparation()
         controller.page = FEATHER.Page.CALIBRATION_PROGRESS
@@ -1158,7 +1178,7 @@ class ControllerSafetyTest(unittest.TestCase):
         controller.calibration_clean_nozzle = False
         controller.calibration_cancel_requested = True
         controller.calibration_cancel_dispatched = True
-        controller.z_calibration = FEATHER.ZCalibrationSession()
+        controller.z_calibration = ZCalibrationSession()
         controller.z_calibration.begin(
             0.111, original_mesh, "adaptive", -0.25, False)
         controller._require_idle = lambda: None
@@ -1178,13 +1198,13 @@ class ControllerSafetyTest(unittest.TestCase):
         self.assertEqual(messages[0][1], FEATHER.Page.CALIBRATION_HOME)
 
     def test_z_shutdown_clears_local_session_without_replacing_error_page(self):
-        controller = FEATHER.FeatherScreen.__new__(FEATHER.FeatherScreen)
+        controller = ScenarioController.__new__(ScenarioController)
         controller.gcode = FailingGCode()
         controller.page = FEATHER.Page.ERROR
         controller.print_state = FEATHER.PrintState.IDLE
         controller.shutdown_active = True
         controller.calibration_clean_nozzle = False
-        controller.z_calibration = FEATHER.ZCalibrationSession()
+        controller.z_calibration = ZCalibrationSession()
         controller.z_calibration.begin(
             0.111, object(), "adaptive", -0.25, False)
         controller._require_idle = lambda: None
@@ -1201,7 +1221,7 @@ class ControllerSafetyTest(unittest.TestCase):
         self.assertEqual(pages, [])
 
     def test_calibration_heat_cancel_dispatches_immediate_m108_once(self):
-        controller = FEATHER.FeatherScreen.__new__(FEATHER.FeatherScreen)
+        controller = ScenarioController.__new__(ScenarioController)
         controller.calibration_kind = "mesh"
         controller.calibration_cancel_requested = False
         controller.calibration_cancel_dispatched = False
@@ -1220,7 +1240,7 @@ class ControllerSafetyTest(unittest.TestCase):
         self.assertTrue(controller.calibration_cancel_dispatched)
 
     def test_calibration_heat_cancel_is_not_blocked_by_active_macro(self):
-        controller = FEATHER.FeatherScreen.__new__(FEATHER.FeatherScreen)
+        controller = ScenarioController.__new__(ScenarioController)
         controller.page = FEATHER.Page.CALIBRATION_PROGRESS
         controller.calibration_kind = "mesh"
         controller.command_depth = 1
@@ -1239,7 +1259,7 @@ class ControllerSafetyTest(unittest.TestCase):
         self.assertFalse(controller.touch_feedback_pending)
 
     def test_same_page_redraw_does_not_discard_delayed_button_action(self):
-        controller = FEATHER.FeatherScreen.__new__(FEATHER.FeatherScreen)
+        controller = ScenarioController.__new__(ScenarioController)
         controller.page = FEATHER.Page.SETTINGS
         controller.touch_feedback_pending = True
         restored = []
@@ -1259,7 +1279,7 @@ class ControllerSafetyTest(unittest.TestCase):
         self.assertFalse(controller.touch_feedback_pending)
 
     def test_page_change_discards_delayed_button_action(self):
-        controller = FEATHER.FeatherScreen.__new__(FEATHER.FeatherScreen)
+        controller = ScenarioController.__new__(ScenarioController)
         controller.page = FEATHER.Page.IDLE_HOME
         controller.touch_feedback_pending = True
         controller.renderer = type("Renderer", (), {"generation": 2})()
@@ -1274,7 +1294,7 @@ class ControllerSafetyTest(unittest.TestCase):
         self.assertFalse(controller.touch_feedback_pending)
 
     def test_homing_progress_keeps_global_abort_registered(self):
-        controller = FEATHER.FeatherScreen.__new__(FEATHER.FeatherScreen)
+        controller = ScenarioController.__new__(ScenarioController)
         controller.renderer = FEATHER.FeatherRenderer()
         controller.calibration_kind = "mesh"
         controller.calibration_repeat_probe = False
@@ -1297,7 +1317,7 @@ class ControllerSafetyTest(unittest.TestCase):
         self.assertIn("--batch button -p 648 7 -s 132 46", drawing)
 
     def test_global_abort_bypasses_busy_and_touch_feedback(self):
-        controller = FEATHER.FeatherScreen.__new__(FEATHER.FeatherScreen)
+        controller = ScenarioController.__new__(ScenarioController)
         controller.page = FEATHER.Page.MAIN_MENU
         controller.print_state = FEATHER.PrintState.IDLE
         controller.command_depth = 1
@@ -1318,7 +1338,7 @@ class ControllerSafetyTest(unittest.TestCase):
         self.assertEqual(immediate, [])
 
     def test_screw_repeat_progress_marks_two_active_stages(self):
-        controller = FEATHER.FeatherScreen.__new__(FEATHER.FeatherScreen)
+        controller = ScenarioController.__new__(ScenarioController)
         controller.renderer = FEATHER.FeatherRenderer()
         controller.calibration_kind = "screws"
         controller.calibration_repeat_probe = True
@@ -1327,7 +1347,7 @@ class ControllerSafetyTest(unittest.TestCase):
         self.assertEqual(drawing.count("-c b47aff"), 2)
 
     def test_settings_buttons_use_compact_layout(self):
-        controller = FEATHER.FeatherScreen.__new__(FEATHER.FeatherScreen)
+        controller = ScenarioController.__new__(ScenarioController)
         controller.renderer = FEATHER.FeatherRenderer()
         controller.reactor = Reactor()
         batches = []
@@ -1737,7 +1757,7 @@ class ControllerSafetyTest(unittest.TestCase):
             self.assertFalse(UI.rectangles_overlap(spec[:4], footer), action)
 
     def test_eco_wake_restores_backlight_once(self):
-        controller = FEATHER.FeatherScreen.__new__(FEATHER.FeatherScreen)
+        controller = ScenarioController.__new__(ScenarioController)
         controller.dimmed = True
         values = []
         controller._setting = lambda key, default: 55
@@ -1747,12 +1767,12 @@ class ControllerSafetyTest(unittest.TestCase):
         self.assertEqual(values, [55])
 
     def test_background_wake_action_has_no_page_side_effect(self):
-        controller = FEATHER.FeatherScreen.__new__(FEATHER.FeatherScreen)
+        controller = ScenarioController.__new__(ScenarioController)
 
         controller._handle_touch_action("global.wake")
 
     def test_pending_print_action_rejects_repeat_tap(self):
-        controller = FEATHER.FeatherScreen.__new__(FEATHER.FeatherScreen)
+        controller = ScenarioController.__new__(ScenarioController)
         controller.print_state = FEATHER.PrintState.PRINTING
         controller.reactor = Reactor()
         controller.last_action_time = -1
@@ -1765,7 +1785,7 @@ class ControllerSafetyTest(unittest.TestCase):
         self.assertEqual(calls, [])
 
     def test_print_page_always_registers_cancel_hitbox(self):
-        controller = FEATHER.FeatherScreen.__new__(FEATHER.FeatherScreen)
+        controller = ScenarioController.__new__(ScenarioController)
         controller.renderer = FEATHER.FeatherRenderer()
         batches = []
         controller.renderer.send = batches.append
@@ -1790,7 +1810,7 @@ class ControllerSafetyTest(unittest.TestCase):
             self.assertIn('-f "JetBrainsMono Bold 12pt"', command)
 
     def test_print_preparation_disables_pause_and_filament(self):
-        controller = FEATHER.FeatherScreen.__new__(FEATHER.FeatherScreen)
+        controller = ScenarioController.__new__(ScenarioController)
         controller.renderer = FEATHER.FeatherRenderer()
         controller.renderer.send = lambda commands: None
         controller.reactor = Reactor()
@@ -1815,7 +1835,7 @@ class ControllerSafetyTest(unittest.TestCase):
         self.assertIn("global.abort", controller.renderer._buttons)
 
     def test_print_progress_shows_remaining_layer_and_height(self):
-        controller = FEATHER.FeatherScreen.__new__(FEATHER.FeatherScreen)
+        controller = ScenarioController.__new__(ScenarioController)
         controller.renderer = FEATHER.FeatherRenderer()
         batches = []
         controller.renderer.send = batches.append
@@ -1841,7 +1861,7 @@ class ControllerSafetyTest(unittest.TestCase):
         self.assertIn("3.25 MM", drawing)
 
     def test_print_progress_uses_sd_position_and_never_moves_backwards(self):
-        controller = FEATHER.FeatherScreen.__new__(FEATHER.FeatherScreen)
+        controller = ScenarioController.__new__(ScenarioController)
         controller._progress_floor = 0.0
         controller._m73_start_expiry = 0.0
         controller._m73_active = False
@@ -1859,7 +1879,7 @@ class ControllerSafetyTest(unittest.TestCase):
         self.assertEqual(controller._print_progress(3.0), 0.15)
 
     def test_print_progress_prefers_current_print_m73(self):
-        controller = FEATHER.FeatherScreen.__new__(FEATHER.FeatherScreen)
+        controller = ScenarioController.__new__(ScenarioController)
         controller._progress_floor = 0.0
         controller._m73_start_expiry = 10.0
         controller._m73_active = False
@@ -1877,7 +1897,7 @@ class ControllerSafetyTest(unittest.TestCase):
         self.assertEqual(controller._print_progress(25.0), 0.37)
 
     def test_print_progress_uses_time_estimate_before_sd_fallback(self):
-        controller = FEATHER.FeatherScreen.__new__(FEATHER.FeatherScreen)
+        controller = ScenarioController.__new__(ScenarioController)
         controller._progress_floor = 0.0
         controller._m73_start_expiry = 10.0
         controller._m73_active = False
@@ -1892,7 +1912,7 @@ class ControllerSafetyTest(unittest.TestCase):
         self.assertEqual(controller._progress_source, "TIME")
 
     def test_filament_continue_is_next_to_action_buttons(self):
-        controller = FEATHER.FeatherScreen.__new__(FEATHER.FeatherScreen)
+        controller = ScenarioController.__new__(ScenarioController)
         controller.renderer = FEATHER.FeatherRenderer()
         batches = []
         controller.renderer.send = batches.append
@@ -1914,7 +1934,7 @@ class ControllerSafetyTest(unittest.TestCase):
         self.assertIn("--id 1:%s" % FILAMENT_ACTIONS.RESUME.wire_id, drawing)
 
     def test_filament_actions_enable_only_at_selected_target_temperature(self):
-        controller = FEATHER.FeatherScreen.__new__(FEATHER.FeatherScreen)
+        controller = ScenarioController.__new__(ScenarioController)
         controller.renderer = FEATHER.FeatherRenderer()
         batches = []
         controller.renderer.send = batches.append
@@ -1950,7 +1970,7 @@ class ControllerSafetyTest(unittest.TestCase):
             self.assertNotIn("--id 3:%s" % action.wire_id, drawing)
 
     def test_terminal_print_state_becomes_idle_and_reports_result(self):
-        controller = FEATHER.FeatherScreen.__new__(FEATHER.FeatherScreen)
+        controller = ScenarioController.__new__(ScenarioController)
         controller.print_state = FEATHER.PrintState.PAUSED
         controller.pending_action = "print.cancel.confirm"
         controller.reactor = Reactor()
@@ -1963,14 +1983,14 @@ class ControllerSafetyTest(unittest.TestCase):
         self.assertEqual(messages[0][1], FEATHER.Page.IDLE_HOME)
 
     def test_preheat_presets_respect_real_heater_limits(self):
-        controller = FEATHER.FeatherScreen.__new__(FEATHER.FeatherScreen)
+        controller = ScenarioController.__new__(ScenarioController)
         controller.extruder = type("Extruder", (), {
             "heater": type("Heater", (), {"min_temp": 0, "max_temp": 251})()})()
         controller.heater_bed = type("Bed", (), {"min_temp": 0, "max_temp": 91})()
         self.assertEqual(controller._limited_preheat("ABS"), (250, 85))
 
     def test_filament_extrusion_is_blocked_when_cold(self):
-        controller = FEATHER.FeatherScreen.__new__(FEATHER.FeatherScreen)
+        controller = ScenarioController.__new__(ScenarioController)
         controller.reactor = Reactor()
         controller.filament_from_pause = True
         controller.print_stats = StatusObject({"state": "paused"})
@@ -1990,7 +2010,7 @@ class ControllerSafetyTest(unittest.TestCase):
         self.assertEqual(controller.gcode.commands, ["PURGE_FILAMENT"])
 
     def test_idle_filament_flow_restores_original_target(self):
-        controller = FEATHER.FeatherScreen.__new__(FEATHER.FeatherScreen)
+        controller = ScenarioController.__new__(ScenarioController)
         controller.filament_from_pause = False
         controller.filament_original_target = 185
         controller.gcode = GCodeRecorder()
@@ -2001,7 +2021,7 @@ class ControllerSafetyTest(unittest.TestCase):
         self.assertEqual(pages, [FEATHER.Page.IDLE_HOME])
 
     def test_live_z_adjust_is_available_on_every_layer_when_z_is_homed(self):
-        controller = FEATHER.FeatherScreen.__new__(FEATHER.FeatherScreen)
+        controller = ScenarioController.__new__(ScenarioController)
         controller.print_state = FEATHER.PrintState.PRINTING
         controller.print_stats = StatusObject(
             {"state": "printing", "info": {"current_layer": None}})
@@ -2018,7 +2038,7 @@ class ControllerSafetyTest(unittest.TestCase):
         self.assertFalse(controller._live_z_adjust_allowed(0))
 
     def test_network_operation_timeout_terminates_helper(self):
-        controller = FEATHER.FeatherScreen.__new__(FEATHER.FeatherScreen)
+        controller = ScenarioController.__new__(ScenarioController)
         controller.network_process = type("Process", (), {"poll": lambda self: None})()
         controller.network_deadline = 10
         messages = []
@@ -2027,7 +2047,7 @@ class ControllerSafetyTest(unittest.TestCase):
         self.assertEqual(len(messages), 1)
 
     def test_mesh_uses_auto_profile_and_selected_preheat(self):
-        controller = FEATHER.FeatherScreen.__new__(FEATHER.FeatherScreen)
+        controller = ScenarioController.__new__(ScenarioController)
         controller.calibration_kind = "mesh"
         controller.calibration_material = "PETG"
         controller.calibration_error = None
@@ -2042,7 +2062,7 @@ class ControllerSafetyTest(unittest.TestCase):
         self.assertEqual(pages, [FEATHER.Page.CALIBRATION_RESULT])
 
     def test_screw_calibration_passes_selected_cleaning_path(self):
-        controller = FEATHER.FeatherScreen.__new__(FEATHER.FeatherScreen)
+        controller = ScenarioController.__new__(ScenarioController)
         controller.calibration_kind = "screws"
         controller.calibration_material = "PETG"
         controller.calibration_clean_nozzle = False
@@ -2059,7 +2079,7 @@ class ControllerSafetyTest(unittest.TestCase):
         self.assertEqual(pages, [FEATHER.Page.CALIBRATION_RESULT])
 
     def test_cancelled_calibration_result_does_not_offer_unsafe_repeat(self):
-        controller = FEATHER.FeatherScreen.__new__(FEATHER.FeatherScreen)
+        controller = ScenarioController.__new__(ScenarioController)
         controller.renderer = FEATHER.FeatherRenderer()
         controller.calibration_kind = "screws"
         controller.calibration_error = None
@@ -2074,7 +2094,7 @@ class ControllerSafetyTest(unittest.TestCase):
         self.assertNotIn("cal.repeat", drawing)
 
     def test_mesh_result_offers_repeat_discard_and_save(self):
-        controller = FEATHER.FeatherScreen.__new__(FEATHER.FeatherScreen)
+        controller = ScenarioController.__new__(ScenarioController)
         controller.renderer = FEATHER.FeatherRenderer()
         controller.calibration_kind = "mesh"
         controller.calibration_mesh = [[-0.1, 0.0], [0.05, 0.1]]
@@ -2092,7 +2112,7 @@ class ControllerSafetyTest(unittest.TestCase):
         self.assertNotIn("cal.done", drawing)
 
     def test_mesh_result_save_starts_restart_ui_with_save_config(self):
-        controller = FEATHER.FeatherScreen.__new__(FEATHER.FeatherScreen)
+        controller = ScenarioController.__new__(ScenarioController)
         controller.calibration_kind = "mesh"
         controller.calibration_mesh = [[0.0]]
         controller.calibration_error = None
@@ -2105,7 +2125,7 @@ class ControllerSafetyTest(unittest.TestCase):
         self.assertEqual(restarts, ["SAVE_CONFIG"])
 
     def test_mesh_result_discard_keeps_previous_done_behavior(self):
-        controller = FEATHER.FeatherScreen.__new__(FEATHER.FeatherScreen)
+        controller = ScenarioController.__new__(ScenarioController)
         controller.calibration_kind = "mesh"
         controller.calibration_mesh = [[0.0]]
         controller.calibration_error = None
@@ -2123,8 +2143,7 @@ class ControllerSafetyTest(unittest.TestCase):
                 (None, True, [[0.0]]),
                 (None, False, [])):
             with self.subTest(error=error, cancelled=cancelled, mesh=mesh):
-                controller = FEATHER.FeatherScreen.__new__(
-                    FEATHER.FeatherScreen)
+                controller = ScenarioController.__new__(ScenarioController)
                 controller.calibration_kind = "mesh"
                 controller.calibration_mesh = mesh
                 controller.calibration_error = error
@@ -2160,8 +2179,7 @@ class ControllerSafetyTest(unittest.TestCase):
         )
         for kind, clean, start_command, cleanup_command in cases:
             with self.subTest(kind=kind, clean=clean):
-                controller = FEATHER.FeatherScreen.__new__(
-                    FEATHER.FeatherScreen)
+                controller = ScenarioController.__new__(ScenarioController)
                 controller.calibration_kind = kind
                 controller.calibration_material = "PETG"
                 controller.calibration_clean_nozzle = clean
@@ -2187,7 +2205,7 @@ class ControllerSafetyTest(unittest.TestCase):
                     pages, [FEATHER.Page.CALIBRATION_RESULT])
 
     def test_screw_repeat_starts_probe_immediately_without_confirm(self):
-        controller = FEATHER.FeatherScreen.__new__(FEATHER.FeatherScreen)
+        controller = ScenarioController.__new__(ScenarioController)
         controller.calibration_kind = "screws"
         controller.calibration_results = [{"name": "old"}]
         controller.calibration_mesh = []
@@ -2211,7 +2229,7 @@ class ControllerSafetyTest(unittest.TestCase):
         self.assertEqual(controller.gcode.commands, ["BED_LEVEL_SCREWS_PROBE"])
 
     def test_calibration_error_returns_result_page(self):
-        controller = FEATHER.FeatherScreen.__new__(FEATHER.FeatherScreen)
+        controller = ScenarioController.__new__(ScenarioController)
         controller.calibration_kind = "mesh"
         controller.calibration_material = "PLA"
         controller.calibration_error = None
@@ -2230,7 +2248,7 @@ class ControllerSafetyTest(unittest.TestCase):
             def run_script_from_command(self, command):
                 raise RuntimeError("opaque command failure")
 
-        controller = FEATHER.FeatherScreen.__new__(FEATHER.FeatherScreen)
+        controller = ScenarioController.__new__(ScenarioController)
         controller.calibration_kind = "mesh"
         controller.calibration_material = "PLA"
         controller.calibration_error = None
@@ -2253,7 +2271,7 @@ class ControllerSafetyTest(unittest.TestCase):
         self.assertEqual(rendered, [])
 
     def test_workflow_pages_cannot_replace_firmware_restart_screen(self):
-        controller = FEATHER.FeatherScreen.__new__(FEATHER.FeatherScreen)
+        controller = ScenarioController.__new__(ScenarioController)
         controller.page = FEATHER.Page.ERROR
         controller.renderer = FEATHER.FeatherRenderer()
         controller.renderer.freeze_output()
@@ -2268,7 +2286,7 @@ class ControllerSafetyTest(unittest.TestCase):
         self.assertEqual(rendered, [])
 
     def test_frozen_shutdown_screen_ignores_late_action_error_page(self):
-        controller = FEATHER.FeatherScreen.__new__(FEATHER.FeatherScreen)
+        controller = ScenarioController.__new__(ScenarioController)
         controller.page = FEATHER.Page.ERROR
         controller.renderer = FEATHER.FeatherRenderer()
         controller.renderer.freeze_output()
@@ -2287,7 +2305,7 @@ class ControllerSafetyTest(unittest.TestCase):
         self.assertEqual(rendered, [])
 
     def test_frozen_shutdown_screen_preserves_recovery_hitbox_generation(self):
-        controller = FEATHER.FeatherScreen.__new__(FEATHER.FeatherScreen)
+        controller = ScenarioController.__new__(ScenarioController)
         controller.page = FEATHER.Page.ERROR
         controller.renderer = FEATHER.FeatherRenderer()
         controller.renderer._generation = 9
@@ -2327,7 +2345,7 @@ class ControllerSafetyTest(unittest.TestCase):
         self.assertIsNone(classify("Home X before moving"))
 
     def test_shutdown_event_owns_firmware_restart_screen(self):
-        controller = FEATHER.FeatherScreen.__new__(FEATHER.FeatherScreen)
+        controller = ScenarioController.__new__(ScenarioController)
         controller.shutdown_active = False
         events = []
         controller.renderer = type("Renderer", (), {
@@ -2358,7 +2376,7 @@ class ControllerSafetyTest(unittest.TestCase):
         ])
 
     def test_error_page_offers_firmware_restart_with_padded_dialog(self):
-        controller = FEATHER.FeatherScreen.__new__(FEATHER.FeatherScreen)
+        controller = ScenarioController.__new__(ScenarioController)
         controller.renderer = FEATHER.FeatherRenderer()
         batches = []
         controller.renderer.send = batches.append
@@ -2372,7 +2390,7 @@ class ControllerSafetyTest(unittest.TestCase):
         self.assertIn("--batch fill -p 80 85 -s 640 325", drawing)
 
     def test_shutdown_message_is_wrapped_by_typer_inside_dialog(self):
-        controller = FEATHER.FeatherScreen.__new__(FEATHER.FeatherScreen)
+        controller = ScenarioController.__new__(ScenarioController)
         controller.renderer = FEATHER.FeatherRenderer()
         batches = []
         controller.renderer.send = batches.append
@@ -2390,7 +2408,7 @@ class ControllerSafetyTest(unittest.TestCase):
         self.assertNotIn("communication time...", drawing)
 
     def test_recovery_confirmation_is_wrapped_by_typer(self):
-        controller = FEATHER.FeatherScreen.__new__(FEATHER.FeatherScreen)
+        controller = ScenarioController.__new__(ScenarioController)
         controller.renderer = FEATHER.FeatherRenderer()
         batches = []
         controller.renderer.send = batches.append
@@ -2403,7 +2421,7 @@ class ControllerSafetyTest(unittest.TestCase):
             "--max-width 640 --max-height 100 --wrap --truncate", drawing)
 
     def test_action_prompt_renders_groups_footer_and_pagination(self):
-        controller = FEATHER.FeatherScreen.__new__(FEATHER.FeatherScreen)
+        controller = ScenarioController.__new__(ScenarioController)
         controller.renderer = FEATHER.FeatherRenderer()
         batches = []
         controller.renderer.send = batches.append
@@ -2440,7 +2458,7 @@ class ControllerSafetyTest(unittest.TestCase):
         self.assertNotIn('prompt.button.4', drawing)
 
     def test_firmware_restart_action_switches_to_animated_startup(self):
-        controller = FEATHER.FeatherScreen.__new__(FEATHER.FeatherScreen)
+        controller = ScenarioController.__new__(ScenarioController)
         controller.error_message = "shutdown"
         controller.error_category = "shutdown"
         controller.error_recovery = "firmware_restart"
@@ -2475,7 +2493,7 @@ class ControllerSafetyTest(unittest.TestCase):
             def run_script_from_command(self, command):
                 events.append(("command", command))
 
-        controller = FEATHER.FeatherScreen.__new__(FEATHER.FeatherScreen)
+        controller = ScenarioController.__new__(ScenarioController)
         controller.error_message = ""
         controller.error_category = ""
         controller.error_recovery = None
@@ -2507,7 +2525,7 @@ class ControllerSafetyTest(unittest.TestCase):
         self.assertEqual(len(events), 3)
 
     def test_mesh_calibration_shows_homing_immediately_after_prep(self):
-        controller = FEATHER.FeatherScreen.__new__(FEATHER.FeatherScreen)
+        controller = ScenarioController.__new__(ScenarioController)
         controller.renderer = FEATHER.FeatherRenderer()
         controller.calibration_kind = "mesh"
 
@@ -2562,7 +2580,7 @@ class ControllerSafetyTest(unittest.TestCase):
                 def register_timer(self, callback, when):
                     return (callback, when)
 
-            controller = FEATHER.FeatherScreen.__new__(FEATHER.FeatherScreen)
+            controller = ScenarioController.__new__(ScenarioController)
             controller.renderer = renderer
             controller.printer = Printer()
             controller.reactor = TimerReactor()
@@ -2601,7 +2619,7 @@ class ControllerSafetyTest(unittest.TestCase):
             def register_timer(self, callback, when):
                 return (callback, when)
 
-        controller = FEATHER.FeatherScreen.__new__(FEATHER.FeatherScreen)
+        controller = ScenarioController.__new__(ScenarioController)
         controller.renderer = Renderer()
         controller.params = type("Params", (), {
             "variables": {"feather_theme": "USER_THEME"},
@@ -2621,7 +2639,7 @@ class ControllerSafetyTest(unittest.TestCase):
         ])
 
     def test_startup_tick_advances_pulse_until_klipper_is_ready(self):
-        controller = FEATHER.FeatherScreen.__new__(FEATHER.FeatherScreen)
+        controller = ScenarioController.__new__(ScenarioController)
         pulses = []
         controller.renderer = type("Renderer", (), {
             "active": True,
@@ -2647,7 +2665,7 @@ class ControllerSafetyTest(unittest.TestCase):
                          controller.reactor.NEVER)
 
     def test_startup_tick_replaces_animation_with_config_error(self):
-        controller = FEATHER.FeatherScreen.__new__(FEATHER.FeatherScreen)
+        controller = ScenarioController.__new__(ScenarioController)
         shown = []
         controller.renderer = type("Renderer", (), {"active": True})()
         controller.reactor = type("Reactor", (), {"NEVER": 1.0e30})()

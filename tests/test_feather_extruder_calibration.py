@@ -34,6 +34,11 @@ HEATER_SPEC.loader.exec_module(HEATERS)
 from tests.test_feather_screen import FEATHER, Reactor  # noqa: E402
 
 
+class ScenarioController(EXTRUDER_CAL.FeatherExtruderCalibrationMixin,
+                         FEATHER.FeatherScreen):
+    """Test harness for the extracted extruder scenario."""
+
+
 class ExtruderCalculationTest(unittest.TestCase):
     def test_formula_rounding_and_feed_direction(self):
         candidate = EXTRUDER_CAL.calculate_rotation_distance(4.38, 98)
@@ -350,12 +355,12 @@ class FakeCalibrationExtruder:
 
 
 def calibration_controller(path=None):
-    controller = FEATHER.FeatherScreen.__new__(FEATHER.FeatherScreen)
+    controller = ScenarioController.__new__(ScenarioController)
     controller.renderer = FEATHER.FeatherRenderer()
     controller.renderer.send = lambda commands: None
     controller.reactor = Reactor()
     controller.extruder = FakeCalibrationExtruder()
-    controller.extruder_calibration = FEATHER.ExtruderCalibrationSession(
+    controller.extruder_calibration = EXTRUDER_CAL.ExtruderCalibrationSession(
         path or EXTRUDER_CAL.USER_CFG_PATH)
     controller.extruder_calibration.begin(4.38)
     controller.page = FEATHER.Page.EXTRUDER_CALIBRATION
