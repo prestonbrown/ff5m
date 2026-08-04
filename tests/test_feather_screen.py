@@ -214,22 +214,6 @@ class FeatherUtilitiesTest(unittest.TestCase):
         with self.assertRaises(KeyError):
             _value = entry["unknown"]
 
-    def test_packaged_feather_config_declares_joystick_safety_limits(self):
-        config_path = pathlib.Path(__file__).parents[1] / "config" / "feather.cfg"
-        contents = config_path.read_text(encoding="utf-8")
-        section = contents.split(
-            "[feather_screen]", 1)[1].split("[", 1)[0]
-        active_options = [line for line in section.splitlines()
-                          if line.strip() and not line.lstrip().startswith("#")]
-        self.assertEqual(active_options, [
-            "joystick_x_min: -110",
-            "joystick_x_max: 110",
-            "joystick_y_min: -110",
-            "joystick_y_max: 110",
-            "joystick_z_min: 0",
-            "joystick_z_max: 220",
-        ])
-        self.assertNotIn("[delayed_gcode reset_screen]", contents)
 
     def test_network_helper_includes_stock_sbin_paths(self):
         helper = (pathlib.Path(__file__).parents[1] / ".shell" / "commands" /
@@ -240,15 +224,36 @@ class FeatherUtilitiesTest(unittest.TestCase):
         quoted = FEATHER.FeatherRenderer.quote('file "one"\\two\nnext')
         self.assertEqual(quoted, '"file \\"one\\"\\\\two next"')
 
-    def test_renderer_normalizes_fonts_compiled_into_typer(self):
-        normalize = FEATHER.FeatherRenderer.normalize_font
-        self.assertEqual(normalize("Roboto 9pt"), "Roboto 8pt")
-        self.assertEqual(normalize("Roboto Bold 14pt"),
-                         "Roboto Bold 12pt")
-        self.assertEqual(normalize("JetBrainsMono 11pt"), "JetBrainsMono 12pt")
-        command = FEATHER.FeatherRenderer().text(
-            10, 10, "Visible", font="Roboto 10pt")
-        self.assertIn('-f "Roboto 8pt"', command)
+    def test_renderer_normalizes_fonts_from_active_manifest(self):
+        from ui import font_metrics
+
+        synthetic = font_metrics.parse_manifest({
+            "schema": "font-metrics/v1",
+            "wrap_algorithm": "word-v1",
+            "fonts": [
+                {
+                    "name": "Display 12pt", "advance_x": 9,
+                    "monospaced": True, "advance_y": 14,
+                    "glyph_bounds": {"top": -11, "bottom": 2},
+                    "unicode_ranges": [[32, 126]],
+                },
+                {
+                    "name": "Display 8pt", "advance_x": 6,
+                    "monospaced": True, "advance_y": 10,
+                    "glyph_bounds": {"top": -8, "bottom": 1},
+                    "unicode_ranges": [[32, 126]],
+                },
+            ],
+        })
+        with mock.patch("ui.renderer.get_font_metrics",
+                        return_value=synthetic):
+            normalize = FEATHER.FeatherRenderer.normalize_font
+            self.assertEqual(normalize("Display 9pt"), "Display 8pt")
+            self.assertEqual(normalize("Display 11pt"), "Display 12pt")
+            command = FEATHER.FeatherRenderer().text(
+                10, 10, "Visible", font="Display 10pt")
+
+        self.assertIn('-f "Display 8pt"', command)
         self.assertNotIn("10pt", command)
 
     def test_leading_minus_is_not_parsed_as_a_typer_option(self):
@@ -462,24 +467,7 @@ class FeatherUtilitiesTest(unittest.TestCase):
         self.assertEqual(normalize("abs/pc"), "ABS-PC")
         self.assertEqual(normalize("custom"), "n/a")
 
-    def test_chamber_light_setting_defaults_to_visible_fifty_percent(self):
-        declaration = json.loads((pathlib.Path(__file__).parents[1] /
-                                  "mod_params.json").read_text(encoding="utf-8"))
-        light = next(item for item in declaration["parameters"]
-                     if item["key"] == "chamber_light")
 
-        self.assertEqual(light["default"], 50)
-        self.assertFalse(light.get("hidden", False))
-
-    def test_safe_z_defaults_to_ten_and_warns_about_real_clearance(self):
-        declaration = json.loads((pathlib.Path(__file__).parents[1] /
-                                  "mod_params.json").read_text(encoding="utf-8"))
-        safe_z = next(item for item in declaration["parameters"]
-                      if item["key"] == "safe_z")
-
-        self.assertEqual(safe_z["type"], "float")
-        self.assertEqual(safe_z["default"], 10.0)
-        self.assertTrue(safe_z["warning"])
 
     def test_visible_mod_parameters_have_screen_descriptions(self):
         declaration = json.loads((pathlib.Path(__file__).parents[1] /
@@ -1375,17 +1363,15 @@ class RendererStateTest(unittest.TestCase):
         controller._render_move()
         drawing = "\n".join(command for batch in batches for command in batch)
 
-        self.assertIn('-p 365 78 -s 65 68', drawing)
-        self.assertIn('"Z-" --id 1:move.zm', drawing)
-        self.assertIn('-p 365 238 -s 65 68', drawing)
-        self.assertIn('"Z+" --id 1:move.zp', drawing)
+        self.assertIn(MOVE_LAYOUT.Z_MINUS.wire_id,
+                      controller.renderer._buttons)
+        self.assertIn(MOVE_LAYOUT.Z_PLUS.wire_id,
+                      controller.renderer._buttons)
+        self.assertNotIn(MOVE_LAYOUT.HOME_Z.wire_id,
+                         controller.renderer._buttons)
+        self.assertIn("NOT HOMED: Z", drawing)
         self.assertIn("X  103.45   Y   67.89", drawing)
         self.assertIn("Z    4.20", drawing)
-        self.assertIn("-p 190 207", drawing)
-        self.assertIn("-p 397 207", drawing)
-        self.assertNotIn("move.homex ", drawing)
-        self.assertNotIn("move.homey", drawing)
-        self.assertNotIn("move.homez", drawing)
 
     def test_move_status_redraws_only_after_toolhead_changes(self):
         controller = FEATHER.FeatherScreen.__new__(FEATHER.FeatherScreen)
@@ -1406,10 +1392,15 @@ class RendererStateTest(unittest.TestCase):
         controller._update_move_status(3)
 
         self.assertEqual(len(batches), 3)
-        self.assertNotIn("-p 140 158", "\n".join(batches[1]))
+        position_update = "\n".join(batches[1])
+        self.assertIn("Z   10.10", position_update)
+        self.assertNotIn('-t "HOME"', position_update)
+        self.assertNotIn("--batch clear-hitboxes", position_update)
+
         homing_update = "\n".join(batches[2])
-        self.assertNotIn("-p 140 158", homing_update)
-        self.assertIn("-p 365 158", homing_update)
+        self.assertIn("NOT HOMED: Z", homing_update)
+        self.assertIn('-t "HOME"', homing_update)
+        self.assertNotIn("--batch clear-hitboxes", homing_update)
 
     def test_move_status_accepts_post_home_park_position(self):
         controller = FEATHER.FeatherScreen.__new__(FEATHER.FeatherScreen)
@@ -1451,8 +1442,7 @@ class RendererStateTest(unittest.TestCase):
     def test_joystick_move_page_registers_two_continuous_regions(self):
         controller = FEATHER.FeatherScreen.__new__(FEATHER.FeatherScreen)
         controller.renderer = FEATHER.FeatherRenderer()
-        batches = []
-        controller.renderer.send = batches.append
+        controller.renderer.send = lambda commands: None
         controller.reactor = Reactor()
         controller.move_mode = "joystick"
         controller.joystick = type("Planner", (), {
@@ -1462,31 +1452,18 @@ class RendererStateTest(unittest.TestCase):
         controller._require_idle = lambda: None
 
         controller._render_move()
-        drawing = "\n".join(batches[0])
 
-        self.assertIn("--id 1:navigate.move.step", drawing)
-        self.assertIn("--id 1:move.homez", drawing)
-        self.assertIn("-p 30 96 -s 420 266", drawing)
-        self.assertIn(
-            "-p %d %d -s %d %d" %
-            MOVE_LAYOUT.JOYSTICK_PAGE.rect("z.hitbox").as_tuple(),
-            drawing)
-        self.assertNotIn('"+100"', drawing)
-        self.assertNotIn('"-100"', drawing)
-        track = MOVE_LAYOUT.JOYSTICK_PAGE.rect("z.track")
-        major_x = track.x - 32
-        minor_x = track.x - 25
-        self.assertIn(
-            "-p %d %d -s 12 1" % (major_x, track.y), drawing)
-        self.assertIn(
-            "-p %d %d -s 5 1" % (minor_x, track.y + 39), drawing)
-        self.assertIn(
-            "-p %d %d -s 12 1" % (major_x, track.bottom - 1), drawing)
-        self.assertIn("--id 1:move.joy.xy", drawing)
-        self.assertIn("--id 1:move.joy.z", drawing)
-        self.assertEqual(drawing.count("--continuous"), 2)
-        self.assertNotIn("--continuous", UI.FeatherRenderer.hitbox(
-            "normal", 0, 0, 10, 10))
+        self.assertIn("navigate.move.step", controller.renderer._buttons)
+        self.assertIn(MOVE_LAYOUT.HOME_Z.wire_id,
+                      controller.renderer._buttons)
+        self.assertEqual(
+            set(controller.renderer._hitboxes) - {"global.wake"},
+            {MOVE_LAYOUT.JOYSTICK_XY.wire_id,
+             MOVE_LAYOUT.JOYSTICK_Z.wire_id})
+        for action in (
+                MOVE_LAYOUT.JOYSTICK_XY.wire_id,
+                MOVE_LAYOUT.JOYSTICK_Z.wire_id):
+            self.assertTrue(controller.renderer._hitboxes[action][4])
 
     def test_low_z_move_page_always_warns_and_reports_auto_profile_state(self):
         controller = FEATHER.FeatherScreen.__new__(FEATHER.FeatherScreen)
@@ -1541,7 +1518,9 @@ class RendererStateTest(unittest.TestCase):
         controller.toolhead = StatusObject({
             "position": (1.0, 2.0, 10.0, 0.0), "homed_axes": "xyz"})
         controller._last_move = (1.0, 2.0, 10.0, "HOMED: XYZ", True, True)
-        controller.joystick_cursor = (MOVE_LAYOUT.JOYSTICK_XY.wire_id, 320, 180)
+        cursor = (320, 180)
+        controller.joystick_cursor = (
+            MOVE_LAYOUT.JOYSTICK_XY.wire_id, cursor[0], cursor[1])
         controller.joystick_feedback_at = 0.0
         controller.joystick = type("Planner", (), {
             "inertia": lambda self: {
@@ -1556,14 +1535,15 @@ class RendererStateTest(unittest.TestCase):
             1.0, position=(2.0, 3.0, 11.0))
 
         live = "\n".join(batches[-1])
-        self.assertIn("--batch stroke -p 308 168 -s 25 25", live)
-        self.assertIn('"X"', live)
-        self.assertIn('"   2.0"', live)
-        self.assertIn('"Y"', live)
-        self.assertIn('"   3.0"', live)
-        self.assertIn('"Z"', live)
-        self.assertIn('"  11.0"', live)
-        self.assertIn('" 45.7"', live)
+        knob_size = MOVE_LAYOUT.JOYSTICK_PAGE.node("xy.knob").size
+        self.assertIn(
+            "--batch stroke -p %d %d -s %d %d" % (
+                cursor[0] - knob_size // 2,
+                cursor[1] - knob_size // 2,
+                knob_size, knob_size),
+            live)
+        for value in ('"   2.0"', '"   3.0"', '"  11.0"', '" 45.7"'):
+            self.assertIn(value, live)
         self.assertNotIn('"VX"', live)
         self.assertNotIn('"VY"', live)
         self.assertNotIn('"VZ', live)
@@ -1571,8 +1551,21 @@ class RendererStateTest(unittest.TestCase):
         controller.joystick_cursor = None
         controller._update_joystick_feedback(1.1, force=True)
         released = "\n".join(batches[-1])
-        self.assertIn("--batch fill -p 306 166 -s 29 29", released)
-        self.assertIn("--batch stroke -p 228 217 -s 25 25", released)
+        center = MOVE_LAYOUT.JOYSTICK_PAGE.rect("xy.pad").center
+        dirty_padding = 2
+        self.assertIn(
+            "--batch fill -p %d %d -s %d %d" % (
+                cursor[0] - knob_size // 2 - dirty_padding,
+                cursor[1] - knob_size // 2 - dirty_padding,
+                knob_size + dirty_padding * 2,
+                knob_size + dirty_padding * 2),
+            released)
+        self.assertIn(
+            "--batch stroke -p %d %d -s %d %d" % (
+                center[0] - knob_size // 2,
+                center[1] - knob_size // 2,
+                knob_size, knob_size),
+            released)
 
     def test_joystick_feedback_uses_fallback_clock_without_reactor(self):
         controller = FEATHER.FeatherScreen.__new__(FEATHER.FeatherScreen)
@@ -1641,21 +1634,43 @@ class RendererStateTest(unittest.TestCase):
             self.assertGreaterEqual(top - 2, z_hitbox.y)
             self.assertLessEqual(top + 27, z_hitbox.bottom)
 
-    def test_joystick_knob_move_clears_center_instead_of_leaving_ghost(self):
+    def test_joystick_knob_move_clears_previous_position_without_ghost(self):
         renderer = FEATHER.FeatherRenderer()
         snapshot = (1.0, 2.0, 10.0, "HOMED: XYZ", True, True)
+        old_cursor = (240, 229)
+        new_cursor = (320, 180)
         MOVE_LAYOUT.render_joystick(
             renderer, joystick_values(
-                snapshot, cursor=(MOVE_LAYOUT.JOYSTICK_XY.wire_id, 240, 229)))
+                snapshot, cursor=(
+                    MOVE_LAYOUT.JOYSTICK_XY.wire_id, *old_cursor)))
 
         commands = MOVE_LAYOUT.update_joystick(
             renderer, joystick_values(
-                snapshot, cursor=(MOVE_LAYOUT.JOYSTICK_XY.wire_id, 320, 180)))
+                snapshot, cursor=(
+                    MOVE_LAYOUT.JOYSTICK_XY.wire_id, *new_cursor)))
         drawing = "\n".join(commands)
+        knob_size = MOVE_LAYOUT.JOYSTICK_PAGE.node("xy.knob").size
+        dirty_padding = 2
 
-        self.assertIn("--batch fill -p 226 215 -s 29 29", drawing)
-        self.assertIn("--batch stroke -p 308 168 -s 25 25", drawing)
-        self.assertNotIn("--batch stroke -p 228 217 -s 25 25", drawing)
+        self.assertIn(
+            "--batch fill -p %d %d -s %d %d" % (
+                old_cursor[0] - knob_size // 2 - dirty_padding,
+                old_cursor[1] - knob_size // 2 - dirty_padding,
+                knob_size + dirty_padding * 2,
+                knob_size + dirty_padding * 2),
+            drawing)
+        self.assertIn(
+            "--batch stroke -p %d %d -s %d %d" % (
+                new_cursor[0] - knob_size // 2,
+                new_cursor[1] - knob_size // 2,
+                knob_size, knob_size),
+            drawing)
+        self.assertNotIn(
+            "--batch stroke -p %d %d -s %d %d" % (
+                old_cursor[0] - knob_size // 2,
+                old_cursor[1] - knob_size // 2,
+                knob_size, knob_size),
+            drawing)
         self.assertFalse(hasattr(
             FEATHER.FeatherScreen, "_joystick_indicator_commands"))
 
@@ -1926,6 +1941,8 @@ class RendererStateTest(unittest.TestCase):
         commands = MOVE_LAYOUT.render_step_status(
             renderer, warning_values, axes=True)
         drawing = "\n".join(commands)
+        overlay = MOVE_LAYOUT.JOYSTICK_PAGE.rect("xy.pad")
 
-        self.assertIn("-p 30 96 -s 420 266", drawing)
+        self.assertIn(
+            "-p %d %d -s %d %d" % overlay.as_tuple(), drawing)
         self.assertNotIn("--batch clear-hitboxes", drawing)

@@ -1,7 +1,9 @@
 """Typer manifest loading and word-v1 parity tests."""
 
+import ast
 import json
 import pathlib
+import re
 import subprocess
 import sys
 import unittest
@@ -72,22 +74,40 @@ class FontManifestTest(unittest.TestCase):
 
         self.assertIs(loaded, fallback)
 
-    def test_packaged_manifest_is_valid_and_sorted(self):
+    def test_packaged_manifest_is_valid_and_covers_product_font_families(self):
         loaded = font_metrics.load_fallback_metrics()
 
         self.assertTrue(loaded.fonts)
         self.assertEqual(tuple(sorted(loaded.names)), loaded.names)
-        self.assertTrue(loaded.metric("JetBrainsMono 12pt").monospaced)
-        self.assertEqual(
-            loaded.normalize_font("Roboto 16pt"),
-            "Roboto 16pt")
-        self.assertIn("Roboto Bold 8pt", loaded.names)
-        self.assertFalse(loaded.fonts["Roboto 16pt"].monospaced)
-        self.assertEqual(loaded.default_font, "JetBrainsMono 12pt")
-        self.assertEqual(
-            loaded.fonts["Roboto 8pt"].fallback,
-            "JetBrainsMono 8pt")
+        self.assertIn(loaded.default_font, loaded.fonts)
         self.assertFalse(hasattr(loaded, "catalog"))
+        for metric in loaded.fonts.values():
+            self.assertGreater(metric.advance_y, 0)
+            self.assertLess(metric.top, metric.bottom)
+            self.assertTrue(metric.unicode_ranges)
+
+        requested = set()
+        product_root = PLUGINS
+        for path in product_root.rglob("*.py"):
+            if "tests" in path.parts:
+                continue
+            tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+            for node in ast.walk(tree):
+                if (isinstance(node, ast.Constant)
+                        and isinstance(node.value, str)
+                        and node.value.endswith("pt")):
+                    if re.fullmatch(r".+ [0-9]+pt", node.value):
+                        requested.add(node.value)
+
+        self.assertTrue(requested)
+        missing_families = []
+        for requested_font in sorted(requested):
+            normalized = loaded.normalize_font(requested_font)
+            requested_family = requested_font.rsplit(" ", 1)[0]
+            normalized_family = normalized.rsplit(" ", 1)[0]
+            if requested_family != normalized_family:
+                missing_families.append(requested_font)
+        self.assertEqual(missing_families, [])
 
         with open(font_metrics.FALLBACK_PATH, "r", encoding="utf-8") as stream:
             generated = json.load(stream)

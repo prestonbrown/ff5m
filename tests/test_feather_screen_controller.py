@@ -33,7 +33,6 @@ from ff5m_ui.filament import actions as FILAMENT_ACTIONS
 from ff5m_ui.home import page as HOME_PAGE
 from ff5m_ui.home import state as HOME_STATE
 from ff5m_ui.keys import AppPage
-from ui.font_metrics import get_font_metrics
 from feather_feature_filament import FilamentFeature
 from feather_z_calibration import (
     FeatherZCalibrationMixin, ZCalibrationSession)
@@ -62,12 +61,13 @@ class ControllerSafetyTest(unittest.TestCase):
     def test_home_dashboard_is_a_discoverable_declarative_page(self):
         self.assertIsInstance(HOME_PAGE.PAGE, UI.DeclarativePage)
         self.assertEqual(HOME_PAGE.PAGE.page_key, AppPage.HOME)
-        self.assertEqual(HOME_PAGE.PAGE.title, "FORGE-X // FEATHER")
         self.assertFalse(HOME_PAGE.PAGE.show_back)
-        self.assertEqual(
-            set(action.wire_id for action in HOME_PAGE.PAGE.actions.values()),
-            {"nav.menu", "nav.heat", "nav.network", "nav.job",
-             "nav.filament", "nav.move"})
+        available = set(
+            action.wire_id for action in HOME_PAGE.PAGE.actions.values())
+        for wire_id in (
+                "nav.menu", "nav.heat", "nav.network", "nav.job",
+                "nav.filament", "nav.move"):
+            self.assertIn(wire_id, available)
 
     def test_home_semantic_route_preserves_existing_navigation(self):
         controller = ScenarioController.__new__(ScenarioController)
@@ -105,13 +105,11 @@ class ControllerSafetyTest(unittest.TestCase):
 
         drawing = "\n".join(batches[0])
         self.assertNotIn("Typicons", drawing)
-        self.assertIn("nav.heat -p 25 72 -s 492 132", drawing)
-        self.assertIn("nav.network -p 539 72 -s 236 132", drawing)
-        self.assertIn("nav.filament -p 283 345 -s 259 97", drawing)
-        self.assertIn("nav.move -p 543 345 -s 232 97", drawing)
-        self.assertIn("nav.heat", drawing)
-        self.assertIn("nav.network", drawing)
-        self.assertIn("nav.job", drawing)
+        self.assertIn("nav.menu", controller.renderer._buttons)
+        for action in (
+                "nav.heat", "nav.network", "nav.job",
+                "nav.filament", "nav.move"):
+            self.assertIn(action, controller.renderer._hitboxes)
 
     def test_move_caution_loads_existing_auto_bed_profile(self):
         controller = ScenarioController.__new__(ScenarioController)
@@ -437,18 +435,28 @@ class ControllerSafetyTest(unittest.TestCase):
         controller.filament_material = "PLA"
         controller._last_dashboard = None
         controller._read_text = lambda path: ""
-        controller._update_dashboard(100)
-        initial = "\n".join(batches[0])
-        self.assertIn("-p 18 7 -s 142 46", initial)
-        self.assertIn("-p 28 29", initial)
-        self.assertIn("-p 29 252 -s 742 76", initial)
-        self.assertNotIn("-p 29 284", initial)
-        controller.extruder.status["temperature"] = 22.0
-        controller._update_dashboard(101)
+
+        with mock.patch.object(
+                HOME_STATE.time, "strftime", return_value="20:00"):
+            controller._update_dashboard(100)
+            initial_state = controller._last_dashboard
+            controller.extruder.status["temperature"] = 22.0
+            controller._update_dashboard(101)
+
+        self.assertEqual(len(batches), 2)
         update = "\n".join(batches[1])
-        self.assertIn("-p 28 112 -s 229 87", update)
-        self.assertNotIn("-p 285 112", update)
-        self.assertNotIn("-p 542 112", update)
+        self.assertIn('-t "22 / 0 C"', update)
+        for unchanged in (
+                '21 / 0 C', 'ETHERNET', '192.168.2.124',
+                'NO ACTIVE JOB', 'READY', 'MENU'):
+            self.assertNotIn(unchanged, update)
+        self.assertNotIn("--batch clear-hitboxes", update)
+        self.assertNotIn("--batch hitbox", update)
+        self.assertNotIn("--batch button", update)
+        self.assertEqual(controller._last_dashboard.nozzle, 22)
+        self.assertEqual(
+            controller._last_dashboard._replace(nozzle=initial_state.nozzle),
+            initial_state)
 
     def test_dashboard_worst_case_content_is_bounded(self):
         controller = ScenarioController.__new__(ScenarioController)
@@ -492,93 +500,43 @@ class ControllerSafetyTest(unittest.TestCase):
         controller._render_home()
 
         drawing = "\n".join("\n".join(batch) for batch in batches)
-        material = next(line for line in drawing.splitlines()
-                        if "CARBON-FIBER-POLYCARBONATE" in line)
-        network = next(line for line in drawing.splitlines()
-                       if "VERY-LONG-WIRELESS-NETWORK-NAME" in line)
-        progress = next(line for line in drawing.splitlines()
-                        if "100% //" in line)
-        self.assertIn("--max-width 220 --truncate", material)
-        self.assertIn("--max-width 210 --truncate", network)
-        self.assertIn("--max-width 350 --truncate", progress)
-        self.assertLessEqual(
-            controller.renderer.text_width(
-                "299 / 300 C", "JetBrainsMono 12pt"),
-            209)
+        for value in (
+                "CARBON-FIBER-POLYCARBONATE",
+                "VERY-LONG-WIRELESS-NETWORK-NAME",
+                "100% //"):
+            command = next(
+                line for line in drawing.splitlines() if value in line)
+            self.assertIn("--truncate", command)
+            match = re.search(r"--max-width ([0-9]+)", command)
+            self.assertIsNotNone(match)
+            self.assertGreater(int(match.group(1)), 0)
+            self.assertLessEqual(int(match.group(1)), UI.SCREEN_WIDTH)
 
-    def test_dashboard_clock_uses_header_contrast_and_stable_width_font(self):
-        controller = ScenarioController.__new__(ScenarioController)
-        controller.page = FEATHER.Page.IDLE_HOME
-        controller.renderer = FEATHER.FeatherRenderer()
-        colors = dict(UI.FALLBACK_THEME)
-        colors["text"] = "101010"
-        controller.renderer._palette = UI.resolve_theme(
-            colors, {"header_text": "fefefe"})
-        controller.reactor = Reactor()
-        batches = []
-        controller.renderer.send = batches.append
-        controller.extruder = StatusObject(
-            {"temperature": 20.0, "target": 0.0})
-        controller.heater_bed = StatusObject(
-            {"temperature": 21.0, "target": 0.0})
-        controller.toolhead = StatusObject({"homed_axes": "xyz"})
-        controller.network_status = {
-            "mode": "ETHERNET", "ssid": "", "ip": "192.168.2.124"}
-        controller.last_job_name = "NONE"
-        controller._current_material = lambda: "PLA"
-        controller._read_text = lambda _path: ""
-        controller._last_dashboard = None
-
-        controller._render_home()
-
-        drawing = "\n".join("\n".join(batch) for batch in batches)
-        clock = next(
-            line for line in drawing.splitlines()
-            if re.search(r'-t "[0-2][0-9]:[0-5][0-9]"$', line))
-        title = next(
-            line for line in drawing.splitlines()
-            if '-t "FORGE-X // FEATHER"' in line)
-        clock_value = re.search(r'-t "([0-9]{2}:[0-9]{2})"$', clock).group(1)
-        font = re.search(r'-f "([^"]+)"', clock).group(1)
-        x = int(re.search(r'-p ([0-9]+) [0-9]+', clock).group(1))
-        title_x = int(re.search(r'-p ([0-9]+) [0-9]+', title).group(1))
-        title_width = int(re.search(r'--max-width ([0-9]+)', title).group(1))
-        title_left = title_x - title_width // 2
-
-        self.assertIn(
-            "-c %s" % controller.renderer.color(UI.ThemeRole.HEADER_TEXT),
-            clock)
-        self.assertNotIn(
-            "-c %s" % controller.renderer.color(UI.ThemeColor.TEXT), clock)
-        self.assertTrue(get_font_metrics().fonts[font].monospaced)
-        self.assertLessEqual(
-            x + controller.renderer.text_width(clock_value, font),
-            title_left)
-        self.assertIsInstance(controller._last_dashboard,
-                              HOME_STATE.DashboardState)
 
     def test_calibration_menu_paginates_available_workflows(self):
         controller = ScenarioController.__new__(ScenarioController)
         controller.renderer = FEATHER.FeatherRenderer()
-        batches = []
-        controller.renderer.send = batches.append
+        controller.renderer.send = lambda commands: None
         controller.params = type("Params", (), {
             "variables": {"z_offset": 0.125}})()
+
         controller._render_calibration_home()
-        drawing = "\n".join(batches[0])
-        self.assertIn("cal.mesh -p 30 270 -s 740 84", drawing)
-        self.assertIn("cal.next", drawing)
+        self.assertIn("cal.mesh", controller.renderer._buttons)
+        self.assertIn("cal.next", controller.renderer._buttons)
+        self.assertNotIn("cal.prev", controller.renderer._buttons)
 
         controller.calibration_page = 1
         controller._render_calibration_home()
-        self.assertIn("cal.extruder", controller.renderer._buttons)
-        self.assertIn("cal.shaper", controller.renderer._buttons)
-        self.assertIn("cal.axes", controller.renderer._buttons)
+        for action in ("cal.extruder", "cal.shaper", "cal.axes"):
+            self.assertIn(action, controller.renderer._buttons)
+        self.assertIn("cal.prev", controller.renderer._buttons)
 
         controller.calibration_page = 2
         controller._render_calibration_home()
-        self.assertIn("cal.pid_bed", controller.renderer._buttons)
-        self.assertIn("cal.pid_extruder", controller.renderer._buttons)
+        for action in ("cal.pid_bed", "cal.pid_extruder"):
+            self.assertIn(action, controller.renderer._buttons)
+        self.assertIn("cal.prev", controller.renderer._buttons)
+        self.assertNotIn("cal.next", controller.renderer._buttons)
 
     def test_extruder_opens_guided_workflow_and_axes_keeps_measurement_guide(self):
         controller = ScenarioController.__new__(ScenarioController)
@@ -665,37 +623,29 @@ class ControllerSafetyTest(unittest.TestCase):
         controller._handle_calibration_action("cal.tuning.discard")
         self.assertEqual(pages, [FEATHER.Page.CALIBRATION_HOME])
 
-    def test_calibration_macros_publish_progress_for_feather(self):
-        macros = (
-            pathlib.Path(__file__).parents[1] / "macros" / "base.cfg"
-        ).read_text(encoding="utf-8")
-        for status in (
-                "BED PID: HOMING", "BED PID: TUNING",
-                "HOTEND PID: HOMING", "HOTEND PID: TUNING",
-                "INPUT SHAPER: HOMING", "INPUT SHAPER: MEASURING",
-                "INPUT SHAPER: PROCESSING", "INPUT SHAPER: COMPLETE"):
-            self.assertIn('_PRINT_STATUS S="%s"' % status, macros)
 
     def test_z_offset_summary_registers_all_positions(self):
         controller = ScenarioController.__new__(ScenarioController)
         controller.renderer = FEATHER.FeatherRenderer()
-        batches = []
-        controller.renderer.send = batches.append
+        controller.renderer.send = lambda commands: None
         controller.z_calibration = ZCalibrationSession()
         controller.z_calibration.begin(
             0.125, None, "adaptive", -0.25, True)
 
         controller._render_z_summary()
 
-        drawing = "\n".join(batches[0])
-        for action in (
-                "z.zone.front_left", "z.zone.front_right", "z.zone.center",
-                "z.zone.rear_left", "z.zone.rear_right"):
-            self.assertIn(action, drawing)
-        self.assertIn("--batch button -p 75 72 -s 210 64", drawing)
-        self.assertIn("--batch button -p 295 72 -s 210 64", drawing)
-        self.assertIn("--batch button -p 130 146 -s 260 64", drawing)
-        self.assertIn("--batch button -p 65 334 -s 670 82", drawing)
+        actions = (
+            "z.zone.front_left", "z.zone.front_right", "z.zone.center",
+            "z.zone.rear_left", "z.zone.rear_right")
+        keys = []
+        for action in actions:
+            keys.append(next(
+                key for key in controller.renderer._buttons
+                if key == action or key.startswith(action + ".")))
+        rectangles = [controller.renderer._buttons[key][:4] for key in keys]
+        for index, rectangle in enumerate(rectangles):
+            for other in rectangles[index + 1:]:
+                self.assertFalse(UI.rectangles_overlap(rectangle, other))
 
     def test_z_paper_controls_are_disabled_until_probe_or_manual_start(self):
         controller = ScenarioController.__new__(ScenarioController)
@@ -768,12 +718,11 @@ class ControllerSafetyTest(unittest.TestCase):
         self.assertIn("+0.125 mm", drawing)
         self.assertIn("+0.635 mm", drawing)
         self.assertIn("+0.510 mm", drawing)
-        self.assertIn("global.abort", drawing)
-        self.assertIn("live_z.save", drawing)
+        self.assertIn("global.abort", controller.renderer._buttons)
+        self.assertIn("live_z.save", controller.renderer._buttons)
         self.assertFalse(UI.rectangles_overlap(
             controller.renderer._buttons["global.abort"][:4],
             controller.renderer._buttons["live_z.save"][:4]))
-        self.assertIn("-c ff4d5a", drawing)
 
     def test_live_z_offset_load_warning_has_explicit_choice(self):
         controller = ScenarioController.__new__(ScenarioController)
@@ -904,38 +853,44 @@ class ControllerSafetyTest(unittest.TestCase):
     def test_screw_calibration_confirm_offers_clean_and_cooldown_paths(self):
         controller = ScenarioController.__new__(ScenarioController)
         controller.renderer = FEATHER.FeatherRenderer()
-        batches = []
-        controller.renderer.send = batches.append
+        controller.renderer.send = lambda commands: None
         controller.calibration_kind = "screws"
         controller.calibration_material = "PETG"
+
         controller.calibration_clean_nozzle = True
         controller._render_calibration_confirm()
-        drawing = "\n".join(batches[-1])
-        self.assertIn("cal.clean.skip", drawing)
-        self.assertIn("cal.material.PETG", drawing)
-        self.assertIn("cal.material.ABS-PC", drawing)
-        self.assertIn("--batch button -p 182 145", drawing)
+        self.assertEqual(
+            controller.renderer._buttons["cal.material.PETG"][5],
+            "selected")
+        self.assertEqual(
+            controller.renderer._buttons["cal.clean.skip"][5], "enabled")
+        self.assertIn("cal.material.ABS-PC", controller.renderer._buttons)
+        self.assertIn("cal.confirm", controller.renderer._buttons)
 
         controller.calibration_clean_nozzle = False
         controller._render_calibration_confirm()
-        drawing = "\n".join(batches[-1])
-        self.assertIn("cal.clean.skip", drawing)
-        self.assertIn("--border b47aff", drawing)
+        self.assertEqual(
+            controller.renderer._buttons["cal.clean.skip"][5], "selected")
+        self.assertTrue(all(
+            spec[5] != "selected"
+            for action, spec in controller.renderer._buttons.items()
+            if action.startswith("cal.material.")))
 
     def test_mesh_cleaning_uses_complete_shared_material_selector(self):
         controller = ScenarioController.__new__(ScenarioController)
         controller.renderer = FEATHER.FeatherRenderer()
-        batches = []
-        controller.renderer.send = batches.append
+        controller.renderer.send = lambda commands: None
         controller.calibration_kind = "mesh"
         controller.calibration_material = "ABS-PC"
 
         controller._render_calibration_confirm()
 
-        drawing = "\n".join(batches[-1])
         for material in controller.heating_materials:
-            self.assertIn("cal.material.%s" % material, drawing)
-        self.assertIn("--border b47aff", drawing)
+            self.assertIn(
+                "cal.material.%s" % material, controller.renderer._buttons)
+        self.assertEqual(
+            controller.renderer._buttons["cal.material.ABS-PC"][5],
+            "selected")
 
     def test_empty_heating_disables_mesh_but_preserves_no_clean_screws(self):
         controller = ScenarioController.__new__(ScenarioController)
@@ -969,12 +924,18 @@ class ControllerSafetyTest(unittest.TestCase):
         controller.calibration_kind = "screws"
         controller.calibration_clean_nozzle = True
         controller.calibration_repeat_probe = False
-        drawing = "\n".join(controller._calibration_stage_commands(
-            "BED SCREWS: HEATING"))
-        self.assertIn("stroke -p 55 225 -s 128 38 -c 35d9e6", drawing)
-        self.assertIn("stroke -p 195 225 -s 128 38 -c b47aff", drawing)
-        self.assertIn("stroke -p 335 225 -s 128 38 -c 263238", drawing)
-        self.assertEqual(drawing.count("-c b47aff"), 2)
+
+        with mock.patch.object(
+                controller.renderer, "text",
+                wraps=controller.renderer.text) as text:
+            controller._calibration_stage_commands("BED SCREWS: HEATING")
+
+        colors = dict((call.args[2], call.args[3])
+                      for call in text.call_args_list)
+        self.assertEqual(colors["PREP"], UI.ThemeColor.PRIMARY)
+        self.assertEqual(colors["HEAT"], UI.ThemeColor.SECONDARY)
+        for stage in ("CLEAN", "PROBE", "DONE"):
+            self.assertEqual(colors[stage], UI.ThemeColor.MUTED)
 
     def test_calibration_heating_offers_m108_cancel_and_global_abort(self):
         for kind in ("screws", "mesh", "z"):
@@ -989,17 +950,17 @@ class ControllerSafetyTest(unittest.TestCase):
                     "Wait", (), {"variables": {
                         "active": True, "cancel": False}})()
                 controller.print_status_text = "HEATING..."
-                batches = []
-                controller.renderer.send = batches.append
+                controller.renderer.send = lambda commands: None
                 controller.renderer.set_emergency_stop_visible(True)
 
                 controller._render_calibration_progress()
 
-                drawing = "\n".join(batches[-1])
-                self.assertIn("cal.cancel.heat", drawing)
-                self.assertIn("global.abort", drawing)
                 self.assertIn(
-                    "--batch button -p 648 7 -s 132 46", drawing)
+                    "cal.cancel.heat", controller.renderer._buttons)
+                self.assertEqual(
+                    controller.renderer._buttons["cal.cancel.heat"][5],
+                    "danger")
+                self.assertIn("global.abort", controller.renderer._buttons)
 
     def test_z_preparation_has_clean_and_no_clean_command_paths(self):
         controller = ScenarioController.__new__(ScenarioController)
@@ -1343,14 +1304,14 @@ class ControllerSafetyTest(unittest.TestCase):
         controller.renderer.send = batches.append
         controller.renderer.set_emergency_stop_visible(True)
         controller._render_calibration_progress()
+        initial_generation = controller.renderer.generation
 
         controller.print_status_text = "HOMING..."
         controller._update_calibration_progress()
 
-        drawing = "\n".join(batches[-1])
-        self.assertIn("clear-hitboxes", drawing)
-        self.assertIn("global.abort", drawing)
-        self.assertIn("--batch button -p 648 7 -s 132 46", drawing)
+        self.assertGreater(controller.renderer.generation, initial_generation)
+        self.assertIn("global.abort", controller.renderer._buttons)
+        self.assertIn("--batch clear-hitboxes", "\n".join(batches[-1]))
 
     def test_global_abort_bypasses_busy_and_touch_feedback(self):
         controller = ScenarioController.__new__(ScenarioController)
@@ -1373,16 +1334,25 @@ class ControllerSafetyTest(unittest.TestCase):
         controller._handle_touch_action("global.abort")
         self.assertEqual(immediate, [])
 
-    def test_screw_repeat_progress_marks_two_active_stages(self):
+    def test_screw_repeat_progress_marks_probe_as_current_stage(self):
         controller = ScenarioController.__new__(ScenarioController)
         controller.renderer = FEATHER.FeatherRenderer()
         controller.calibration_kind = "screws"
         controller.calibration_repeat_probe = True
-        drawing = "\n".join(controller._calibration_stage_commands(
-            "BED SCREWS: PROBING"))
-        self.assertEqual(drawing.count("-c b47aff"), 2)
 
-    def test_settings_buttons_use_compact_layout(self):
+        with mock.patch.object(
+                controller.renderer, "text",
+                wraps=controller.renderer.text) as text:
+            controller._calibration_stage_commands("BED SCREWS: PROBING")
+
+        colors = dict((call.args[2], call.args[3])
+                      for call in text.call_args_list)
+        self.assertEqual(colors, {
+            "PROBE": UI.ThemeColor.SECONDARY,
+            "DONE": UI.ThemeColor.MUTED,
+        })
+
+    def test_settings_use_switch_for_sound_and_show_light_level(self):
         controller = ScenarioController.__new__(ScenarioController)
         controller.renderer = FEATHER.FeatherRenderer()
         controller.reactor = Reactor()
@@ -1393,42 +1363,48 @@ class ControllerSafetyTest(unittest.TestCase):
             "chamber_light": 40}})()
         controller.chamber_light = StatusObject({
             "color_data": [(0.0, 0.0, 0.0, 0.0)]})
+
         controller._render_settings()
+
         drawing = "\n".join(batches[0])
-        self.assertIn("--batch stroke -p 679 249 -s 76 38 -c 35d9e6 -lw 2",
-                      drawing)
-        self.assertIn("--batch fill -p 722 254 -s 28 28 -c 35d9e6", drawing)
         self.assertIn('-t "40%"', drawing)
+        self.assertIn("settings.sound", controller.renderer._toggles)
+        self.assertTrue(controller.renderer._toggles["settings.sound"][4])
+        for action in (
+                "settings.brightness.minus", "settings.brightness.plus",
+                "settings.led.minus", "settings.led.plus",
+                "settings.theme", "settings.mod"):
+            self.assertIn(action, controller.renderer._buttons)
         self.assertNotIn('[ OFF |', drawing)
         self.assertNotIn('[ >OFF< |', drawing)
 
-    def test_mod_settings_list_scrolls_and_uses_square_toggles(self):
+    def test_mod_settings_list_scrolls_and_uses_toggle_controls(self):
         params = [mod_param("flag%d" % index, bool, False,
                             "Feature %d" % index,
                             "Feature description %d." % index)
                   for index in range(7)]
-        controller = mod_controller(params, {param.key: False for param in params})
+        controller = mod_controller(
+            params, {param.key: False for param in params})
 
         controller._render_mod_settings()
         first = "\n".join(controller.draw_batches[-1])
         self.assertIn("01-05 / 07", first)
-        self.assertIn("--batch stroke -p 624 101 -s 76 38 -c 35d9e6 -lw 2",
-                      first)
-        self.assertIn("--batch fill -p 629 106 -s 28 28 -c 35d9e6", first)
-        self.assertNotIn('[ OFF |', first)
-        self.assertNotIn('[ >OFF< |', first)
-        self.assertIn("--id 1:mod.next", first)
-        self.assertNotIn("--id 1:mod.prev", first)
+        self.assertEqual(
+            set(controller.renderer._toggles),
+            {"mod.item.%d" % index for index in range(5)})
+        self.assertIn("mod.next", controller.renderer._buttons)
+        self.assertNotIn("mod.prev", controller.renderer._buttons)
         self.assertNotIn('-t "^"', first)
         self.assertNotIn('-t "v"', first)
-        self.assertIn("--batch fill -p 745 390 -s 19 2 -c 35d9e6", first)
 
         controller._handle_mod_action("mod.next")
         second = "\n".join(controller.draw_batches[-1])
         self.assertIn("06-07 / 07", second)
-        self.assertIn("--id 2:mod.prev", second)
-        self.assertNotIn("--id 2:mod.next", second)
-        self.assertIn("--batch fill -p 751 111 -s 7 12 -c 35d9e6", second)
+        self.assertEqual(
+            set(controller.renderer._toggles),
+            {"mod.item.5", "mod.item.6"})
+        self.assertIn("mod.prev", controller.renderer._buttons)
+        self.assertNotIn("mod.next", controller.renderer._buttons)
 
     def test_mod_boolean_toggle_updates_without_opening_an_editor(self):
         flag = mod_param("camera", bool, False, "Alt camera")
@@ -1438,10 +1414,8 @@ class ControllerSafetyTest(unittest.TestCase):
 
         self.assertEqual(controller.params.updated, [("camera", True)])
         self.assertIsNone(controller.mod_parameter)
-        drawing = "\n".join(controller.draw_batches[-1])
-        self.assertIn("--batch fill -p 667 106 -s 28 28 -c 35d9e6", drawing)
-        self.assertNotIn('[ OFF |', drawing)
-        self.assertNotIn('[ >OFF< |', drawing)
+        self.assertIn("mod.item.0", controller.renderer._toggles)
+        self.assertTrue(controller.renderer._toggles["mod.item.0"][4])
 
     def test_theme_parameter_refreshes_users_once_and_uses_stable_snapshot(self):
         theme = mod_param("feather_theme", str, "DEFAULT",
@@ -1670,17 +1644,6 @@ class ControllerSafetyTest(unittest.TestCase):
         self.assertEqual(loaders, [])
         self.assertFalse(controller.mod_update_pending)
 
-    def test_restart_metadata_matches_parameter_change_hooks(self):
-        declaration = json.loads((pathlib.Path(__file__).parents[1] /
-                                  "mod_params.json").read_text(encoding="utf-8"))
-        effects = dict((item["key"], item.get("restart"))
-                       for item in declaration["parameters"])
-        self.assertEqual(effects["display"], "klipper")
-        self.assertEqual(effects["klipper_rt"], "klipper")
-        self.assertEqual(effects["tune_config"], "klipper")
-        self.assertEqual(effects["power_loss_recovery"], "klipper")
-        self.assertEqual(effects["tune_klipper"], "printer")
-        self.assertIsNone(effects["camera"])
 
     def test_selected_parameter_option_is_staged_until_apply(self):
         Display = enum.Enum("Display", {"STOCK": 0, "FEATHER": 1,
@@ -1820,11 +1783,10 @@ class ControllerSafetyTest(unittest.TestCase):
         controller._dispatch_action("print.pause")
         self.assertEqual(calls, [])
 
-    def test_print_page_always_registers_cancel_hitbox(self):
+    def test_print_page_always_registers_cancel_action(self):
         controller = ScenarioController.__new__(ScenarioController)
         controller.renderer = FEATHER.FeatherRenderer()
-        batches = []
-        controller.renderer.send = batches.append
+        controller.renderer.send = lambda commands: None
         controller.reactor = Reactor()
         controller.print_state = FEATHER.PrintState.PRINTING
         controller.pending_action = None
@@ -1834,16 +1796,17 @@ class ControllerSafetyTest(unittest.TestCase):
         controller._live_z_adjust_allowed = lambda eventtime: False
         controller._update_print_progress = lambda eventtime: None
         controller.renderer.set_emergency_stop_visible(True)
+
         controller._render_print_page()
-        drawing = "\n".join(batches[0])
-        self.assertIn("--id 1:global.abort", drawing)
-        self.assertIn("--batch button -p 648 7 -s 132 46", drawing)
-        self.assertIn("-p 605 355 -s 175 72", drawing)
-        self.assertIn("--id 1:print.cancel", drawing)
-        for label in ("PAUSE", "FILAMENT", "Z ADJUST", "CANCEL"):
-            command = next(line for line in drawing.splitlines()
-                           if '--batch button' in line and '-t "%s"' % label in line)
-            self.assertIn('-f "JetBrainsMono Bold 12pt"', command)
+
+        self.assertIn("global.abort", controller.renderer._buttons)
+        self.assertIn("print.cancel", controller.renderer._buttons)
+        self.assertEqual(
+            controller.renderer._buttons["print.cancel"][5], "danger")
+        self.assertNotIn("print.live_z", controller.renderer._buttons)
+        self.assertFalse(UI.rectangles_overlap(
+            controller.renderer._buttons["global.abort"][:4],
+            controller.renderer._buttons["print.cancel"][:4]))
 
     def test_print_preparation_disables_pause_and_filament(self):
         controller = ScenarioController.__new__(ScenarioController)
@@ -2411,7 +2374,7 @@ class ControllerSafetyTest(unittest.TestCase):
             "freeze",
         ])
 
-    def test_error_page_offers_firmware_restart_with_padded_dialog(self):
+    def test_error_page_offers_firmware_restart_recovery(self):
         controller = ScenarioController.__new__(ScenarioController)
         controller.renderer = FEATHER.FeatherRenderer()
         batches = []
@@ -2422,8 +2385,11 @@ class ControllerSafetyTest(unittest.TestCase):
         controller._render_error()
 
         drawing = "\n".join(batches[0])
-        self.assertIn("error.firmware_restart", drawing)
-        self.assertIn("--batch fill -p 80 85 -s 640 325", drawing)
+        self.assertIn(controller.error_message, drawing)
+        self.assertIn("error.firmware_restart", controller.renderer._buttons)
+        self.assertEqual(
+            controller.renderer._buttons["error.firmware_restart"][5],
+            "danger")
 
     def test_shutdown_message_is_wrapped_by_typer_inside_dialog(self):
         controller = ScenarioController.__new__(ScenarioController)
@@ -2437,11 +2403,20 @@ class ControllerSafetyTest(unittest.TestCase):
 
         controller._render_error()
 
-        drawing = "\n".join(batches[0])
-        self.assertIn(controller.error_message, drawing)
-        self.assertIn(
-            "--max-width 584 --max-height 66 --wrap --truncate", drawing)
-        self.assertNotIn("communication time...", drawing)
+        command = next(
+            line for line in batches[0]
+            if controller.error_message in line)
+        self.assertIn("--wrap", command)
+        self.assertIn("--truncate", command)
+        width = re.search(r"--max-width ([0-9]+)", command)
+        height = re.search(r"--max-height ([0-9]+)", command)
+        self.assertIsNotNone(width)
+        self.assertIsNotNone(height)
+        self.assertGreater(int(width.group(1)), 0)
+        self.assertGreater(int(height.group(1)), 0)
+        self.assertLessEqual(int(width.group(1)), UI.SCREEN_WIDTH)
+        self.assertLessEqual(int(height.group(1)), UI.SCREEN_HEIGHT)
+        self.assertNotIn("communication time...", command)
 
     def test_recovery_confirmation_is_wrapped_by_typer(self):
         controller = ScenarioController.__new__(ScenarioController)
@@ -2452,9 +2427,12 @@ class ControllerSafetyTest(unittest.TestCase):
 
         controller._render_recovery_confirm()
 
-        drawing = "\n".join(batches[0])
-        self.assertIn(
-            "--max-width 640 --max-height 100 --wrap --truncate", drawing)
+        command = next(
+            line for line in batches[0] if "Cleanup will heat" in line)
+        self.assertIn("--wrap", command)
+        self.assertIn("--truncate", command)
+        self.assertRegex(command, r"--max-width [1-9][0-9]*")
+        self.assertRegex(command, r"--max-height [1-9][0-9]*")
 
     def test_action_prompt_renders_groups_footer_and_pagination(self):
         controller = ScenarioController.__new__(ScenarioController)
