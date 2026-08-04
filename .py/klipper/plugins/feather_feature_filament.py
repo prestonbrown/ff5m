@@ -2,14 +2,9 @@
 
 import logging
 
-try:
-    from .ui import Command, Page
-    from .feather_feature_manager import FeatureHostProxy
-    from .ff5m_ui.filament import runtime as filament_ui
-except (ImportError, ValueError):
-    from ui import Command, Page
-    from feather_feature_manager import FeatureHostProxy
-    from ff5m_ui.filament import runtime as filament_ui
+from ui import Command, Page
+from feather_feature_manager import FeatureHostProxy
+from ff5m_ui.filament import runtime as filament_ui
 
 
 PAGES = frozenset((Page.FILAMENT_MATERIAL, Page.FILAMENT_ACTION))

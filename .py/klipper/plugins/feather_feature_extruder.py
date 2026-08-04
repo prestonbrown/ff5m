@@ -1,14 +1,8 @@
 ## Guided extruder rotation-distance feature for Feather.
 
-try:
-    from .ui import Page
-    from .feather_feature_manager import FeatureHostProxy
-    from .feather_extruder_calibration import (
-        ExtruderCalibrationSession, FeatherExtruderCalibrationMixin)
-except (ImportError, ValueError):
-    from ui import Page
-    from feather_feature_manager import FeatureHostProxy
-    from feather_extruder_calibration import (
+from ui import Page
+from feather_feature_manager import FeatureHostProxy
+from feather_extruder_calibration import (
         ExtruderCalibrationSession, FeatherExtruderCalibrationMixin)
 
 

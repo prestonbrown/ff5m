@@ -1,6 +1,6 @@
 ## Lightweight public facade for Z-offset constants and actions.
 
-from .._lazy_support import resolve_lazy_export
+from ui.lazy import resolve_lazy_export
 from .constants import PAPER_DEFAULT_STEP, PAPER_STEPS, Z_WEIGHT_DANGER
 
 

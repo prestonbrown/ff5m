@@ -11,23 +11,16 @@ import signal
 import subprocess
 import time
 
-try:
-    from .ui import Page, PrintState, ThemeColor, ThemeRole
-    from .ui.lazy import LazyModule
-    from .feather_keyboard import TEXT_KEYBOARD, is_keyboard_action
-    from .feather_files import FileEntry, scan_gcode_files
-    from .feather_pagination import Pagination, pagination_footer
-except (ImportError, ValueError):
-    from ui import Page, PrintState, ThemeColor, ThemeRole
-    from ui.lazy import LazyModule
-    from feather_keyboard import TEXT_KEYBOARD, is_keyboard_action
-    from feather_files import FileEntry, scan_gcode_files
-    from feather_pagination import Pagination, pagination_footer
+from ui import Page, PrintState, ThemeColor, ThemeRole
+from ui.lazy import LazyModule
+from feather_keyboard import TEXT_KEYBOARD, is_keyboard_action
+from feather_files import FileEntry, scan_gcode_files
+from feather_pagination import Pagination, pagination_footer
 
 
-home_page = LazyModule("ff5m_ui.home.page", package=__package__)
-home_state = LazyModule("ff5m_ui.home.state", package=__package__)
-mod_ui = LazyModule("feather_mod_settings", package=__package__)
+home_page = LazyModule("ff5m_ui.home.page")
+home_state = LazyModule("ff5m_ui.home.state")
+mod_ui = LazyModule("feather_mod_settings")
 
 FILE_ROWS = 5
 NETWORK_HELPER = "/root/printer_data/scripts/commands/znetwork.sh"

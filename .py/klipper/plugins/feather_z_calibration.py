@@ -8,14 +8,9 @@ from collections import OrderedDict
 from decimal import Decimal, ROUND_HALF_UP
 import logging
 
-try:
-    from .ui import Page, PrintState
-    from .ff5m_ui.z_offset import runtime as z_offset_ui
-    from .ff5m_ui.z_offset.constants import PAPER_DEFAULT_STEP
-except (ImportError, ValueError):
-    from ui import Page, PrintState
-    from ff5m_ui.z_offset import runtime as z_offset_ui
-    from ff5m_ui.z_offset.constants import PAPER_DEFAULT_STEP
+from ui import Page, PrintState
+from ff5m_ui.z_offset import runtime as z_offset_ui
+from ff5m_ui.z_offset.constants import PAPER_DEFAULT_STEP
 
 
 ZONE_POINTS = (

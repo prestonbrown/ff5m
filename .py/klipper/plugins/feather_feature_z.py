@@ -1,16 +1,9 @@
 ## Z-offset, Safe Z, paper-test, and Live Z feature for Feather.
 
-try:
-    from .ui import Page
-    from .feather_feature_manager import FeatureHostProxy
-    from .feather_screen_controls import FeatherControlsMixin
-    from .feather_z_calibration import (
-        FeatherZCalibrationMixin, ZCalibrationSession)
-except (ImportError, ValueError):
-    from ui import Page
-    from feather_feature_manager import FeatureHostProxy
-    from feather_screen_controls import FeatherControlsMixin
-    from feather_z_calibration import (
+from ui import Page
+from feather_feature_manager import FeatureHostProxy
+from feather_screen_controls import FeatherControlsMixin
+from feather_z_calibration import (
         FeatherZCalibrationMixin, ZCalibrationSession)
 
 

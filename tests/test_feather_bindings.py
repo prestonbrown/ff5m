@@ -19,8 +19,9 @@ from ff5m_ui.z_offset.constants import (  # noqa: E402
 )
 from ui import (  # noqa: E402
     Button, FeatherRenderer, PageKey, PageTree, Rect, SetValue, StateKey,
-    StateStore, Text, bind, derived, reflect_page, state, state_spec,
+    StateStore, Text, bind, derived, state, state_spec,
 )
+from ui.reflection import reflect_page  # noqa: E402
 
 
 class BindingPage(PageKey):

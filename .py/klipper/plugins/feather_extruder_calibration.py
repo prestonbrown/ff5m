@@ -14,13 +14,8 @@ import stat
 import tempfile
 import time
 
-try:
-    from .ui import NumericInputSpec, Page, ThemeColor
-    from .feather_materials import (
-        adaptive_grid_columns, render_material_selector)
-except (ImportError, ValueError):
-    from ui import NumericInputSpec, Page, ThemeColor
-    from feather_materials import adaptive_grid_columns, render_material_selector
+from ui import NumericInputSpec, Page, ThemeColor
+from feather_materials import adaptive_grid_columns, render_material_selector
 
 
 USER_CFG_PATH = "/opt/config/mod_data/user.cfg"

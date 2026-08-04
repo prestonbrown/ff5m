@@ -1,6 +1,6 @@
 ## Public Feather UI package.
 
-__version__ = "2.0.0"
+__version__ = "2.1.0"
 FRAMEWORK_API_VERSION = 2
 REFLECTION_SCHEMA_VERSION = 2
 FRAMEWORK_CAPABILITIES = (
@@ -8,10 +8,11 @@ FRAMEWORK_CAPABILITIES = (
     "stable-key-namespaces",
     "semantic-actions",
     "typed-state",
-    "runtime-reflection",
-    "source-provenance",
+    "on-demand-reflection",
+    "on-demand-source-provenance",
     "structural-editing",
     "package-relative-themes",
+    "typed-theme-tokens",
 )
 
 
@@ -28,7 +29,7 @@ def framework_manifest():
 _EXPORT_GROUPS = (
     ("theme", (
         "ThemeColor", "ThemeRole", "ResolvedTheme",
-        "DEFAULT_THEME_ROLES", "resolve_theme",
+        "DEFAULT_THEME_ROLES", "normalize_theme_token", "resolve_theme",
     )),
     ("theme_catalog", (
         "DEFAULT_THEME", "FALLBACK_THEME", "MAX_THEME_FILE_BYTES",
@@ -68,8 +69,6 @@ _EXPORT_GROUPS = (
         "RewritePolicy", "SourceSpec", "ValidationSpec", "property_names",
         "property_schema",
     )),
-    ("reflection", ("reflect_page",)),
-    ("source", ("capture_enabled", "source_capture")),
     ("layout", (
         "EMPTY", "FLEX", "Column", "CreationContract", "DeclarativePage",
         "Dirty", "Equal", "EqualTracks", "Flex", "Grid", "Insets",
@@ -108,7 +107,7 @@ __all__ = (
     "__version__", "FRAMEWORK_API_VERSION", "REFLECTION_SCHEMA_VERSION",
     "FRAMEWORK_CAPABILITIES", "framework_manifest",
     "ThemeColor", "ThemeRole", "ResolvedTheme",
-    "DEFAULT_THEME_ROLES", "resolve_theme",
+    "DEFAULT_THEME_ROLES", "normalize_theme_token", "resolve_theme",
     "DEFAULT_THEME", "FALLBACK_THEME", "MAX_THEME_FILE_BYTES",
     "THEME_DIRECTORY", "THEME_SCHEMA_PATH", "USER_THEME_DIRECTORY",
     "ThemeCatalog", "ThemeFileIssue", "ThemeFileTooLarge",
@@ -132,7 +131,6 @@ __all__ = (
     "Invalidation", "RewritePolicy", "EditorSpec", "SourceSpec",
     "ValidationSpec", "CreationFieldSpec", "PropertySpec", "property_names",
     "property_schema",
-    "reflect_page", "source_capture", "capture_enabled",
     "EMPTY", "FLEX", "Column", "CreationContract", "DeclarativePage", "Dirty", "Equal",
     "EqualTracks", "Flex", "Grid", "Insets", "LAYOUT_SCHEMA", "LayoutResult", "List",
     "Node", "Overlay", "Override", "PageTree", "Rect", "Row",

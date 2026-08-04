@@ -196,3 +196,11 @@ def annotate_affected(tree):
     collect(tree)
     apply(tree)
     return tree
+
+
+def _install_layout_hooks():
+    from . import layout
+    layout._install_source_hooks(capture_construction, capture_modifier)
+
+
+_install_layout_hooks()

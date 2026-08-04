@@ -7,18 +7,11 @@ ParameterOption = namedtuple(
     "ParameterOption", ("value", "label", "description", "enabled"))
 
 
-try:
-    from .ui import Page
-    from .feather_feature_manager import FeatureHostProxy
-    from .feather_screen_pages import FeatherPagesMixin
-    from .feather_keyboard import is_keyboard_action
-    from . import feather_mod_settings as _mod_ui  # load with the feature
-except (ImportError, ValueError):
-    from ui import Page
-    from feather_feature_manager import FeatureHostProxy
-    from feather_screen_pages import FeatherPagesMixin
-    from feather_keyboard import is_keyboard_action
-    import feather_mod_settings as _mod_ui  # noqa: F401
+from ui import Page
+from feather_feature_manager import FeatureHostProxy
+from feather_screen_pages import FeatherPagesMixin
+from feather_keyboard import is_keyboard_action
+import feather_mod_settings as _mod_ui
 
 
 class SettingsFeature(FeatherPagesMixin, FeatureHostProxy):

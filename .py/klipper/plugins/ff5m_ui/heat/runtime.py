@@ -2,7 +2,7 @@
 
 import importlib
 
-from .._lazy_support import resolve_lazy_export
+from ui.lazy import resolve_lazy_export
 from .actions import HeatCommand, LEGACY_ACTIONS
 from .state import HeatState
 

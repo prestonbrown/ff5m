@@ -9,50 +9,28 @@ import math
 import re
 import time
 
-try:
-    from .ui import (
+from ui import (
         Back, Command, Increment, Navigate, Page, PrintState, Replace,
         SetValue, ThemeColor, Toggle, state_spec,
     )
-    from .ui.lazy import LazyModule
-    from .ff5m_ui.keys import AppPage
-    from .ff5m_ui.move.geometry import (
+from ui.lazy import LazyModule
+from ff5m_ui.keys import AppPage
+from ff5m_ui.move.geometry import (
         JOYSTICK_XY_CENTER, JOYSTICK_XY_RADIUS,
         JOYSTICK_Z_CENTER, JOYSTICK_Z_RADIUS,
     )
-    from .ff5m_ui.move import runtime as move_ui
-    from .ff5m_ui.heat import runtime as heat_ui
-    from .ff5m_ui.z_offset.constants import Z_WEIGHT_DANGER
-    from . import feather_joystick as joystick_ui
-    from . import feather_motion as joystick_motion
-    from .feather_pagination import Pagination, pagination_footer
-    from .feather_materials import (
-        adaptive_grid_columns, render_material_selector,
-    )
-except (ImportError, ValueError):
-    from ui import (
-        Back, Command, Increment, Navigate, Page, PrintState, Replace,
-        SetValue, ThemeColor, Toggle, state_spec,
-    )
-    from ui.lazy import LazyModule
-    from ff5m_ui.keys import AppPage
-    from ff5m_ui.move.geometry import (
-        JOYSTICK_XY_CENTER, JOYSTICK_XY_RADIUS,
-        JOYSTICK_Z_CENTER, JOYSTICK_Z_RADIUS,
-    )
-    from ff5m_ui.move import runtime as move_ui
-    from ff5m_ui.heat import runtime as heat_ui
-    from ff5m_ui.z_offset.constants import Z_WEIGHT_DANGER
-    import feather_joystick as joystick_ui
-    import feather_motion as joystick_motion
-    from feather_pagination import Pagination, pagination_footer
-    from feather_materials import (
+from ff5m_ui.move import runtime as move_ui
+from ff5m_ui.heat import runtime as heat_ui
+from ff5m_ui.z_offset.constants import Z_WEIGHT_DANGER
+import feather_joystick as joystick_ui
+import feather_motion as joystick_motion
+from feather_pagination import Pagination, pagination_footer
+from feather_materials import (
         adaptive_grid_columns, render_material_selector,
     )
 
 
-z_offset_ui = LazyModule(
-    "ff5m_ui.z_offset.runtime", package=__package__)
+z_offset_ui = LazyModule("ff5m_ui.z_offset.runtime")
 SAFE_Z_ADJUST_STEP = 1.0
 
 

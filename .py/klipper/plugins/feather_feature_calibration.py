@@ -1,13 +1,8 @@
 ## Common calibration feature for Feather.
 
-try:
-    from .ui import Page
-    from .feather_feature_manager import FeatureHostProxy
-    from .feather_screen_controls import FeatherControlsMixin
-except (ImportError, ValueError):
-    from ui import Page
-    from feather_feature_manager import FeatureHostProxy
-    from feather_screen_controls import FeatherControlsMixin
+from ui import Page
+from feather_feature_manager import FeatureHostProxy
+from feather_screen_controls import FeatherControlsMixin
 
 
 PAGES = frozenset((

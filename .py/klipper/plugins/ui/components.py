@@ -56,7 +56,7 @@ def _number(name, default=0, integer=True, **kwargs):
 
 def _color(name, default=ThemeColor.PRIMARY, **kwargs):
     return _property(
-        name, (ThemeColor, ThemeRole), default, kind="theme_color",
+        name, (ThemeColor, ThemeRole, str), default, kind="theme_color",
         catalog="theme_tokens", **kwargs)
 
 

@@ -19,14 +19,9 @@ import threading
 import time
 from datetime import datetime
 
-try:
-    from .ui import Page, PrintState
-    from .ff5m_ui.move import actions as move_actions
-    from .ff5m_ui.z_offset import actions as z_actions
-except (ImportError, ValueError):
-    from ui import Page, PrintState
-    from ff5m_ui.move import actions as move_actions
-    from ff5m_ui.z_offset import actions as z_actions
+from ui import Page, PrintState
+from ff5m_ui.move import actions as move_actions
+from ff5m_ui.z_offset import actions as z_actions
 
 
 ARTIFACT_ROOT = "/data/feather-ui-tests"
@@ -770,12 +765,8 @@ class UITestFeature:
     @staticmethod
     def _component_pages():
         """Discover module-level declarative pages only in the cold test path."""
-        try:
-            from . import ff5m_ui as package
-            from .ui.layout import DeclarativePage
-        except (ImportError, ValueError):
-            import ff5m_ui as package
-            from ui.layout import DeclarativePage
+        import ff5m_ui as package
+        from ui.layout import DeclarativePage
         package_root = os.path.dirname(package.__file__)
         modules = set()
         for root, directories, files in os.walk(package_root):

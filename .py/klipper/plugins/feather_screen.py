@@ -9,47 +9,40 @@ import fcntl
 import logging
 import os
 import signal
+import sys
 import struct
 import time
 
-try:
-    from .ui import Command, FeatherRenderer, Page, PrintState, ThemeColor
-    from .ff5m_ui.move import runtime as move_ui
-    from .feather_screen_pages import (
+# Klipper loads this entry point as ``extras.feather_screen``, while
+# Feather UI is intentionally shared with the standalone Designer under
+# the canonical top-level namespaces ``ui`` and ``ff5m_ui``. Register
+# the extras directory once, before importing either package, so every
+# module is loaded under one stable name.
+_PLUGIN_ROOT = os.path.dirname(os.path.realpath(__file__))
+if not sys.path or sys.path[0] != _PLUGIN_ROOT:
+    try:
+        sys.path.remove(_PLUGIN_ROOT)
+    except ValueError:
+        pass
+    sys.path.insert(0, _PLUGIN_ROOT)
+
+from ui import Command, FeatherRenderer, Page, PrintState, ThemeColor
+from ff5m_ui.move import runtime as move_ui
+from feather_screen_pages import (
         FeatherPagesMixin, FILE_ROWS,
         NETWORK_HELPER, NETWORK_TIMEOUTS)
-    from .feather_files import (
+from feather_files import (
         DEFAULT_HISTORY_PATH, PrintHistory, UsbStorageMonitor)
-    from .feather_screen_controls import (
+from feather_screen_controls import (
         FeatherControlsMixin,
         joystick_ui, joystick_motion,
         JOYSTICK_XY_CENTER, JOYSTICK_XY_RADIUS,
         JOYSTICK_Z_CENTER, JOYSTICK_Z_RADIUS)
-    from .feather_materials import load_material_catalog
-    from .feather_feature_manager import (
+from feather_materials import load_material_catalog
+from feather_feature_manager import (
         FeatureLoadError, FeatureSpec, LazyFeatureManager)
-    from .feather_safety import SafetyRegistry
-    from .feather_keyboard import is_keyboard_action
-except (ImportError, ValueError):
-    import sys
-    sys.path.insert(0, os.path.dirname(__file__))
-    from ui import Command, FeatherRenderer, Page, PrintState, ThemeColor
-    from ff5m_ui.move import runtime as move_ui
-    from feather_screen_pages import (
-        FeatherPagesMixin, FILE_ROWS,
-        NETWORK_HELPER, NETWORK_TIMEOUTS)
-    from feather_files import (
-        DEFAULT_HISTORY_PATH, PrintHistory, UsbStorageMonitor)
-    from feather_screen_controls import (
-        FeatherControlsMixin,
-        joystick_ui, joystick_motion,
-        JOYSTICK_XY_CENTER, JOYSTICK_XY_RADIUS,
-        JOYSTICK_Z_CENTER, JOYSTICK_Z_RADIUS)
-    from feather_materials import load_material_catalog
-    from feather_feature_manager import (
-        FeatureLoadError, FeatureSpec, LazyFeatureManager)
-    from feather_safety import SafetyRegistry
-    from feather_keyboard import is_keyboard_action
+from feather_safety import SafetyRegistry
+from feather_keyboard import is_keyboard_action
 
 
 DISP_LCD_SET_BRIGHTNESS = 0x102

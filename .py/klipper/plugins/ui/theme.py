@@ -70,6 +70,32 @@ DEFAULT_THEME_ROLES = MappingProxyType({
 })
 
 
+def normalize_theme_token(value, nullable=False):
+    """Validate a typed theme token or normalize a custom HEX color.
+
+    Named palette values are intentionally not accepted as strings. Runtime
+    declarations must use ``ThemeColor`` or ``ThemeRole`` so token references
+    remain explicit and statically searchable. A six-digit HEX string remains
+    available for intentionally custom colors outside the active theme.
+    """
+    if value is None:
+        if nullable:
+            return None
+        raise TypeError("theme color must not be None")
+    if isinstance(value, (ThemeColor, ThemeRole)):
+        return value
+    if not isinstance(value, str):
+        raise TypeError(
+            "theme color must be ThemeColor, ThemeRole or HEX string, got %r" %
+            (value,))
+    normalized = value.strip().lower().lstrip("#")
+    if _HEX_COLOR.fullmatch(normalized) is not None:
+        return normalized
+    raise ValueError(
+        "named theme colors must use ThemeColor or ThemeRole; "
+        "custom colors must be six-digit hexadecimal strings")
+
+
 class ResolvedTheme:
     """Immutable physical palette indexed only by typed theme tokens."""
 
@@ -79,11 +105,10 @@ class ResolvedTheme:
         self._values = MappingProxyType(dict(values))
 
     def resolve(self, token):
-        if not isinstance(token, (ThemeColor, ThemeRole)):
-            raise TypeError(
-                "theme color must be ThemeColor or ThemeRole, got %r" %
-                (token,))
-        return self._values[token]
+        token = normalize_theme_token(token)
+        if isinstance(token, (ThemeColor, ThemeRole)):
+            return self._values[token]
+        return token
 
     def as_dict(self):
         return dict((token.value, value) for token, value in self._values.items())

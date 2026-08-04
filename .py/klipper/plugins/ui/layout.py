@@ -13,7 +13,22 @@ from .properties import (
     CreationFieldSpec, EditorSpec, Invalidation, PropertySpec, SourceSpec,
     ValidationSpec, property_schema,
 )
-from .source import capture_construction, capture_modifier
+
+
+def _capture_construction(instance, names=()):
+    return None
+
+
+def _capture_modifier(node, method, properties):
+    return None
+
+
+def _install_source_hooks(capture_construction, capture_modifier):
+    """Install optional Designer provenance hooks on explicit request."""
+    global _capture_construction, _capture_modifier
+    _capture_construction = capture_construction
+    _capture_modifier = capture_modifier
+
 
 
 class Insets:
@@ -525,50 +540,50 @@ class Node:
         self._last_signature = _UNSET
         self._repaint_boundary = False
         self._source_mutations = {}
-        self._source = capture_construction(self)
+        self._source = _capture_construction(self)
 
     # Shared layout modifiers. They deliberately mutate the declaration node
     # so page construction stays compact and does not allocate wrapper trees.
     def ref(self, key):
-        capture_modifier(self, "ref", (("key", 0),))
+        _capture_modifier(self, "ref", (("key", 0),))
         self.key = key
         return self
 
     def width(self, value):
-        capture_modifier(self, "width", (("width", 0),))
+        _capture_modifier(self, "width", (("width", 0),))
         self.layout_options.width = int(value)
         return self
 
     def height(self, value):
-        capture_modifier(self, "height", (("height", 0),))
+        _capture_modifier(self, "height", (("height", 0),))
         self.layout_options.height = int(value)
         return self
 
     def size(self, width, height):
-        capture_modifier(self, "size", (("width", 0), ("height", 1)))
+        _capture_modifier(self, "size", (("width", 0), ("height", 1)))
         self.layout_options.width = int(width)
         self.layout_options.height = int(height)
         return self
 
     def grow(self, value=1):
-        capture_modifier(self, "grow", (("grow", 0),))
+        _capture_modifier(self, "grow", (("grow", 0),))
         self.layout_options.grow = int(value)
         if self.layout_options.grow < 0:
             raise ValueError("Element grow must be non-negative")
         return self
 
     def margin(self, value=0, **kwargs):
-        capture_modifier(self, "margin", (("margin", 0),))
+        _capture_modifier(self, "margin", (("margin", 0),))
         self.layout_options.margin = Insets.from_values(value, **kwargs)
         return self
 
     def padding(self, value=0, **kwargs):
-        capture_modifier(self, "padding", (("padding", 0),))
+        _capture_modifier(self, "padding", (("padding", 0),))
         self.layout_options.padding = Insets.from_values(value, **kwargs)
         return self
 
     def align(self, horizontal=None, vertical=None):
-        capture_modifier(
+        _capture_modifier(
             self, "align", (("horizontal", 0), ("vertical", 1)))
         if horizontal is not None:
             self.layout_options.horizontal = horizontal
@@ -583,13 +598,13 @@ class Node:
         own their children slots, so editor tooling only exposes this modifier
         when moving the element cannot silently rewrite Grid/List structure.
         """
-        capture_modifier(self, "offset", (("offset", 0),))
+        _capture_modifier(self, "offset", (("offset", 0),))
         self.layout_options.offset_x = int(x)
         self.layout_options.offset_y = int(y)
         return self
 
     def allow_overflow(self, value=True):
-        capture_modifier(
+        _capture_modifier(
             self, "allow_overflow", (("allow_overflow", 0),))
         self.layout_options.allow_overflow = bool(value)
         return self
@@ -1230,7 +1245,7 @@ class DeclarativePage(Tree):
                  state_schema=()):
         if not isinstance(page_id, PageKey):
             raise TypeError("DeclarativePage page_id must be a PageKey member")
-        self._source = capture_construction(
+        self._source = _capture_construction(
             self, names=("Page", "PageTree", "DeclarativePage"))
         super().__init__(content, bounds)
         self.page_key = page_id

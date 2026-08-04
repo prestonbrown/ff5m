@@ -1916,5 +1916,43 @@ class RegressionOrchestratorTest(unittest.TestCase):
             self.assertTrue(copied_component.is_dir())
 
 
+class VisualChecksPackageResolutionTest(unittest.TestCase):
+    def test_local_tests_package_wins_over_environment_package(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            shadow_root = pathlib.Path(temp_dir)
+            shadow_package = shadow_root / "tests"
+            shadow_package.mkdir()
+            (shadow_package / "__init__.py").write_text(
+                "SHADOW_PACKAGE = True\n", encoding="utf-8")
+
+            env = os.environ.copy()
+            existing = env.get("PYTHONPATH")
+            env["PYTHONPATH"] = str(shadow_root) + (
+                os.pathsep + existing if existing else "")
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    "-c",
+                    (
+                        "import pathlib, tests; "
+                        "import tests.visual_checks.regression; "
+                        "print(pathlib.Path(tests.__file__).resolve())"
+                    ),
+                ],
+                cwd=str(ROOT),
+                env=env,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                universal_newlines=True,
+                check=False,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(
+                pathlib.Path(result.stdout.strip()),
+                (ROOT / "tests" / "__init__.py").resolve(),
+            )
+
+
 if __name__ == "__main__":
     unittest.main()

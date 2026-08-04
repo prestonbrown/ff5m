@@ -9,10 +9,7 @@
 
 import enum
 
-try:
-    from .ui import NumericInputSpec
-except (ImportError, ValueError):
-    from ui import NumericInputSpec
+from ui import NumericInputSpec
 
 
 VISIBLE_ROWS = 5

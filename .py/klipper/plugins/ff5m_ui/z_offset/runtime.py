@@ -1,6 +1,6 @@
 ## Runtime facade for Z-offset page packages.
 
-from .._lazy_support import resolve_lazy_export
+from ui.lazy import resolve_lazy_export
 from .actions import (
     ACCEPT, CLOSER, DISCARD_CONFIRM, ENTER_ZONE, FARTHER, MOVE_SAFE_HALF,
     PROBE, RESET, SAFE_CALIBRATE, SAFE_HIGHER, SAFE_LOWER, SAFE_PROBE,

@@ -19,8 +19,9 @@ from ui import (  # noqa: E402
     Back, Button, Command, CommandKey, Dialog, Hitbox, HomingHint,
     Increment, JoystickKnob, Navigate, PageKey, PageTree, Rect, Replace,
     Router, SetValue, StateKey, Toggle, action_metadata,
-    reflect_page, state,
+    state,
 )
+from ui.reflection import reflect_page  # noqa: E402
 
 
 class TestPage(PageKey):

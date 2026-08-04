@@ -1,4 +1,4 @@
-## Neutral runtime reflection for declarative pages.
+## Neutral on-demand reflection for declarative pages.
 
 from enum import Enum
 

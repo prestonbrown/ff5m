@@ -1,6 +1,6 @@
 ## Runtime facade for movement page packages.
 
-from .._lazy_support import resolve_lazy_export
+from ui.lazy import resolve_lazy_export
 from .actions import (
     CAUTION_AUTO, CAUTION_DISMISS, CAUTION_UNLOAD, DISABLE_MOTORS, HOME_ALL,
     HOME_XY, HOME_Z, JOYSTICK_XY, JOYSTICK_Z, X_MINUS, X_PLUS, Y_MINUS,
