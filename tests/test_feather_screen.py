@@ -582,7 +582,8 @@ class RendererStateTest(unittest.TestCase):
             x=25, y=75, width=430, height=285)
         drawing = "\n".join(commands)
 
-        self.assertEqual(commands[0], "--batch clear-hitboxes")
+        self.assertEqual(
+            commands[0], "--batch clear-hitboxes --layer base")
         self.assertIn("--batch fill -p 25 75 -s 430 285", drawing)
         self.assertIn("--batch stroke -p 25 75 -s 430 285", drawing)
         self.assertIn("CAUTION", drawing)
@@ -759,7 +760,7 @@ class RendererStateTest(unittest.TestCase):
         colors[UI.ThemeColor.BACKGROUND.value] = "a0b1c2"
         renderer._palette = UI.resolve_theme(colors)
         commands = [
-            "--batch clear-hitboxes",
+            renderer.clear_hitboxes("base"),
             "--batch clear -c 000000",
             renderer.fill(10, 20, 30, 40, UI.ThemeColor.BACKGROUND),
             renderer.stroke(11, 21, 31, 41, UI.ThemeColor.SECONDARY_DARK, 3),
@@ -1045,11 +1046,80 @@ class RendererStateTest(unittest.TestCase):
         self.assertGreater(len(frames), 1)
         self.assertTrue(all(len(frame) <= UI.MAX_ATOMIC_DRAW
                             for frame in frames))
-        self.assertTrue(all(frame.endswith(b"--batch flush\n--end\n")
-                            for frame in frames))
+        self.assertTrue(all(frame.endswith(b"--end\n") for frame in frames))
+        self.assertTrue(all(b"--batch flush" not in frame
+                            for frame in frames[:-1]))
+        self.assertTrue(frames[-1].endswith(b"--batch flush\n--end\n"))
+        self.assertEqual(sum(frame.count(b"--batch flush")
+                             for frame in frames), 1)
         joined = b"\n".join(frames)
         for command in commands:
             self.assertIn(command.encode("utf-8"), joined)
+
+    def test_small_draw_is_committed_once(self):
+        frames = FEATHER.FeatherRenderer._encode_frames([
+            "--batch fill -p 0 0 -s 10 10 -c 030607",
+        ])
+
+        self.assertEqual(len(frames), 1)
+        self.assertTrue(frames[0].endswith(b"--batch flush\n--end\n"))
+        self.assertEqual(frames[0].count(b"--batch flush"), 1)
+
+    def test_atomic_frame_limit_counts_utf8_bytes(self):
+        command = "--batch text -t " + ("Я" * 2000)
+
+        with self.assertRaisesRegex(ValueError, "single Typer command"):
+            FEATHER.FeatherRenderer._encode_frames([command])
+
+    def test_toast_registers_dismiss_hitbox_in_overlay_layer(self):
+        renderer = FEATHER.FeatherRenderer()
+        renderer.begin_page("Home")
+        sent = []
+        renderer.send = sent.append
+
+        renderer.toast("Saved")
+
+        drawing = "\n".join(sent[-1])
+        self.assertIn("--batch hitbox", drawing)
+        self.assertIn("--id 1:global.toast.dismiss", drawing)
+        self.assertIn("--layer overlay", drawing)
+
+    def test_replacing_toast_hides_old_surface_before_drawing_new_one(self):
+        controller = FEATHER.FeatherScreen.__new__(FEATHER.FeatherScreen)
+        controller.reactor = Reactor()
+        controller.renderer = mock.Mock()
+        controller.page = FEATHER.Page.IDLE_HOME
+        controller.print_state = FEATHER.PrintState.IDLE
+        controller.toast_until = 101.0
+        controller.toast_message = "Old"
+        controller._show_page = mock.Mock()
+
+        controller._toast("New")
+
+        controller._show_page.assert_called_once_with(FEATHER.Page.IDLE_HOME)
+        controller.renderer.toast.assert_called_once_with("New")
+        self.assertEqual(controller.toast_message, "New")
+        self.assertEqual(controller.toast_until, 102.0)
+
+    def test_toast_touch_action_dismisses_before_normal_routing(self):
+        controller = FEATHER.FeatherScreen.__new__(FEATHER.FeatherScreen)
+        controller._hide_toast = mock.Mock()
+
+        controller._handle_touch_action("global.toast.dismiss")
+
+        controller._hide_toast.assert_called_once_with()
+
+    def test_toast_hitbox_can_be_cleared_without_page_redraw(self):
+        controller = FEATHER.FeatherScreen.__new__(FEATHER.FeatherScreen)
+        controller.renderer = mock.Mock()
+        controller.toast_until = 101.0
+        controller.toast_message = "Visible"
+
+        self.assertTrue(controller._hide_toast(redraw=False))
+
+        controller.renderer.clear_toast_hitbox.assert_called_once_with()
+        self.assertEqual(controller.toast_until, 0.0)
+        self.assertEqual(controller.toast_message, "")
 
     def test_keyed_animation_frames_are_latest_wins(self):
         renderer = FEATHER.FeatherRenderer()
@@ -1062,7 +1132,7 @@ class RendererStateTest(unittest.TestCase):
         queued = renderer._batch_queue.get()
         self.assertEqual(queued.commands, ("frame 3",))
 
-    def test_render_batch_character_count_is_bounded(self):
+    def test_render_batch_serialized_size_is_bounded(self):
         renderer = FEATHER.FeatherRenderer()
         accepted = renderer.send(["x" * (UI.MAX_PENDING_DRAW + 1)])
         self.assertFalse(accepted)
@@ -1260,7 +1330,8 @@ class RendererStateTest(unittest.TestCase):
             (("warning.ok", "OK", "warning"),))
 
         drawing = "\n".join(commands)
-        self.assertEqual(drawing.count("--batch clear-hitboxes"), 2)
+        self.assertEqual(drawing.count("--batch clear-hitboxes"), 4)
+        self.assertEqual(drawing.count("--layer overlay"), 2)
         self.assertIn("warning.ok", renderer._buttons)
         self.assertIn("global.abort", renderer._buttons)
         self.assertGreater(
@@ -1438,7 +1509,8 @@ class RendererStateTest(unittest.TestCase):
         controller._render_move()
         warning = "\n".join(batches[-1])
 
-        self.assertEqual(warning.count("--batch clear-hitboxes"), 1)
+        self.assertEqual(warning.count("--batch clear-hitboxes"), 2)
+        self.assertEqual(warning.count("--layer overlay"), 1)
         dismiss_id = UI.SetValue(
             MOVE_LAYOUT.MoveState.CAUTION_ACKNOWLEDGED, True).wire_id
         self.assertIn("--id 1:%s" % dismiss_id, warning)
@@ -1450,7 +1522,8 @@ class RendererStateTest(unittest.TestCase):
         controller._render_move()
         safe = "\n".join(batches[-1])
 
-        self.assertEqual(safe.count("--batch clear-hitboxes"), 1)
+        self.assertEqual(safe.count("--batch clear-hitboxes"), 2)
+        self.assertEqual(safe.count("--layer overlay"), 1)
         self.assertIn("--id 2:move.caution.unload", safe)
         self.assertIn("--id 2:%s" % dismiss_id, safe)
         self.assertIn("--id 2:move.homez", safe)

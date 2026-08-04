@@ -22,7 +22,7 @@ from .theme_catalog import (
     ThemeCatalog, normalize_theme_name,
 )
 from .render_worker import (
-    MAX_BATCH_CHARS, MAX_BATCHES, RenderBatch, RenderBatchQueue,
+    MAX_BATCH_BYTES, MAX_BATCHES, RenderBatch, RenderBatchQueue,
     TyperRenderWorker,
 )
 
@@ -41,7 +41,7 @@ HEADER_BOTTOM = 55
 FOOTER_Y = 444
 FOOTER_HEIGHT = 32
 CONTENT_BOTTOM = FOOTER_Y - 2
-MAX_PENDING_DRAW = MAX_BATCH_CHARS
+MAX_PENDING_DRAW = MAX_BATCH_BYTES
 # Keep each FIFO write below Linux PIPE_BUF.  An atomic frame is either fully
 # accepted or retried, so a page cannot remain half-rendered until a later UI
 # update happens to drain the tail.
@@ -149,7 +149,7 @@ class FeatherRenderer:
         self._toggles = {}
         self._hitboxes = {}
         self._generation = 0
-        self._batch_queue = RenderBatchQueue(MAX_BATCHES, MAX_BATCH_CHARS)
+        self._batch_queue = RenderBatchQueue(MAX_BATCHES, MAX_BATCH_BYTES)
         self._worker = None
         self._async_scheduler = None
         self._event_fd_handler = None
@@ -224,7 +224,8 @@ class FeatherRenderer:
         # render so neither the persistent footer nor the outer margins can
         # expose pixels from the previous screen owner.
         self.send([
-            "--batch clear-hitboxes",
+            self.clear_hitboxes("base"),
+            self.clear_hitboxes("overlay"),
             "--batch clear -c %s" % self.color(ThemeColor.BACKGROUND),
         ], kind="critical", key="worker-clear")
         return started
@@ -267,9 +268,14 @@ class FeatherRenderer:
                     self._last_submitted_generation else "state")
         if kind not in ("critical", "surface", "state", "animation"):
             raise ValueError("unknown render batch kind: %s" % kind)
-        character_count = sum(len(command) for command in immutable)
+        try:
+            serialized_size = self._serialized_size(immutable)
+        except ValueError as exc:
+            logging.warning("[feather_screen] rejected render batch: %s", exc)
+            self._batch_queue.reject_submission()
+            return False
         batch = RenderBatch(
-            immutable, kind, key, batch_generation, character_count, None)
+            immutable, kind, key, batch_generation, serialized_size, None)
         accepted = self._batch_queue.put_nowait(batch)
         if accepted:
             self._last_submitted_generation = max(
@@ -300,26 +306,64 @@ class FeatherRenderer:
         self._semantic_page_id = str(page_id)
 
     @staticmethod
-    def _encode_frames(commands):
-        suffix = ["--batch flush", "--end", ""]
-        frames = []
-        current = []
-        size = len("\n".join(suffix).encode("utf-8"))
+    def _serialized_size(commands):
+        """Return exact FIFO bytes without retaining a serialized copy."""
+        intermediate_suffix_size = len("--end\n".encode("utf-8"))
+        final_suffix_size = len(
+            "--batch flush\n--end\n".encode("utf-8"))
+        current_payload_size = 0
+        total_size = 0
+        have_chunk = False
         for command in commands:
             line_size = len((str(command) + "\n").encode("utf-8"))
+            if line_size + final_suffix_size > MAX_ATOMIC_DRAW:
+                raise ValueError(
+                    "single Typer command exceeds MAX_ATOMIC_DRAW")
+            if (have_chunk and current_payload_size + line_size
+                    + final_suffix_size > MAX_ATOMIC_DRAW):
+                total_size += current_payload_size + intermediate_suffix_size
+                current_payload_size = 0
+                have_chunk = False
+            current_payload_size += line_size
+            have_chunk = True
+        if have_chunk:
+            total_size += current_payload_size + final_suffix_size
+        return total_size
+
+    @staticmethod
+    def _encode_frames(commands):
+        intermediate_suffix = ["--end", ""]
+        final_suffix = ["--batch flush", "--end", ""]
+        chunks = []
+        current = []
+        # Reserve the larger final suffix for every chunk. This keeps every
+        # serialized FIFO write within MAX_ATOMIC_DRAW without needing a
+        # second packing pass when the last chunk is selected.
+        suffix_size = len("\n".join(final_suffix).encode("utf-8"))
+        size = suffix_size
+        for command in commands:
+            command = str(command)
+            line_size = len((command + "\n").encode("utf-8"))
             if size + line_size > MAX_ATOMIC_DRAW and not current:
                 raise ValueError(
                     "single Typer command exceeds MAX_ATOMIC_DRAW")
             if current and size + line_size > MAX_ATOMIC_DRAW:
-                frames.append(bytearray(
-                    "\n".join(current + suffix).encode("utf-8")))
+                chunks.append(current)
                 current = []
-                size = len("\n".join(suffix).encode("utf-8"))
-            current.append(str(command))
+                size = suffix_size
+            current.append(command)
             size += line_size
         if current:
-            frames.append(bytearray(
-                "\n".join(current + suffix).encode("utf-8")))
+            chunks.append(current)
+
+        frames = []
+        for index, chunk in enumerate(chunks):
+            suffix = (final_suffix if index == len(chunks) - 1
+                      else intermediate_suffix)
+            frame = bytearray("\n".join(chunk + suffix).encode("utf-8"))
+            if len(frame) > MAX_ATOMIC_DRAW:
+                raise ValueError("Typer frame exceeds MAX_ATOMIC_DRAW")
+            frames.append(frame)
         return frames
 
     def decode_action(self, action):
@@ -435,10 +479,10 @@ class FeatherRenderer:
                 half_width * 2 + 1, 1, color))
         return commands
 
-    def hint_box(self, message, center_x, y, max_width=740, min_width=180,
-                 height=44, border=ThemeColor.SECONDARY,
-                 background=ThemeColor.BACKGROUND, font="JetBrainsMono 8pt"):
-        """Draw a centered one-line hint with guaranteed inner padding."""
+    def _hint_box_geometry(self, message, center_x, max_width, min_width,
+                           font):
+        font = self.normalize_font(font)
+        available = max(1, int(max_width) - 2 * self.HINT_TEXT_PADDING)
         label = str(message).upper()
         font = self.normalize_font_for_text(font, label)
         available = max(1, int(max_width) - 2 * self.HINT_TEXT_PADDING)
@@ -447,6 +491,14 @@ class FeatherRenderer:
             max(int(min_width),
                 self.text_width(label, font) + 2 * self.HINT_TEXT_PADDING))
         x = int(center_x) - width // 2
+        return label, font, available, x, width
+
+    def hint_box(self, message, center_x, y, max_width=740, min_width=180,
+                 height=44, border=ThemeColor.SECONDARY,
+                 background=ThemeColor.BACKGROUND, font="JetBrainsMono 8pt"):
+        """Draw a centered one-line hint with guaranteed inner padding."""
+        label, font, available, x, width = self._hint_box_geometry(
+            message, center_x, max_width, min_width, font)
         commands = self.panel(
             x, int(y), width, int(height), border=border,
             background=background, line_width=2)
@@ -745,10 +797,23 @@ class FeatherRenderer:
         return get_font_metrics().text_width(value, font)
 
     @staticmethod
-    def hitbox(action, x, y, width, height, continuous=False):
+    def hitbox(action, x, y, width, height, continuous=False, layer="base"):
+        layer = str(layer).lower()
+        if layer not in ("base", "overlay"):
+            raise ValueError("unknown hitbox layer: %s" % layer)
         command = "--batch hitbox --id %s -p %d %d -s %d %d" % (
             action, x, y, width, height)
-        return command + (" --continuous" if continuous else "")
+        if continuous:
+            command += " --continuous"
+        command += " --layer %s" % layer
+        return command
+
+    @staticmethod
+    def clear_hitboxes(layer="base"):
+        layer = str(layer).lower()
+        if layer not in ("base", "overlay"):
+            raise ValueError("unknown hitbox layer: %s" % layer)
+        return "--batch clear-hitboxes --layer " + layer
 
     def action_hitbox(self, action, x, y, width, height, continuous=False):
         logical_action = (
@@ -757,6 +822,11 @@ class FeatherRenderer:
             x, y, width, height, bool(continuous))
         return self.hitbox(self._wire_action(action), x, y, width, height,
                            continuous)
+
+    def overlay_hitbox(self, action, x, y, width, height, continuous=False):
+        return self.hitbox(
+            self._wire_action(action), x, y, width, height,
+            continuous, layer="overlay")
 
     def _toggle_commands(self, x, y, width, height, thumb_x, enabled):
         border = ThemeColor.PRIMARY if enabled else ThemeColor.MUTED
@@ -819,7 +889,8 @@ class FeatherRenderer:
         self._toggles = {}
         self._hitboxes = {}
         self.send([
-            "--batch clear-hitboxes",
+            self.clear_hitboxes("base"),
+            self.clear_hitboxes("overlay"),
             self._wake_hitbox(),
         ])
 
@@ -854,7 +925,7 @@ class FeatherRenderer:
                         font, display_label)),
                     max_width, self.quote(display_label)))
         if include_hitbox and state not in ("disabled", "busy"):
-            command += " --id %s" % action
+            command += " --id %s --layer base" % action
         return [command]
 
     def _button_commands(self, action, x, y, width, height, label, state,
@@ -1009,7 +1080,11 @@ class FeatherRenderer:
             self._buttons = {}
             self._toggles = {}
             self._hitboxes = {}
-            commands += ["--batch clear-hitboxes", self._wake_hitbox()]
+            commands += [
+                self.clear_hitboxes("base"),
+                self.clear_hitboxes("overlay"),
+                self._wake_hitbox(),
+            ]
         commands += self.panel(
             x, y, width, height, border=border, background=ThemeColor.PANEL)
         commands.append(self.text(
@@ -1096,7 +1171,8 @@ class FeatherRenderer:
         self._menu_suppressed = False
         show_abort = self._emergency_stop_visible
         commands = [
-            "--batch clear-hitboxes",
+            self.clear_hitboxes("base"),
+            self.clear_hitboxes("overlay"),
             self._wake_hitbox(),
             # Preserve the footer framebuffer. It is a persistent status area
             # and is updated independently only when one of its values changes.
@@ -1170,10 +1246,22 @@ class FeatherRenderer:
         self.send(self._footer_commands(values))
 
     def toast(self, message):
-        self.send(self.hint_box(
-            message, 400, 397, max_width=740, min_width=180, height=44,
+        y = 397
+        height = 44
+        _label, _font, _available, x, width = self._hint_box_geometry(
+            message, 400, 740, 180, "JetBrainsMono 8pt")
+        commands = self.hint_box(
+            message, 400, y, max_width=740, min_width=180, height=height,
             border=ThemeColor.SECONDARY, background=ThemeColor.BACKGROUND,
-            font="JetBrainsMono 8pt"))
+            font="JetBrainsMono 8pt")
+        commands.append(self.overlay_hitbox(
+            "global.toast.dismiss", x, y, width, height))
+        self.prioritize_next_batch("state", "toast")
+        self.send(commands)
+
+    def clear_toast_hitbox(self):
+        self.prioritize_next_batch("state", "toast-hitbox")
+        self.send([self.clear_hitboxes("overlay")])
 
     def busy_notice(self, label="KLIPPER BUSY"):
         label = str(label).upper()
@@ -1223,7 +1311,8 @@ class FeatherRenderer:
         self._toggles = {}
         self._hitboxes = {}
         commands = [
-            "--batch clear-hitboxes",
+            self.clear_hitboxes("base"),
+            self.clear_hitboxes("overlay"),
             self._wake_hitbox(),
             # Clear the header too: leaving the old Back button painted made
             # it look usable even though its hitbox had been removed.
@@ -1263,7 +1352,8 @@ class FeatherRenderer:
         detail = ("RESTART IN PROGRESS - DISPLAY MAY PAUSE"
                   if restarting else "INITIALIZING PRINTER SERVICES")
         commands = [
-            "--batch clear-hitboxes",
+            self.clear_hitboxes("base"),
+            self.clear_hitboxes("overlay"),
             self._wake_hitbox(),
             self.fill(0, 0, SCREEN_WIDTH, SCREEN_HEIGHT, ThemeColor.OVERLAY),
         ]
@@ -1300,7 +1390,8 @@ class FeatherRenderer:
         self._toggles = {}
         self._hitboxes = {}
         commands = [
-            "--batch clear-hitboxes",
+            self.clear_hitboxes("base"),
+            self.clear_hitboxes("overlay"),
             self._wake_hitbox(),
             self.fill(0, HEADER_BOTTOM + 1, SCREEN_WIDTH,
                       CONTENT_BOTTOM - HEADER_BOTTOM - 1, ThemeColor.OVERLAY),

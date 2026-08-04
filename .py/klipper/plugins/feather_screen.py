@@ -546,6 +546,7 @@ class FeatherScreen(FeatherPagesMixin, FeatherControlsMixin):
         self.touch_feedback_pending = False
         self.busy_message = None
         self.toast_until = 0.0
+        self.toast_message = ""
         self.action_prompt = None
         self.action_prompt_visible = False
         self.action_prompt_page = 0
@@ -721,6 +722,9 @@ class FeatherScreen(FeatherPagesMixin, FeatherControlsMixin):
         # _process_touch_events() has already refreshed last_touch_time and
         # restored the configured brightness, so no page action is required.
         if action == "global.wake":
+            return
+        if action == "global.toast.dismiss":
+            self._hide_toast()
             return
         # Safety actions must not wait for button animation, the normal action
         # debounce, or an active G-code dispatcher mutex.  In particular, a
@@ -973,6 +977,11 @@ class FeatherScreen(FeatherPagesMixin, FeatherControlsMixin):
                     getattr(self, "renderer", None),
                     "output_frozen", False)):
             return
+        # A complete surface repaint removes every visual toast and commits a
+        # cleared overlay hitbox layer, so its controller state must not outlive
+        # that surface generation.
+        self.toast_until = 0.0
+        self.toast_message = ""
         manager = getattr(self, "feature_manager", None)
         feature = None
         if manager is not None and manager.owner_name(page) is not None:
@@ -1373,7 +1382,30 @@ class FeatherScreen(FeatherPagesMixin, FeatherControlsMixin):
             if self.page == page and self.print_state != PrintState.DESTROYED:
                 self._show_page(page)
 
+    def _hide_toast(self, redraw=True):
+        active = bool(self.toast_until or self.toast_message)
+        self.toast_until = 0.0
+        self.toast_message = ""
+        if not active:
+            return False
+
+        if (redraw
+                and getattr(self, "print_state", None) != PrintState.DESTROYED
+                and getattr(self, "page", None) is not None):
+            # TODO: Render toasts as transient visual overlays and restore only
+            # their dirty rectangle from the base backbuffer instead of
+            # redrawing the page.
+            self._show_page(self.page)
+        else:
+            clear_hitbox = getattr(
+                getattr(self, "renderer", None), "clear_toast_hitbox", None)
+            if clear_hitbox is not None:
+                clear_hitbox()
+        return True
+
     def _toast(self, message):
+        if self.toast_until or self.toast_message:
+            self._hide_toast()
         self.toast_until = self.reactor.monotonic() + 2.0
         self.toast_message = str(message)
         self.renderer.toast(self.toast_message)
@@ -1607,8 +1639,7 @@ class FeatherScreen(FeatherPagesMixin, FeatherControlsMixin):
                              bed["temperature"], bed["target"],
                              network, state.upper())
         if self.toast_until and eventtime >= self.toast_until:
-            self.toast_until = 0.0
-            self._show_page(self.page)
+            self._hide_toast()
         return eventtime + REFRESH_TIME
 
     def _poll_usb_storage(self, eventtime):

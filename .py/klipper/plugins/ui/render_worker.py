@@ -16,12 +16,12 @@ from collections import deque, namedtuple
 
 
 MAX_BATCHES = 16
-MAX_BATCH_CHARS = 64 * 1024
+MAX_BATCH_BYTES = 64 * 1024
 RENDER_STALL_TIMEOUT = 5.0
 HANDOFF_TIMEOUT = 5.0
 
 RenderBatch = namedtuple(
-    "RenderBatch", "commands kind key generation character_count control")
+    "RenderBatch", "commands kind key generation serialized_size control")
 
 
 class _RestartRequested(Exception):
@@ -36,9 +36,9 @@ class RenderBatchQueue:
     """A small priority/coalescing queue safe for reactor submissions."""
 
     def __init__(self, max_batches=MAX_BATCHES,
-                 max_batch_chars=MAX_BATCH_CHARS):
+                 max_batch_bytes=MAX_BATCH_BYTES):
         self.max_batches = int(max_batches)
-        self.max_batch_chars = int(max_batch_chars)
+        self.max_batch_bytes = int(max_batch_bytes)
         self._items = deque()
         self._condition = threading.Condition()
         self._closed = False
@@ -80,7 +80,7 @@ class RenderBatchQueue:
         """Publish without performing transport work or waiting for space."""
         with self._condition:
             self._metrics["submitted_batches"] += 1
-            if self._closed or batch.character_count > self.max_batch_chars:
+            if self._closed or batch.serialized_size > self.max_batch_bytes:
                 self._metrics["dropped_batches"] += 1
                 return False
 
@@ -142,6 +142,12 @@ class RenderBatchQueue:
                 self._metrics["queue_high_watermark"], depth)
             self._condition.notify()
             return True
+
+    def reject_submission(self):
+        """Account for a batch rejected before an immutable item exists."""
+        with self._condition:
+            self._metrics["submitted_batches"] += 1
+            self._metrics["dropped_batches"] += 1
 
     def get(self, timeout=None):
         deadline = None if timeout is None else time.monotonic() + timeout
@@ -326,9 +332,27 @@ class TyperRenderWorker:
         if self.restarted is None:
             return
 
+        acknowledged = threading.Event()
+        callback_error = []
+
         def deliver(eventtime):
-            self.restarted()
-        self.schedule_async(deliver)
+            try:
+                self.restarted()
+            except Exception as exc:
+                callback_error.append(exc)
+            finally:
+                acknowledged.set()
+
+        try:
+            self.schedule_async(deliver)
+        except (TypeError, OSError) as exc:
+            raise _ReactorStopped("reactor is stopped") from exc
+        if not acknowledged.wait(HANDOFF_TIMEOUT):
+            raise RuntimeError("reactor did not acknowledge typer restart")
+        if callback_error:
+            raise RuntimeError(
+                "reactor rejected typer restart redraw: %s" %
+                callback_error[0])
 
     def _stop_owned_process(self):
         process = self.process
@@ -514,6 +538,18 @@ class TyperRenderWorker:
                     self._recover(exc, failures)
                 except Exception as exc:
                     failures += 1
+                    # The process may have consumed an arbitrary prefix of the
+                    # current logical batch. Ordinary state is replaced by a
+                    # fresh complete surface from the acknowledged restart
+                    # callback. A critical frozen surface is the exception:
+                    # after the old process has been stopped, replaying that
+                    # immutable batch into the new Typer is both safe and
+                    # necessary because the controller intentionally refuses
+                    # to replace it with an ordinary page.
+                    if pending is not None and pending.kind != "critical":
+                        self.queue.drop_render()
+                        pending = None
+                    self.queue.discard_noncritical()
                     self._recover(exc, failures)
         finally:
             self._set_state("stopping")

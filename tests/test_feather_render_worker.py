@@ -13,8 +13,8 @@ PLUGINS = pathlib.Path(__file__).parents[1] / ".py" / "klipper" / "plugins"
 sys.path.insert(0, str(PLUGINS))
 
 from ui import (  # noqa: E402
-    FeatherRenderer, MAX_ATOMIC_DRAW, MAX_BATCHES, RenderBatch,
-    RenderBatchQueue, TyperRenderWorker,
+    FeatherRenderer, MAX_ATOMIC_DRAW, MAX_BATCH_BYTES, MAX_BATCHES,
+    RenderBatch, RenderBatchQueue, TyperRenderWorker,
 )
 
 
@@ -22,7 +22,7 @@ def batch(value, kind="state", key=None, generation=1, control=None):
     commands = (str(value),) if value is not None else ()
     return RenderBatch(
         commands, kind, key, generation,
-        sum(len(command) for command in commands), control)
+        FeatherRenderer._serialized_size(commands), control)
 
 
 class RenderQueueTest(unittest.TestCase):
@@ -136,7 +136,7 @@ class RenderWorkerTest(unittest.TestCase):
                          for _ in range(48))
         item = RenderBatch(
             commands, "surface", None, 1,
-            sum(len(command) for command in commands), None)
+            FeatherRenderer._serialized_size(commands), None)
         writes = []
 
         def write(_fd, payload):
@@ -165,15 +165,53 @@ class RenderWorkerTest(unittest.TestCase):
         worker.draw_fd = 7
         worker.process = mock.Mock()
         worker.process.poll.return_value = None
-        item = batch("x" * MAX_ATOMIC_DRAW, "state", "oversized")
+        item = RenderBatch(
+            ("x" * MAX_ATOMIC_DRAW,), "state", "oversized", 1, 0, None)
 
         with self.assertRaisesRegex(ValueError, "MAX_ATOMIC_DRAW"):
             worker._render(item)
         self.assertEqual(queue.snapshot()["rendered_batches"], 0)
 
-    def test_crash_recovery_retries_pending_batch_without_main_thread_waits(self):
+    def test_crash_recovery_discards_indeterminate_batch_and_renders_fresh_surface(self):
         queue = RenderBatchQueue()
         queue.put_nowait(batch("final state", "state", "toggle", 4))
+        worker = self.worker(queue)
+        launches = []
+        renders = []
+
+        def launch():
+            launches.append(True)
+            worker.process = mock.Mock()
+            worker.process.poll.return_value = None
+            worker._set_state("running")
+            if len(launches) == 2:
+                queue.put_nowait(batch(
+                    "fresh surface", "surface", "recovery", 5))
+
+        def render(item):
+            renders.append(item.commands)
+            if item.commands == ("final state",):
+                worker.process.poll.return_value = 1
+                raise RuntimeError("typer crashed")
+            queue.rendered()
+            queue.close()
+
+        worker._launch = launch
+        worker._render = render
+        worker._recover = lambda exc, failures: None
+        worker._close_transport = lambda: None
+        worker._stop_owned_process = lambda: None
+        worker._run()
+
+        self.assertEqual(len(launches), 2)
+        self.assertEqual(renders, [("final state",), ("fresh surface",)])
+        self.assertEqual(queue.snapshot()["rendered_batches"], 1)
+        self.assertEqual(queue.snapshot()["dropped_batches"], 1)
+
+    def test_crash_recovery_replays_critical_surface_in_new_process(self):
+        queue = RenderBatchQueue()
+        queue.put_nowait(batch(
+            "shutdown surface", "critical", "shutdown", 4))
         worker = self.worker(queue)
         launches = []
         renders = []
@@ -200,8 +238,26 @@ class RenderWorkerTest(unittest.TestCase):
         worker._run()
 
         self.assertEqual(len(launches), 2)
-        self.assertEqual(renders, [("final state",), ("final state",)])
+        self.assertEqual(renders, [
+            ("shutdown surface",), ("shutdown surface",)])
         self.assertEqual(queue.snapshot()["rendered_batches"], 1)
+        self.assertEqual(queue.snapshot()["dropped_batches"], 0)
+
+    def test_queue_limit_uses_serialized_utf8_bytes_and_framing(self):
+        ascii_commands = tuple("x" * 320 for _ in range(100))
+        cyrillic_commands = tuple("я" * 340 for _ in range(100))
+        ascii_size = FeatherRenderer._serialized_size(ascii_commands)
+        cyrillic_size = FeatherRenderer._serialized_size(cyrillic_commands)
+
+        self.assertLess(ascii_size, MAX_BATCH_BYTES)
+        self.assertGreater(cyrillic_size, MAX_BATCH_BYTES)
+        self.assertEqual(
+            FeatherRenderer._serialized_size(("a",)),
+            len(b"a\n--batch flush\n--end\n"))
+
+        renderer = FeatherRenderer()
+        self.assertTrue(renderer.send(ascii_commands))
+        self.assertFalse(renderer.send(cyrillic_commands))
 
     def test_touch_fd_handoff_is_acknowledged_before_close(self):
         events = []

@@ -44,7 +44,7 @@ _EXPORT_GROUPS = (
         "FeatherRenderer", "Page", "PrintState", "rectangles_overlap",
     )),
     ("render_worker", (
-        "MAX_BATCHES", "MAX_BATCH_CHARS", "RenderBatch",
+        "MAX_BATCHES", "MAX_BATCH_BYTES", "RenderBatch",
         "RenderBatchQueue", "TyperRenderWorker",
     )),
     ("identity", (
@@ -115,7 +115,7 @@ __all__ = (
     "CONTENT_BOTTOM", "FOOTER_HEIGHT", "FOOTER_Y",
     "HEADER_BOTTOM", "MAX_ATOMIC_DRAW", "MAX_PENDING_DRAW",
     "SCREEN_HEIGHT", "SCREEN_WIDTH",
-    "MAX_BATCHES", "MAX_BATCH_CHARS", "RenderBatch", "RenderBatchQueue",
+    "MAX_BATCHES", "MAX_BATCH_BYTES", "RenderBatch", "RenderBatchQueue",
     "TyperRenderWorker",
     "rectangles_overlap", "FeatherRenderer", "Page", "PrintState",
     "FrameworkKey", "PageKey", "StateKey", "CommandKey", "serialize_key",
