@@ -103,22 +103,23 @@ def _structure(node, children):
     return result
 
 
-def _node(node, page, state, path):
+def _node(node, page, state, path, inherited_visible=True):
     key = node.key
     ref = None if key is None else _value(key)
     try:
         bounds = list(page.layout.rect(node))
     except Exception:
         bounds = None
-    visible = True
+    own_visible = True
     if isinstance(node, When):
         try:
-            visible = bool(resolve(node.predicate, state))
+            own_visible = bool(resolve(node.predicate, state))
         except Exception:
-            visible = False
+            own_visible = False
+    visible = bool(inherited_visible and own_visible)
     properties, bindings, property_sources = _properties(node, state)
     children = [
-        _node(child, page, state, "%s.%d" % (path, index))
+        _node(child, page, state, "%s.%d" % (path, index), visible)
         for index, child in enumerate(node.render_children())
     ]
     source = construction_metadata(node)
@@ -137,6 +138,7 @@ def _node(node, page, state, path):
         "type": node.__class__.__name__,
         "bounds": bounds,
         "visible": visible,
+        "own_visible": own_visible,
         "layout": _layout(node),
         "property_schema": [item.as_dict() for item in node.property_schema],
         "layout_schema": [item.as_dict() for item in LAYOUT_SCHEMA],

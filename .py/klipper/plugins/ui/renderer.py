@@ -439,9 +439,9 @@ class FeatherRenderer:
                  height=44, border=ThemeColor.SECONDARY,
                  background=ThemeColor.BACKGROUND, font="JetBrainsMono 8pt"):
         """Draw a centered one-line hint with guaranteed inner padding."""
-        font = self.normalize_font(font)
-        available = max(1, int(max_width) - 2 * self.HINT_TEXT_PADDING)
         label = str(message).upper()
+        font = self.normalize_font_for_text(font, label)
+        available = max(1, int(max_width) - 2 * self.HINT_TEXT_PADDING)
         width = min(
             int(max_width),
             max(int(min_width),
@@ -694,8 +694,8 @@ class FeatherRenderer:
              font="JetBrainsMono 12pt", h_align="left", v_align="middle",
              max_width=None, max_height=None, wrap=False, truncate=False,
              proportional=False):
-        font = self.normalize_font(font, proportional)
         value = str(value)
+        font = self.normalize_font_for_text(font, value)
         if (wrap or truncate) and (max_width is None or int(max_width) <= 0):
             raise ValueError("wrap and truncate require max_width")
         if wrap and (max_height is None or int(max_height) <= 0):
@@ -723,14 +723,14 @@ class FeatherRenderer:
         return command + " -t %s" % self.quote(value)
 
     @classmethod
-    def available_fonts(cls):
-        """Return the exact font names compiled into Typer."""
-        return get_font_metrics().available_fonts()
-
-    @classmethod
     def normalize_font(cls, font, allow_proportional=False):
         """Map UI font requests to sizes actually compiled into typer."""
         return get_font_metrics().normalize_font(font, allow_proportional)
+
+    @classmethod
+    def normalize_font_for_text(cls, font, value):
+        """Use the requested face when it covers the rendered text."""
+        return get_font_metrics().normalize_for_text(font, value)
 
     @classmethod
     def font_advance(cls, font):
@@ -850,7 +850,8 @@ class FeatherRenderer:
                    "--border %s --text-color %s -lw 2 -f %s "
                    "--max-width %d --truncate -t %s" %
                    (x, y, width, height, background, border, text_color,
-                    self.quote(self.normalize_font(font)),
+                    self.quote(self.normalize_font_for_text(
+                        font, display_label)),
                     max_width, self.quote(display_label)))
         if include_hitbox and state not in ("disabled", "busy"):
             command += " --id %s" % action
@@ -950,7 +951,7 @@ class FeatherRenderer:
         if state not in self.BUTTON_COLORS:
             state = "enabled"
         if layout == "center":
-            font = self.normalize_font(font)
+            font = self.normalize_font_for_text(font, label)
         if state not in ("disabled", "busy"):
             self._buttons[logical_action] = (
                 x, y, width, height, label, state, font, subtitle, layout,

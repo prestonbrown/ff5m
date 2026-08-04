@@ -242,13 +242,13 @@ class FeatherUtilitiesTest(unittest.TestCase):
 
     def test_renderer_normalizes_fonts_compiled_into_typer(self):
         normalize = FEATHER.FeatherRenderer.normalize_font
-        self.assertEqual(normalize("Roboto 9pt"), "JetBrainsMono 8pt")
+        self.assertEqual(normalize("Roboto 9pt"), "Roboto 8pt")
         self.assertEqual(normalize("Roboto Bold 14pt"),
-                         "JetBrainsMono Bold 12pt")
+                         "Roboto Bold 12pt")
         self.assertEqual(normalize("JetBrainsMono 11pt"), "JetBrainsMono 12pt")
         command = FEATHER.FeatherRenderer().text(
             10, 10, "Visible", font="Roboto 10pt")
-        self.assertIn('-f "JetBrainsMono 8pt"', command)
+        self.assertIn('-f "Roboto 8pt"', command)
         self.assertNotIn("10pt", command)
 
     def test_leading_minus_is_not_parsed_as_a_typer_option(self):
@@ -886,7 +886,7 @@ class RendererStateTest(unittest.TestCase):
         renderer.button("cancel", 0, 60, 260, 100, "CANCEL PRINT",
                         font="Roboto Bold 16pt")
         self.assertEqual(renderer._buttons["cancel"][6],
-                         "JetBrainsMono Bold 16pt")
+                         "Roboto Bold 16pt")
         self.assertEqual(renderer._buttons["cancel"][4], "CANCEL PRINT")
 
     def test_footer_is_preserved_across_page_frames(self):
