@@ -1037,10 +1037,10 @@ class RendererStateTest(unittest.TestCase):
         sleep.assert_not_called()
         self.assertEqual(renderer.get_status()["queue_depth"], 1)
 
-    def test_large_draw_is_split_into_atomic_complete_frames(self):
+    def test_large_draw_is_split_into_bounded_complete_frames(self):
         commands = [
             "--batch text -p 10 %d -t %s" % (index, "x" * 90)
-            for index in range(48)
+            for index in range(100)
         ]
         frames = FEATHER.FeatherRenderer._encode_frames(commands)
         self.assertGreater(len(frames), 1)
@@ -1065,8 +1065,8 @@ class RendererStateTest(unittest.TestCase):
         self.assertTrue(frames[0].endswith(b"--batch flush\n--end\n"))
         self.assertEqual(frames[0].count(b"--batch flush"), 1)
 
-    def test_atomic_frame_limit_counts_utf8_bytes(self):
-        command = "--batch text -t " + ("Я" * 2000)
+    def test_frame_limit_counts_utf8_bytes(self):
+        command = "--batch text -t " + ("Я" * 4100)
 
         with self.assertRaisesRegex(ValueError, "single Typer command"):
             FEATHER.FeatherRenderer._encode_frames([command])

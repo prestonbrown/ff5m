@@ -42,10 +42,11 @@ FOOTER_Y = 444
 FOOTER_HEIGHT = 32
 CONTENT_BOTTOM = FOOTER_Y - 2
 MAX_PENDING_DRAW = MAX_BATCH_BYTES
-# Keep each FIFO write below Linux PIPE_BUF.  An atomic frame is either fully
-# accepted or retried, so a page cannot remain half-rendered until a later UI
-# update happens to drain the tail.
-MAX_ATOMIC_DRAW = 3584
+# Historical public name retained for compatibility.  This is a bounded
+# logical transport-frame size, not a Linux FIFO atomic-write guarantee:
+# 8 KiB may exceed PIPE_BUF.  Correctness depends on TyperRenderWorker being
+# the sole draw-FIFO writer and completing partial writes in _write_frame().
+MAX_ATOMIC_DRAW = 8 * 1024
 
 
 
