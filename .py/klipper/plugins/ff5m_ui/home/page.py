@@ -20,7 +20,7 @@ PAGE_TITLE = "FORGE-X // FEATHER"
 PAGE_BOUNDS = Rect(0, 0, 800, 442)
 FONT = "JetBrainsMono 8pt"
 VALUE_FONT = "JetBrainsMono 12pt"
-CLOCK_FONT = "JetBrainsMono 16pt"
+CLOCK_FONT = "Roboto 16pt"
 
 
 class HomeRef(Enum):
@@ -183,10 +183,10 @@ def create_page():
                     bind(HomeState.CLOCK), color=ThemeRole.HEADER_TEXT,
                     font=CLOCK_FONT, horizontal="left",
                     max_width=132, truncate=True), 10, 0, 132, 44),
-            ).repaint_boundary().ref(HomeRef.CLOCK), 18, 7, 142, 46),
+            ).repaint_boundary().ref(HomeRef.CLOCK), 18, 8, 142, 46),
         _placed(Button(
             MENU, "MENU", font="JetBrainsMono Bold 8pt").ref(HomeRef.MENU),
-            648, 9, 132, 38),
+            650, 11, 132, 38),
         _card(25, 235, "NOZZLE", ThemeRole.TEMPERATURE_NOZZLE,
               nozzle, HomeRef.NOZZLE),
         _card(282, 235, "BED", ThemeRole.TEMPERATURE_BED,
