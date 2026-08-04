@@ -30,7 +30,9 @@ from tests.test_feather_screen import (
 )
 from ff5m_ui.move import runtime as MOVE_UI
 from ff5m_ui.filament import actions as FILAMENT_ACTIONS
+from ff5m_ui.home import page as HOME_PAGE
 from ff5m_ui.home import state as HOME_STATE
+from ff5m_ui.keys import AppPage
 from ui.font_metrics import get_font_metrics
 from feather_feature_filament import FilamentFeature
 from feather_z_calibration import (
@@ -57,11 +59,45 @@ class BedMeshState(StatusObject):
 
 
 class ControllerSafetyTest(unittest.TestCase):
+    def test_home_dashboard_is_a_discoverable_declarative_page(self):
+        self.assertIsInstance(HOME_PAGE.PAGE, UI.DeclarativePage)
+        self.assertEqual(HOME_PAGE.PAGE.page_key, AppPage.HOME)
+        self.assertEqual(HOME_PAGE.PAGE.title, "FORGE-X // FEATHER")
+        self.assertFalse(HOME_PAGE.PAGE.show_back)
+        self.assertEqual(
+            set(action.wire_id for action in HOME_PAGE.PAGE.actions.values()),
+            {"nav.menu", "nav.heat", "nav.network", "nav.job",
+             "nav.filament", "nav.move"})
+
+    def test_home_semantic_route_preserves_existing_navigation(self):
+        controller = ScenarioController.__new__(ScenarioController)
+        controller.page = FEATHER.Page.IDLE_HOME
+        controller._cancel_delayed_tasks = lambda: None
+        shown = []
+        controller._show_page = shown.append
+
+        action = controller._resolve_semantic_ui_action("nav.heat")
+        controller._dispatch_semantic_ui_action(action)
+
+        self.assertEqual(controller.heat_return_page, FEATHER.Page.IDLE_HOME)
+        self.assertEqual(shown, [FEATHER.Page.CONTROL_HEAT])
+
     def test_home_cards_register_navigation_without_icon_font(self):
         controller = ScenarioController.__new__(ScenarioController)
+        controller.page = FEATHER.Page.IDLE_HOME
         controller.renderer = FEATHER.FeatherRenderer()
         controller.reactor = Reactor()
-        controller._update_dashboard = lambda eventtime: None
+        controller.extruder = StatusObject(
+            {"temperature": 20.0, "target": 0.0})
+        controller.heater_bed = StatusObject(
+            {"temperature": 21.0, "target": 0.0})
+        controller.toolhead = StatusObject({"homed_axes": "xyz"})
+        controller.network_status = {
+            "mode": "ETHERNET", "ssid": "", "ip": "192.168.2.124"}
+        controller.last_job_name = "NONE"
+        controller._current_material = lambda: "PLA"
+        controller._read_text = lambda _path: ""
+        controller._refresh_local_timezone = lambda: None
         batches = []
         controller.renderer.send = batches.append
 

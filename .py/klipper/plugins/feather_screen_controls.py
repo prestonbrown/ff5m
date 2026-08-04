@@ -15,6 +15,7 @@ from ui import (
     )
 from ui.lazy import LazyModule
 from ff5m_ui.keys import AppPage
+from ff5m_ui.home.actions import HomeNavigate, HomeRoute
 from ff5m_ui.move.geometry import (
         JOYSTICK_XY_CENTER, JOYSTICK_XY_RADIUS,
         JOYSTICK_Z_CENTER, JOYSTICK_Z_RADIUS,
@@ -30,6 +31,7 @@ from feather_materials import (
     )
 
 
+home_ui = LazyModule("ff5m_ui.home.page")
 z_offset_ui = LazyModule("ff5m_ui.z_offset.runtime")
 SAFE_Z_ADJUST_STEP = 1.0
 
@@ -465,6 +467,8 @@ class FeatherControlsMixin:
                 self.renderer.send(commands)
 
     def _semantic_ui_page(self):
+        if self.page == Page.IDLE_HOME:
+            return home_ui.PAGE
         if self.page == Page.CONTROL_HEAT:
             return heat_ui.get_page(self.heating_materials)
         if self.page == Page.CONTROL_MOVE:
@@ -512,7 +516,45 @@ class FeatherControlsMixin:
             raise KeyError("Unknown application page: %s" % target)
         self._show_page(targets[target])
 
+    def _handle_home_navigation(self, route):
+        if route == HomeRoute.MENU:
+            self._show_page(Page.MAIN_MENU)
+            return
+        if route == HomeRoute.MOVE:
+            self._require_idle()
+            self.move_return_page = self.page
+            self._cancel_delayed_tasks()
+            self._show_page(Page.CONTROL_MOVE)
+            return
+        if route == HomeRoute.HEAT:
+            self.heat_return_page = self.page
+            self._cancel_delayed_tasks()
+            self._show_page(Page.CONTROL_HEAT)
+            return
+        if route == HomeRoute.FILAMENT:
+            self._open_filament(False)
+            return
+        if route == HomeRoute.NETWORK:
+            self.network_parent_page = self.page
+            self._show_page(Page.NETWORK_HOME)
+            return
+        if route == HomeRoute.JOB:
+            stats = self.print_stats.get_status(
+                self.reactor.monotonic()).get("state")
+            if stats in ("printing", "paused"):
+                self.home_during_print = False
+                self._show_page(self.page_for_print_state())
+            else:
+                self.file_page = 0
+                self.file_source = "internal"
+                self._show_page(Page.FILE_BROWSER)
+            return
+        raise KeyError("Unsupported home route: %s" % route)
+
     def _dispatch_semantic_ui_action(self, action):
+        if isinstance(action, HomeNavigate):
+            self._handle_home_navigation(action.route)
+            return
         if isinstance(action, Back):
             self._go_back()
             return

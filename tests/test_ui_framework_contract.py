@@ -141,6 +141,7 @@ assert "ui.source" in sys.modules
         self.assertEqual(
             {ui.serialize_key(page) for page in AppPage},
             {
+                "ui.pages.keys.AppPage.HOME",
                 "ui.pages.keys.AppPage.HEAT",
                 "ui.pages.keys.AppPage.FILAMENT_MATERIAL",
                 "ui.pages.keys.AppPage.FILAMENT_ACTION",

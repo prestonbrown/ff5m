@@ -5,6 +5,7 @@ from ui.identity import PageKey
 
 class AppPage(PageKey):
     __key_namespace__ = "ui.pages.keys.AppPage"
+    HOME = "home.dashboard"
     HEAT = "heat.control"
     FILAMENT_MATERIAL = "filament.material"
     FILAMENT_ACTION = "filament.action"

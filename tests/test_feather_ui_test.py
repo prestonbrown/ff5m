@@ -349,8 +349,9 @@ class RunnerContractTest(unittest.TestCase):
         self.assertEqual(labels[0], "baseline")
         self.assertEqual(labels[1], "component-pause-timer")
         self.assertEqual(labels[-1], "component-resume-timer")
-        self.assertEqual(len(captures), 8)
-        self.assertEqual(len(set(captures)), 8)
+        self.assertEqual(len(captures), 9)
+        self.assertEqual(len(set(captures)), 9)
+        self.assertIn("component-default-home", captures)
         self.assertTrue(all(
             label == "baseline" or label.startswith("component-default-")
             for label in captures))

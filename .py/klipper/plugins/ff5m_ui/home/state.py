@@ -9,6 +9,35 @@ import time
 from collections import namedtuple
 
 from ui import PrintState
+from ui.bindings import state
+from ui.identity import StateKey
+
+
+class HomeState(StateKey):
+    __key_namespace__ = "ui.pages.home.state.HomeState"
+
+    NOZZLE = state(int, default=25, unit="C", category="temperature")
+    NOZZLE_TARGET = state(
+        int, default=0, minimum=0, unit="C", category="temperature")
+    BED = state(int, default=24, unit="C", category="temperature")
+    BED_TARGET = state(
+        int, default=0, minimum=0, unit="C", category="temperature")
+    NETWORK_NAME = state(
+        str, default="WIFI / FORGE-X", category="network")
+    NETWORK_ADDRESS = state(
+        str, default="192.168.2.124", category="network")
+    LAST_JOB = state(str, default="BENCHY.GCODE", category="job")
+    MATERIAL = state(str, default="PLA", category="filament")
+    HOMED_AXES = state(str, default="XYZ", category="motion")
+    JOB_ACTIVE = state(bool, default=False, category="job")
+    JOB_STATE = state(str, default="READY", category="job")
+    JOB_FILENAME = state(str, default="NO ACTIVE JOB", category="job")
+    JOB_PROGRESS = state(
+        int, default=0, minimum=0, maximum=100, category="job")
+    JOB_ELAPSED = state(str, default="--:--:--", category="job")
+    JOB_REMAINING = state(str, default="--:--:--", category="job")
+    JOB_DETAIL = state(str, default="", category="job")
+    CLOCK = state(str, default="12:34", category="system")
 
 
 DashboardJob = namedtuple(
@@ -21,6 +50,30 @@ DashboardState = namedtuple(
     ("nozzle", "nozzle_target", "bed", "bed_target", "network_name",
      "network_address", "last_job", "material", "homed_axes", "job",
      "clock"))
+
+
+def dashboard_values(snapshot):
+    """Translate one controller snapshot into typed declarative page state."""
+    job = snapshot.job
+    return {
+        HomeState.NOZZLE: int(snapshot.nozzle),
+        HomeState.NOZZLE_TARGET: int(snapshot.nozzle_target),
+        HomeState.BED: int(snapshot.bed),
+        HomeState.BED_TARGET: int(snapshot.bed_target),
+        HomeState.NETWORK_NAME: str(snapshot.network_name),
+        HomeState.NETWORK_ADDRESS: str(snapshot.network_address),
+        HomeState.LAST_JOB: str(snapshot.last_job),
+        HomeState.MATERIAL: str(snapshot.material),
+        HomeState.HOMED_AXES: str(snapshot.homed_axes),
+        HomeState.JOB_ACTIVE: bool(job.active),
+        HomeState.JOB_STATE: str(job.state),
+        HomeState.JOB_FILENAME: str(job.filename),
+        HomeState.JOB_PROGRESS: int(job.progress),
+        HomeState.JOB_ELAPSED: str(job.elapsed),
+        HomeState.JOB_REMAINING: str(job.remaining),
+        HomeState.JOB_DETAIL: str(job.detail),
+        HomeState.CLOCK: str(snapshot.clock),
+    }
 
 
 def collect_dashboard(host, eventtime, clock=None):
@@ -60,8 +113,8 @@ def dashboard_job(host, eventtime):
     virtual_sdcard = getattr(host, "virtual_sdcard", None)
     stats = (stats_object.get_status(eventtime)
              if stats_object is not None else {})
-    state = str(stats.get("state", "")).lower()
-    active = (state in ("printing", "paused")
+    state_name = str(stats.get("state", "")).lower()
+    active = (state_name in ("printing", "paused")
               or bool(virtual_sdcard is not None
                       and virtual_sdcard.is_active()))
     if not active:
@@ -72,7 +125,7 @@ def dashboard_job(host, eventtime):
     if getattr(host, "print_state", None) == PrintState.PREPARING:
         label = "PREPARING"
     else:
-        label = "PAUSED" if state == "paused" else "PRINTING"
+        label = "PAUSED" if state_name == "paused" else "PRINTING"
     path = (virtual_sdcard.file_path()
             if virtual_sdcard is not None
             and hasattr(virtual_sdcard, "file_path") else "")
