@@ -1,6 +1,7 @@
 ## Typed state declarations and bindings for the Feather UI framework.
 
 import copy
+import inspect
 from enum import Enum
 
 from .identity import StateKey, serialize_key
@@ -376,6 +377,73 @@ def resolve_deep(value, store):
         return dict((key, resolve_deep(item, store))
                     for key, item in value.items())
     return value
+
+
+def _binding_resolution(binding, store):
+    try:
+        return {"resolved": _json_value(binding.resolve(store))}
+    except Exception as error:
+        return {"resolved": None, "error": str(error)}
+
+
+def _callable_metadata(function):
+    result = {
+        "name": getattr(function, "__name__", "<callable>"),
+        "qualname": getattr(function, "__qualname__", None),
+        "module": getattr(function, "__module__", None),
+    }
+    code = getattr(function, "__code__", None)
+    if code is not None:
+        result["location"] = {
+            "file": inspect.getsourcefile(function),
+            "line": int(code.co_firstlineno),
+        }
+    return result
+
+
+def binding_metadata(binding, store):
+    """Return resolved, recursive Designer metadata for one binding.
+
+    The compact :meth:`Binding.as_dict` representation remains suitable for
+    persistent/runtime contracts. This richer form is produced only during
+    reflection, so normal printer rendering does not retain dependency trees.
+    """
+    if not isinstance(binding, Binding):
+        raise TypeError("binding_metadata requires a Binding")
+    keys = [serialize_key(key) for key in binding.keys]
+    if isinstance(binding, DirectBinding):
+        result = {
+            "kind": "direct",
+            "key": serialize_key(binding.key),
+            "keys": keys,
+            "direct_keys": keys,
+            "transitive_keys": [],
+        }
+        result.update(_binding_resolution(binding, store))
+        return result
+    if isinstance(binding, DerivedBinding):
+        inputs = [binding_metadata(item, store) for item in binding.inputs]
+        direct = []
+        transitive = []
+        for item in inputs:
+            target = direct if item.get("kind") == "direct" else transitive
+            for key in item.get("keys", ()):
+                if key not in target:
+                    target.append(key)
+        result = {
+            "kind": "derived",
+            "keys": keys,
+            "direct_keys": direct,
+            "transitive_keys": [key for key in transitive if key not in direct],
+            "inputs": inputs,
+            "callable": _callable_metadata(binding.function),
+        }
+        result.update(_binding_resolution(binding, store))
+        return result
+    result = binding.as_dict()
+    result["keys"] = keys
+    result.update(_binding_resolution(binding, store))
+    return result
 
 
 def binding_keys(value):

@@ -18,8 +18,8 @@ from ff5m_ui.z_offset.constants import (  # noqa: E402
     PAPER_DEFAULT_STEP, PAPER_STEPS,
 )
 from ui import (  # noqa: E402
-    Button, FeatherRenderer, PageKey, PageTree, Rect, SetValue, StateKey,
-    StateStore, Text, bind, derived, state, state_spec,
+    Button, Column, FeatherRenderer, PageKey, PageTree, Rect, SetValue,
+    StateKey, StateStore, Text, When, bind, derived, state, state_spec,
 )
 from ui.reflection import reflect_page  # noqa: E402
 
@@ -161,6 +161,38 @@ class StateDeclarationTest(unittest.TestCase):
         self.assertEqual(model["tree"]["bindings"]["value"]["kind"], "direct")
         self.assertTrue(model["tree"]["bindings"]["value"]["key"].endswith(
             ".BindingState.MODE"))
+
+    def test_reflection_indexes_nested_binding_and_condition_dependencies(self):
+        below_limit = derived(
+            lambda count: count < 5, bind(BindingState.COUNT))
+        visible = derived(
+            lambda below, enabled: below and enabled,
+            below_limit, bind(BindingState.ENABLED))
+        page = PageTree(
+            Column(
+                Text(bind(BindingState.MODE)).ref("mode"),
+                When(visible, Text("ACTIVE").ref("active")).ref(
+                    "active-condition"),
+            ),
+            Rect(0, 0, 100, 40), page_id=BindingPage.MAIN)
+
+        model = reflect_page(page)
+        condition = next(
+            node for node in model["tree"]["children"]
+            if node["type"] == "When")
+        binding = condition["condition"]["binding"]
+        names = lambda keys: {key.rsplit(".", 1)[-1] for key in keys}
+
+        self.assertTrue(condition["condition"]["result"])
+        self.assertEqual(names(binding["keys"]), {"COUNT", "ENABLED"})
+        self.assertEqual(names(binding["direct_keys"]), {"ENABLED"})
+        self.assertEqual(names(binding["transitive_keys"]), {"COUNT"})
+
+        dependencies = model["dependencies"]["states"]
+        count_key = next(key for key in dependencies if key.endswith(".COUNT"))
+        mode_key = next(key for key in dependencies if key.endswith(".MODE"))
+        self.assertEqual(dependencies[count_key]["condition_count"], 1)
+        self.assertEqual(dependencies[mode_key]["property_count"], 1)
 
     def test_state_metadata_exposes_portable_simulation_role(self):
         metadata = StateStore((BindingState.POSITION,)).metadata()[0]

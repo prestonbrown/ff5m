@@ -3,7 +3,9 @@
 from enum import Enum
 
 from .actions import Action, action_metadata
-from .bindings import Binding, StateStore, resolve, resolve_deep
+from .bindings import (
+    Binding, StateStore, binding_metadata, resolve, resolve_deep,
+)
 from .identity import serialize_key
 from .layout import Grid, LAYOUT_SCHEMA, List, Overlay, When, WrapPanel
 from .properties import property_names
@@ -68,7 +70,7 @@ def _properties(node, state):
         spec = specs[name]
         value = spec.value_from(node)
         if isinstance(value, Binding):
-            bindings[name] = value.as_dict()
+            bindings[name] = binding_metadata(value, state)
         try:
             result[name] = _resolve(value, state)
         except Exception as error:
@@ -103,6 +105,20 @@ def _structure(node, children):
     return result
 
 
+def _condition_name(node, child):
+    if node.key is not None:
+        return str(_value(node.key))
+    if child is not None:
+        if child.key is not None:
+            return str(_value(child.key))
+        for name in ("label", "value", "text", "title", "action"):
+            value = getattr(child, name, None)
+            if value is not None and not isinstance(value, Binding):
+                return "%s · %s" % (child.__class__.__name__, _value(value))
+        return child.__class__.__name__
+    return "Condition"
+
+
 def _node(node, page, state, path, inherited_visible=True):
     key = node.key
     ref = None if key is None else _value(key)
@@ -111,13 +127,41 @@ def _node(node, page, state, path, inherited_visible=True):
     except Exception:
         bounds = None
     own_visible = True
+    preview_own_visible = True
+    condition = None
     if isinstance(node, When):
+        predicate = getattr(node, "_designer_original_predicate", node.predicate)
         try:
-            own_visible = bool(resolve(node.predicate, state))
+            own_visible = bool(resolve(predicate, state))
         except Exception:
             own_visible = False
-    visible = bool(inherited_visible and own_visible)
+        try:
+            preview_own_visible = bool(resolve(node.predicate, state))
+        except Exception:
+            preview_own_visible = False
+        binding = (binding_metadata(predicate, state)
+                   if isinstance(predicate, Binding) else None)
+        child = next(iter(node.render_children()), None)
+        condition = {
+            "name": _condition_name(node, child),
+            "result": own_visible,
+            "preview_result": preview_own_visible,
+            "binding": binding,
+            "keys": [] if binding is None else list(binding.get("keys", ())),
+            "predicate_source": property_provenance(
+                node, "predicate", value=predicate),
+            "child": None if child is None else {
+                "type": child.__class__.__name__,
+                "ref": None if child.key is None else _value(child.key),
+            },
+        }
+    visible = bool(inherited_visible and preview_own_visible)
     properties, bindings, property_sources = _properties(node, state)
+    if condition is not None:
+        properties["predicate"] = own_visible
+        property_sources["predicate"] = condition["predicate_source"]
+        if condition["binding"] is not None:
+            bindings["predicate"] = condition["binding"]
     children = [
         _node(child, page, state, "%s.%d" % (path, index), visible)
         for index, child in enumerate(node.render_children())
@@ -139,6 +183,8 @@ def _node(node, page, state, path, inherited_visible=True):
         "bounds": bounds,
         "visible": visible,
         "own_visible": own_visible,
+        "preview_own_visible": preview_own_visible,
+        "condition": condition,
         "layout": _layout(node),
         "property_schema": [item.as_dict() for item in node.property_schema],
         "layout_schema": [item.as_dict() for item in LAYOUT_SCHEMA],
@@ -167,6 +213,63 @@ def _node(node, page, state, path, inherited_visible=True):
     }
 
 
+def _dependency_indexes(tree, state_schema):
+    states = dict((item["key"], {
+        "key": item["key"], "name": item.get("name"),
+        "properties": [], "conditions": [],
+    }) for item in state_schema)
+    conditions = []
+
+    def state_entry(key):
+        return states.setdefault(key, {
+            "key": key, "name": key.rsplit(".", 1)[-1],
+            "properties": [], "conditions": [],
+        })
+
+    def visit(node):
+        condition = node.get("condition")
+        if condition is not None:
+            item = {
+                "node_id": node.get("id"),
+                "node_ref": node.get("ref"),
+                "name": condition.get("name"),
+                "result": condition.get("result"),
+                "preview_result": condition.get("preview_result"),
+                "keys": list(condition.get("keys") or ()),
+                "binding": condition.get("binding"),
+                "child": condition.get("child"),
+            }
+            conditions.append(item)
+            for key in item["keys"]:
+                state_entry(key)["conditions"].append({
+                    "node_id": item["node_id"],
+                    "node_ref": item["node_ref"],
+                    "name": item["name"],
+                    "result": item["result"],
+                })
+        for name, binding in (node.get("bindings") or {}).items():
+            if name == "predicate" and condition is not None:
+                continue
+            direct = set(binding.get("direct_keys") or ())
+            for key in binding.get("keys") or ():
+                state_entry(key)["properties"].append({
+                    "node_id": node.get("id"),
+                    "node_ref": node.get("ref"),
+                    "node_type": node.get("type"),
+                    "property": name,
+                    "direct": key in direct,
+                })
+        for child in node.get("children") or ():
+            visit(child)
+
+    visit(tree)
+    for item in states.values():
+        item["property_count"] = len(item["properties"])
+        item["condition_count"] = len(item["conditions"])
+        item["affected_count"] = item["property_count"] + item["condition_count"]
+    return {"states": states, "conditions": conditions}
+
+
 def reflect_page(page, state=None):
     """Return a Designer-neutral description of one arranged page."""
     if state is None:
@@ -177,6 +280,8 @@ def reflect_page(page, state=None):
         current = page._fresh_state(state)
     tree = _node(page.root, page, current, "0")
     annotate_affected(tree)
+    state_schema = current.metadata()
+    dependencies = _dependency_indexes(tree, state_schema)
     return {
         "protocol_version": 2,
         "schema_version": REFLECTION_SCHEMA_VERSION,
@@ -190,12 +295,13 @@ def reflect_page(page, state=None):
                          "height": page.bounds.height},
         },
         "state": current.as_dict(serialized=True),
-        "state_schema": current.metadata(),
+        "state_schema": state_schema,
+        "dependencies": dependencies,
         "actions": list(page.action_metadata()),
         "bindings": [
             {"key": item["key"], "runtime_type": item.get("type"),
              "nullable": item.get("nullable", False)}
-            for item in current.metadata()
+            for item in state_schema
         ],
         "selection": {"ids": [], "primary": None},
         "clipboard": {"available": False, "nodes": []},
