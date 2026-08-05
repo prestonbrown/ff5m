@@ -299,21 +299,23 @@ class BenchmarkStats(Component):
     covers_bounds = True
     _LABELS = (
         "COMMIT FPS\n"
-        "FRAME MED\n"
-        "FRAME P95\n"
+        "F.MED\n"
+        "F.P95\n"
         "TYPER\n"
         "FLUSH\n"
         "PYTHON\n"
         "MISSED"
     )
 
-    def __init__(self, values, status, key=None):
+    def __init__(self, values, mode, status, key=None):
         super().__init__(key=key)
         self.values = values
+        self.mode = mode
         self.status = status
 
     def draw(self, renderer, state, bounds):
         values = str(resolve(self.values, state))
+        mode = str(resolve(self.mode, state)).upper()
         status = str(resolve(self.status, state))
         flagged = ("WARMUP" in status or "TIMEOUT" in status
                    or "FAILED" in status or "QUEUE" in status)
@@ -337,7 +339,11 @@ class BenchmarkStats(Component):
                 x + width - 14, line_y, value, ThemeColor.BRIGHT,
                 "JetBrainsMono Bold 8pt", "right", "top"))
         commands.append(renderer.text(
-            x + width // 2, y + height - 24, status, status_color,
+            x + width // 2, y + height - 46, mode, ThemeColor.SECONDARY,
+            "JetBrainsMono Bold 8pt", "center", "middle",
+            max_width=width - 24, truncate=True))
+        commands.append(renderer.text(
+            x + width // 2, y + height - 21, status, status_color,
             "JetBrainsMono Bold 8pt", "center", "middle",
             max_width=width - 24, truncate=True))
         return commands

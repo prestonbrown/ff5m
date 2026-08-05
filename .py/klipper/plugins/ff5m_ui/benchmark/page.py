@@ -28,6 +28,7 @@ def create_page():
             cube_surface,
             BenchmarkStats(
                 bind(BenchmarkState.VALUES),
+                bind(BenchmarkState.MODE),
                 bind(BenchmarkState.STATUS),
             ).repaint_boundary(),
         ),),

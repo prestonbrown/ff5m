@@ -25,12 +25,6 @@ class BenchmarkFeature(FeatureHostProxy):
     WINDOW_FRAMES = 120
     STATS_INTERVAL = 6
     MODES = ("text", "lines", "dots")
-    MODE_LABELS = {
-        "text": "TEXT",
-        "lines": "LINES",
-        "dots": "DOTS",
-    }
-
     def __init__(self, host):
         super().__init__(host)
         self.timer = None
@@ -151,17 +145,13 @@ class BenchmarkFeature(FeatureHostProxy):
                 pass
             self.timer = None
 
-    @property
-    def mode_label(self):
-        return self.MODE_LABELS.get(self.mode, self.mode.upper())
-
     def _warmup_status(self):
-        return "%s / WARMUP %d/%d" % (
-            self.mode_label, min(self.frame, self.WARMUP_FRAMES),
-            self.WARMUP_FRAMES)
+        return "WARMUP %d/%d" % (
+            min(self.frame, self.WARMUP_FRAMES), self.WARMUP_FRAMES)
 
-    def _live_status(self):
-        return "%s / LIVE 60 FPS" % self.mode_label
+    @staticmethod
+    def _live_status():
+        return "LIVE / 60 FPS"
 
     def _reset_measurements(self, eventtime):
         self.tracker.cancel()
@@ -233,7 +223,7 @@ class BenchmarkFeature(FeatureHostProxy):
             commands, kind=kind, key=key, receipt=token)
         if not accepted:
             self.tracker.cancel()
-            self.display_status = "%s / QUEUE BUSY" % self.mode_label
+            self.display_status = "QUEUE BUSY"
             self.reactor.update_timer(
                 self.timer, submitted_at + self.FRAME_INTERVAL)
             return submitted_at + self.FRAME_INTERVAL
@@ -308,7 +298,7 @@ class BenchmarkFeature(FeatureHostProxy):
     def _fail(self, status):
         self.tracker.cancel()
         self.active = False
-        self.display_status = "%s / %s" % (self.mode_label, str(status))
+        self.display_status = str(status)
         if self.timer is not None:
             self.reactor.update_timer(self.timer, self.reactor.NEVER)
         page_tree = self.page_tree
