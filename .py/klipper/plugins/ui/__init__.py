@@ -47,6 +47,11 @@ _EXPORT_GROUPS = (
         "MAX_BATCHES", "MAX_BATCH_BYTES", "RenderBatch",
         "RenderBatchQueue", "TyperRenderWorker",
     )),
+    ("render_receipts", (
+        "PendingReceipt", "ReceiptMeasurement", "ReceiptTracker",
+        "RenderReceipt", "parse_render_receipt",
+        "validate_render_receipt_token",
+    )),
     ("identity", (
         "CommandKey", "FrameworkKey", "PageKey", "StateKey",
         "serialize_key",
@@ -117,6 +122,9 @@ __all__ = (
     "SCREEN_HEIGHT", "SCREEN_WIDTH",
     "MAX_BATCHES", "MAX_BATCH_BYTES", "RenderBatch", "RenderBatchQueue",
     "TyperRenderWorker",
+    "PendingReceipt", "ReceiptMeasurement", "ReceiptTracker",
+    "RenderReceipt", "parse_render_receipt",
+    "validate_render_receipt_token",
     "rectangles_overlap", "FeatherRenderer", "Page", "PrintState",
     "FrameworkKey", "PageKey", "StateKey", "CommandKey", "serialize_key",
     "Action", "Navigate", "Back", "Replace", "SetValue", "Toggle",

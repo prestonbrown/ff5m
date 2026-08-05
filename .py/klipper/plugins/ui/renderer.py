@@ -16,6 +16,7 @@ from .font_metrics import (
     get_font_metrics, load_runtime_metrics, set_font_metrics,
 )
 from .numeric_input import NumericInputSpec
+from .render_receipts import validate_render_receipt_token
 from .theme import ThemeColor, ThemeRole, resolve_theme
 from .theme_catalog import (
     DEFAULT_THEME, FALLBACK_THEME, THEME_DIRECTORY, USER_THEME_DIRECTORY,
@@ -89,6 +90,7 @@ class Page(enum.Enum):
     SAFE_Z_BRIEFING = 36
     SAFE_Z_CALIBRATION = 37
     EXTRUDER_CALIBRATION = 38
+    RENDER_BENCHMARK = 39
 
 
 class PrintState(enum.Enum):
@@ -253,7 +255,8 @@ class FeatherRenderer:
             return self._worker.request_restart()
         return False
 
-    def send(self, commands, kind=None, key=None, generation=None):
+    def send(self, commands, kind=None, key=None, generation=None,
+             receipt=None):
         """Publish one immutable batch; never perform IO or lifecycle work."""
         if self._output_frozen or not commands:
             return False
@@ -270,13 +273,16 @@ class FeatherRenderer:
         if kind not in ("critical", "surface", "state", "animation"):
             raise ValueError("unknown render batch kind: %s" % kind)
         try:
-            serialized_size = self._serialized_size(immutable)
+            receipt = (None if receipt is None else
+                       validate_render_receipt_token(receipt))
+            serialized_size = self._serialized_size(immutable, receipt)
         except ValueError as exc:
             logging.warning("[feather_screen] rejected render batch: %s", exc)
             self._batch_queue.reject_submission()
             return False
         batch = RenderBatch(
-            immutable, kind, key, batch_generation, serialized_size, None)
+            immutable, kind, key, batch_generation, serialized_size, None,
+            receipt)
         accepted = self._batch_queue.put_nowait(batch)
         if accepted:
             self._last_submitted_generation = max(
@@ -288,8 +294,9 @@ class FeatherRenderer:
         self._next_batch_kind = kind
         self._next_batch_key = key
 
-    def send_animation(self, commands, key):
-        return self.send(commands, kind="animation", key=key)
+    def send_animation(self, commands, key, receipt=None):
+        return self.send(
+            commands, kind="animation", key=key, receipt=receipt)
 
     def get_status(self):
         if self._worker is None:
@@ -307,11 +314,16 @@ class FeatherRenderer:
         self._semantic_page_id = str(page_id)
 
     @staticmethod
-    def _serialized_size(commands):
+    def _serialized_size(commands, receipt=None):
         """Return exact FIFO bytes without retaining a serialized copy."""
+        receipt = (None if receipt is None else
+                   validate_render_receipt_token(receipt))
         intermediate_suffix_size = len("--end\n".encode("utf-8"))
+        final_command = "--batch flush"
+        if receipt is not None:
+            final_command += " --receipt " + receipt
         final_suffix_size = len(
-            "--batch flush\n--end\n".encode("utf-8"))
+            (final_command + "\n--end\n").encode("utf-8"))
         current_payload_size = 0
         total_size = 0
         have_chunk = False
@@ -332,9 +344,14 @@ class FeatherRenderer:
         return total_size
 
     @staticmethod
-    def _encode_frames(commands):
+    def _encode_frames(commands, receipt=None):
+        receipt = (None if receipt is None else
+                   validate_render_receipt_token(receipt))
         intermediate_suffix = ["--end", ""]
-        final_suffix = ["--batch flush", "--end", ""]
+        final_command = "--batch flush"
+        if receipt is not None:
+            final_command += " --receipt " + receipt
+        final_suffix = [final_command, "--end", ""]
         chunks = []
         current = []
         # Reserve the larger final suffix for every chunk. This keeps every

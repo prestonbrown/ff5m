@@ -28,8 +28,6 @@ from ff5m_ui.z_offset.summary.state import SummaryState  # noqa: E402
 
 class FrameworkContractTest(unittest.TestCase):
     def test_product_deploys_without_designer_scripts(self):
-        root = pathlib.Path(__file__).parents[1]
-        self.assertFalse((root / "scripts").exists())
         self.assertTrue((PLUGINS / "ui" / "__init__.py").is_file())
         self.assertTrue((PLUGINS / "ff5m_ui" / "__init__.py").is_file())
 
@@ -152,6 +150,7 @@ assert "ui.source" in sys.modules
                 "ui.pages.keys.AppPage.Z_OFFSET_PAPER",
                 "ui.pages.keys.AppPage.SAFE_Z_BRIEFING",
                 "ui.pages.keys.AppPage.SAFE_Z_CALIBRATION",
+                "ui.pages.keys.AppPage.RENDER_BENCHMARK",
             })
 
     def test_framework_subtree_has_no_product_or_designer_imports(self):

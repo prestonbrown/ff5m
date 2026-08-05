@@ -135,6 +135,45 @@ class RenderWorkerTest(unittest.TestCase):
         self.assertEqual(MAX_BATCH_BYTES, 64 * 1024)
         self.assertEqual(MAX_PENDING_DRAW, MAX_BATCH_BYTES)
 
+    def test_optional_receipt_changes_only_the_final_flush(self):
+        commands = ("--batch fill -p 1 2 -s 3 4 -c 123456",)
+        ordinary = FeatherRenderer._encode_frames(commands)
+        acknowledged = FeatherRenderer._encode_frames(commands, "7:142")
+
+        self.assertEqual(
+            ordinary[0],
+            b"--batch fill -p 1 2 -s 3 4 -c 123456\n"
+            b"--batch flush\n--end\n")
+        self.assertEqual(
+            acknowledged[0],
+            b"--batch fill -p 1 2 -s 3 4 -c 123456\n"
+            b"--batch flush --receipt 7:142\n--end\n")
+        self.assertEqual(
+            FeatherRenderer._serialized_size(commands, "7:142"),
+            len(acknowledged[0]))
+
+    def test_worker_uses_extended_encoder_only_for_receipt_batches(self):
+        queue = RenderBatchQueue()
+        encoder = mock.Mock(return_value=(b"frame",))
+        worker = TyperRenderWorker(
+            queue, encoder, False,
+            ("typer", "/tmp/draw", "/tmp/event", "/dev/input/touch"),
+            lambda callback: callback(0.0), lambda old, new: None)
+        worker._write_frame = mock.Mock()
+        ordinary = batch("plain")
+        receipt = RenderBatch(
+            ("ack",), "animation", "benchmark", 1,
+            FeatherRenderer._serialized_size(("ack",), "2:3"), None,
+            "2:3")
+
+        worker._render(ordinary)
+        worker._render(receipt)
+
+        self.assertEqual(encoder.call_args_list, [
+            mock.call(("plain",)), mock.call(("ack",), "2:3")])
+        self.assertEqual(worker._write_frame.call_args_list, [
+            mock.call(b"frame"), mock.call(b"frame")])
+
     def test_draw_above_old_limit_fits_one_eight_kib_frame(self):
         command = "--batch text -t " + ("x" * 4000)
 

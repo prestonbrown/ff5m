@@ -94,6 +94,7 @@ blocked = (
     'feather_feature_filament', 'ff5m_ui.filament',
     'feather_feature_calibration', 'feather_feature_z',
     'feather_feature_extruder', 'feather_feature_settings',
+    'feather_feature_benchmark', 'ff5m_ui.benchmark',
     'feather_z_calibration', 'feather_extruder_calibration',
     'feather_mod_settings',
 )
@@ -106,6 +107,8 @@ assert not [name for name in sys.modules
 assert not [name for name in sys.modules
             if name.startswith('ff5m_ui.filament')]
 assert 'ff5m_ui.heat.page' not in sys.modules
+assert not [name for name in sys.modules
+            if name.startswith('ff5m_ui.benchmark')]
 assert '__getattr__' not in feather_screen.FeatherScreen.__dict__
 assert not hasattr(feather_screen, 'ZCalibrationSession')
 assert not hasattr(feather_screen, 'ExtruderCalibrationSession')
@@ -176,6 +179,7 @@ blocked = (
     'feather_feature_filament', 'ff5m_ui.filament',
     'feather_feature_calibration', 'feather_feature_z',
     'feather_feature_extruder', 'feather_feature_settings',
+    'feather_feature_benchmark', 'ff5m_ui.benchmark',
     'feather_z_calibration', 'feather_extruder_calibration',
     'feather_mod_settings',
 )
@@ -188,6 +192,8 @@ assert not [name for name in sys.modules
 assert not [name for name in sys.modules
             if name.startswith('ff5m_ui.filament')]
 assert 'ff5m_ui.heat.page' not in sys.modules
+assert not [name for name in sys.modules
+            if name.startswith('ff5m_ui.benchmark')]
 """)
 
     def test_features_load_sequentially_and_are_singletons(self):

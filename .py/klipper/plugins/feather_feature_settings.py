@@ -32,6 +32,23 @@ class SettingsFeature(FeatherPagesMixin, FeatureHostProxy):
         self.mod_update_token = 0
         self.mod_update_modal_visible = False
         self.mod_update_complete = None
+        self._benchmark_taps = 0
+        self._benchmark_tap_deadline = 0.0
+
+    def _reset_benchmark_taps(self):
+        self._benchmark_taps = 0
+        self._benchmark_tap_deadline = 0.0
+
+    def _handle_benchmark_tap(self):
+        now = self.reactor.monotonic()
+        if now > self._benchmark_tap_deadline:
+            self._benchmark_taps = 0
+        self._benchmark_taps += 1
+        self._benchmark_tap_deadline = now + 2.0
+        if self._benchmark_taps < 5:
+            return
+        self._reset_benchmark_taps()
+        self._show_page(Page.RENDER_BENCHMARK)
 
     @property
     def parameter_options(self):
@@ -71,7 +88,7 @@ class SettingsFeature(FeatherPagesMixin, FeatureHostProxy):
                 "nav.back", "settings.brightness.minus",
                 "settings.brightness.plus", "settings.led.minus",
                 "settings.led.plus", "settings.sound", "settings.theme",
-                "settings.mod"),
+                "settings.mod", "settings.benchmark.tap"),
             Page.MOD_SETTINGS: ("nav.back", "mod.prev", "mod.next"),
             Page.PARAMETER_OPTIONS: (
                 "nav.back", "mod.cancel", "mod.apply", "mod.options.prev",
@@ -91,6 +108,8 @@ class SettingsFeature(FeatherPagesMixin, FeatureHostProxy):
 
     def handle_action(self, page, action):
         if action.startswith("settings."):
+            if action != "settings.benchmark.tap":
+                self._reset_benchmark_taps()
             self._handle_settings_action(action)
             return True
         if action.startswith("mod.") or (
@@ -100,6 +119,7 @@ class SettingsFeature(FeatherPagesMixin, FeatureHostProxy):
         return False
 
     def back(self, page):
+        self._reset_benchmark_taps()
         if page == Page.SETTINGS:
             self._show_page(Page.CONTROL_HOME)
         elif page == Page.MOD_SETTINGS:
@@ -120,6 +140,7 @@ class SettingsFeature(FeatherPagesMixin, FeatureHostProxy):
         return bool(self.mod_update_pending)
 
     def deactivate(self):
+        self._reset_benchmark_taps()
         self.mod_update_pending = False
         self.mod_update_modal_visible = False
         self.mod_update_complete = None

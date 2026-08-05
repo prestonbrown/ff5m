@@ -26,7 +26,10 @@ if not sys.path or sys.path[0] != _PLUGIN_ROOT:
         pass
     sys.path.insert(0, _PLUGIN_ROOT)
 
-from ui import Command, FeatherRenderer, Page, PrintState, ThemeColor
+from ui import (
+    Command, FeatherRenderer, Page, PrintState, ThemeColor,
+    parse_render_receipt,
+)
 from ff5m_ui.move import runtime as move_ui
 from feather_screen_pages import (
         FeatherPagesMixin, FILE_ROWS,
@@ -124,6 +127,8 @@ FEATURE_SPECS = (
     FeatureSpec("settings", _feature_module("feather_feature_settings"),
                 "SettingsFeature", (
         Page.SETTINGS, Page.MOD_SETTINGS, Page.PARAMETER_OPTIONS, Page.MOD_VALUE)),
+    FeatureSpec("benchmark", _feature_module("feather_feature_benchmark"),
+                "BenchmarkFeature", (Page.RENDER_BENCHMARK,)),
 )
 
 
@@ -328,9 +333,16 @@ class FeatherScreen(FeatherPagesMixin, FeatherControlsMixin):
             self.event_handle = self.reactor.register_fd(
                 new_fd, self._process_touch_events)
 
+    def _notify_features(self, hook, *args):
+        manager = getattr(self, "feature_manager", None)
+        notify = None if manager is None else getattr(manager, "notify", None)
+        if notify is not None:
+            notify(hook, *args)
+
     def _renderer_restarted(self):
         if self.renderer.output_frozen:
             return
+        self._notify_features("on_renderer_restarted")
         try:
             if self.print_state == PrintState.INACTIVE:
                 self.renderer.startup_modal(
@@ -561,9 +573,7 @@ class FeatherScreen(FeatherPagesMixin, FeatherControlsMixin):
         self.print_status_text = status
         if self.page in (Page.PRINTING, Page.PAUSED):
             self._draw_print_status(status)
-        manager = getattr(self, "feature_manager", None)
-        if manager is not None:
-            manager.notify("on_print_status", status)
+        self._notify_features("on_print_status", status)
 
     def get_status(self, eventtime):
         status = self.renderer.get_status()
@@ -618,7 +628,15 @@ class FeatherScreen(FeatherPagesMixin, FeatherControlsMixin):
             logging.warning("[feather_screen] oversized partial touch event discarded")
             self.event_partial = ""
         for line in lines:
-            if line.startswith("touch "):
+            receipt = parse_render_receipt(line)
+            if receipt is not None:
+                self._notify_features(
+                    "on_render_receipt", receipt, eventtime)
+            elif line.startswith("render "):
+                logging.warning(
+                    "[feather_screen] invalid render receipt discarded: %r",
+                    line[:MAX_TOUCH_EVENT])
+            elif line.startswith("touch "):
                 self._handle_continuous_touch(line)
             elif line.startswith("tap "):
                 now = self.reactor.monotonic()
@@ -996,8 +1014,10 @@ class FeatherScreen(FeatherPagesMixin, FeatherControlsMixin):
                 and (page != Page.CONTROL_MOVE
                      or getattr(self, "joystick_action", None) is not None)):
             self._stop_joystick()
-        self.previous_page = self.page
+        old_page = self.page
+        self.previous_page = old_page
         self.page = page
+        self._notify_features("on_page_changed", old_page, page)
         if feature is not None:
             feature.render(page)
         elif page == Page.IDLE_HOME:
@@ -1672,10 +1692,8 @@ class FeatherScreen(FeatherPagesMixin, FeatherControlsMixin):
                     PrintState.PREPARING, PrintState.PRINTING,
                     PrintState.PAUSED)):
             self._record_current_print()
-        manager = getattr(self, "feature_manager", None)
-        if manager is not None:
-            manager.notify(
-                "on_print_state_changed", old_state, new_state, stats_state)
+        self._notify_features(
+            "on_print_state_changed", old_state, new_state, stats_state)
         if (new_state in (PrintState.PREPARING, PrintState.PRINTING,
                           PrintState.PAUSED)
                 and getattr(self, "network_process", None) is not None):

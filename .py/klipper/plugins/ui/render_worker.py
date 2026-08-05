@@ -21,7 +21,9 @@ RENDER_STALL_TIMEOUT = 5.0
 HANDOFF_TIMEOUT = 5.0
 
 RenderBatch = namedtuple(
-    "RenderBatch", "commands kind key generation serialized_size control")
+    "RenderBatch",
+    "commands kind key generation serialized_size control receipt",
+    defaults=(None,))
 
 
 class _RestartRequested(Exception):
@@ -266,7 +268,8 @@ class TyperRenderWorker:
             return True
 
     def request_restart(self):
-        batch = RenderBatch((), "critical", "restart", -1, 0, "restart")
+        batch = RenderBatch(
+            (), "critical", "restart", -1, 0, "restart", None)
         return self.queue.put_nowait(batch)
 
     def request_stop(self):
@@ -472,7 +475,11 @@ class TyperRenderWorker:
                 raise RuntimeError("typer draw FIFO closed")
 
     def _render(self, batch):
-        for frame in self.encode_frames(batch.commands):
+        if batch.receipt is None:
+            frames = self.encode_frames(batch.commands)
+        else:
+            frames = self.encode_frames(batch.commands, batch.receipt)
+        for frame in frames:
             self._write_frame(frame)
         self.queue.rendered()
 

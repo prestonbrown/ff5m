@@ -578,6 +578,11 @@ class FeatherPagesMixin:
                  if light_available else None)
         theme = str(getattr(self.renderer, "theme_name", "DEFAULT"))
         commands = self.renderer.begin_page("Settings", back=True)
+        # Hidden diagnostic entry: five title taps within two seconds. The
+        # benchmark feature itself remains unloaded until the fifth tap opens
+        # its page. Keep the hitbox clear of BACK and the emergency action.
+        commands.append(self.renderer.action_hitbox(
+            "settings.benchmark.tap", 170, 7, 450, 46))
         rows = (
             ("SCREEN BRIGHTNESS", brightness, "settings.brightness", 67, True),
             ("CHAMBER LIGHT", light, "settings.led", 151, light_available),
@@ -621,6 +626,9 @@ class FeatherPagesMixin:
 
     def _handle_settings_action(self, action):
         self._require_idle()
+        if action == "settings.benchmark.tap":
+            self._handle_benchmark_tap()
+            return
         if action == "settings.theme":
             parameters = self._mod_parameters()
             for index, param in enumerate(parameters):
