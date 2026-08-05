@@ -44,33 +44,30 @@ class TextCube(Component):
         self.palette_phase = palette_phase
         self.mode = mode
 
-    @staticmethod
-    def _rotate(vertex, angle_x, angle_y, angle_z):
-        x, y, z = vertex
+    @classmethod
+    def _projected_vertices(cls, angle_x, angle_y, angle_z):
+        # Trigonometric functions are relatively expensive on the printer.
+        # Compute the six values once per frame instead of once per vertex.
         cx, sx = math.cos(angle_x), math.sin(angle_x)
         cy, sy = math.cos(angle_y), math.sin(angle_y)
         cz, sz = math.cos(angle_z), math.sin(angle_z)
-
-        y, z = y * cx - z * sx, y * sx + z * cx
-        x, z = x * cy + z * sy, -x * sy + z * cy
-        x, y = x * cz - y * sz, x * sz + y * cz
-        return x, y, z
-
-    @classmethod
-    def _project(cls, vertex):
-        x, y, z = vertex
-        perspective = 3.0 / (4.3 - z)
-        return (
-            (cls._COLUMNS - 1) * 0.5 + x * perspective * 10.2,
-            (cls._ROWS - 1) * 0.5 + y * perspective * 5.2,
-            z,
-        )
-
-    @classmethod
-    def _projected_vertices(cls, angle_x, angle_y, angle_z):
-        return tuple(cls._project(cls._rotate(
-            vertex, angle_x, angle_y, angle_z))
-            for vertex in cls._VERTICES)
+        center_x = (cls._COLUMNS - 1) * 0.5
+        center_y = (cls._ROWS - 1) * 0.5
+        projected = []
+        for x, y, z in cls._VERTICES:
+            rotated_y = y * cx - z * sx
+            rotated_z = y * sx + z * cx
+            rotated_x = x * cy + rotated_z * sy
+            rotated_z = -x * sy + rotated_z * cy
+            x = rotated_x * cz - rotated_y * sz
+            y = rotated_x * sz + rotated_y * cz
+            perspective = 3.0 / (4.3 - rotated_z)
+            projected.append((
+                center_x + x * perspective * 10.2,
+                center_y + y * perspective * 5.2,
+                rotated_z,
+            ))
+        return tuple(projected)
 
     @classmethod
     def _content_bounds(cls, bounds):
@@ -84,64 +81,76 @@ class TextCube(Component):
 
     @classmethod
     def _rows(cls, projected):
-        depth = [[-1000.0] * cls._COLUMNS for _ in range(cls._ROWS)]
-        glyph = [[" "] * cls._COLUMNS for _ in range(cls._ROWS)]
+        # The cube is a fixed 39x13 character surface. Flat buffers avoid the
+        # nested-list, set and tuple churn that was visible in device profiles.
+        columns = cls._COLUMNS
+        rows_count = cls._ROWS
+        cell_count = columns * rows_count
+        depth = [-1000.0] * cell_count
+        glyph = [" "] * cell_count
 
         for edge_index, (start_index, end_index) in enumerate(cls._EDGES):
             start = projected[start_index]
             end = projected[end_index]
-            span = max(abs(end[0] - start[0]), abs(end[1] - start[1]))
+            delta_x = end[0] - start[0]
+            delta_y = end[1] - start[1]
+            delta_z = end[2] - start[2]
+            span = max(abs(delta_x), abs(delta_y))
             steps = max(2, int(math.ceil(span * 2.0)))
+            inverse_steps = 1.0 / steps
             for step in range(steps + 1):
-                ratio = step / float(steps)
-                column = int(round(
-                    start[0] + (end[0] - start[0]) * ratio))
-                row = int(round(
-                    start[1] + (end[1] - start[1]) * ratio))
-                value_depth = start[2] + (end[2] - start[2]) * ratio
-                if not (0 <= column < cls._COLUMNS
-                        and 0 <= row < cls._ROWS):
+                ratio = step * inverse_steps
+                column = int(round(start[0] + delta_x * ratio))
+                row = int(round(start[1] + delta_y * ratio))
+                if not (0 <= column < columns and 0 <= row < rows_count):
                     continue
-                if value_depth < depth[row][column]:
+                index = row * columns + column
+                value_depth = start[2] + delta_z * ratio
+                if value_depth < depth[index]:
                     continue
-                depth[row][column] = value_depth
+                depth[index] = value_depth
                 value = cls._GLYPHS[
                     (edge_index + step) % len(cls._GLYPHS)]
-                glyph[row][column] = (
+                glyph[index] = (
                     value if value_depth >= 0.0 else value.lower())
 
         for x, y, z in projected:
             column, row = int(round(x)), int(round(y))
-            if 0 <= column < cls._COLUMNS and 0 <= row < cls._ROWS:
-                depth[row][column] = max(depth[row][column], z + 0.01)
-                glyph[row][column] = "+"
+            if 0 <= column < columns and 0 <= row < rows_count:
+                index = row * columns + column
+                depth[index] = max(depth[index], z + 0.01)
+                glyph[index] = "+"
 
-        occupied = {
-            (column, row)
-            for row in range(cls._ROWS)
-            for column in range(cls._COLUMNS)
-            if glyph[row][column] != " "
-        }
-        shadow = [[" "] * cls._COLUMNS for _ in range(cls._ROWS)]
-        for column, row in occupied:
-            shadow_column, shadow_row = column + 2, row + 1
-            if (0 <= shadow_column < cls._COLUMNS
-                    and 0 <= shadow_row < cls._ROWS
-                    and (shadow_column, shadow_row) not in occupied):
-                shadow[shadow_row][shadow_column] = ":"
+        shadow = [" "] * cell_count
+        for index, value in enumerate(glyph):
+            if value == " ":
+                continue
+            row, column = divmod(index, columns)
+            shadow_column = column + 2
+            shadow_row = row + 1
+            if shadow_column >= columns or shadow_row >= rows_count:
+                continue
+            shadow_index = shadow_row * columns + shadow_column
+            if glyph[shadow_index] == " ":
+                shadow[shadow_index] = ":"
 
-        rows = []
-        for row in range(cls._ROWS):
-            text = "".join(glyph[row]).rstrip()
-            shadow_text = "".join(shadow[row]).rstrip()
-            visible_depths = tuple(
-                depth[row][column]
-                for column in range(cls._COLUMNS)
-                if glyph[row][column] != " ")
-            average_depth = (sum(visible_depths) / len(visible_depths)
-                             if visible_depths else -1000.0)
-            rows.append((text, shadow_text, average_depth))
-        return tuple(rows)
+        result = []
+        for row in range(rows_count):
+            beginning = row * columns
+            ending = beginning + columns
+            visible_depth = 0.0
+            visible_count = 0
+            for index in range(beginning, ending):
+                if glyph[index] != " ":
+                    visible_depth += depth[index]
+                    visible_count += 1
+            result.append((
+                "".join(glyph[beginning:ending]).rstrip(),
+                "".join(shadow[beginning:ending]).rstrip(),
+                (visible_depth / visible_count
+                 if visible_count else -1000.0),
+            ))
+        return tuple(result)
 
     @staticmethod
     def _row_color(palette, depth, row):
@@ -205,44 +214,31 @@ class TextCube(Component):
 
     @classmethod
     def _draw_line_mode(cls, renderer, bounds, projected, palette):
+        # Keep this mode intentionally close to the primitive under test:
+        # one native line command per cube edge, with no text-like decoration.
         x, y, width, height = bounds
         center_x = x + width * 0.5
         center_y = y + height * 0.5
         scale_x = max(1.0, width / float(cls._COLUMNS + 6))
         scale_y = max(1.0, height / float(cls._ROWS + 5))
-
-        def canvas(point):
-            return (
-                center_x + (point[0] - (cls._COLUMNS - 1) * 0.5) * scale_x,
-                center_y + (point[1] - (cls._ROWS - 1) * 0.5) * scale_y,
-                point[2],
-            )
-
-        points = tuple(canvas(point) for point in projected)
+        points = tuple((
+            center_x + (point[0] - (cls._COLUMNS - 1) * 0.5) * scale_x,
+            center_y + (point[1] - (cls._ROWS - 1) * 0.5) * scale_y,
+            point[2],
+        ) for point in projected)
         commands = []
         edges = sorted(
             enumerate(cls._EDGES),
-            key=lambda item: (points[item[1][0]][2] + points[item[1][1]][2]) * 0.5)
+            key=lambda item: (
+                points[item[1][0]][2] + points[item[1][1]][2]) * 0.5)
         for edge_index, (start_index, end_index) in edges:
             start = points[start_index]
             end = points[end_index]
             depth = (start[2] + end[2]) * 0.5
-            color = cls._edge_color(palette, depth, edge_index)
             commands.append(cls._line(
-                renderer, start[0] + 2, start[1] + 1,
-                end[0] + 2, end[1] + 1, ThemeColor.MUTED, 1))
-            commands.append(cls._line(
-                renderer, start[0], start[1], end[0], end[1], color,
+                renderer, start[0], start[1], end[0], end[1],
+                cls._edge_color(palette, depth, edge_index),
                 2 if depth > 0.25 else 1))
-        for point_x, point_y, depth in points:
-            commands.append(renderer.fill(
-                int(round(point_x)) + 1, int(round(point_y)), 3, 3,
-                ThemeColor.MUTED))
-            size = 3 if depth > 0.2 else 2
-            commands.append(renderer.fill(
-                int(round(point_x)) - size // 2,
-                int(round(point_y)) - size // 2, size, size,
-                palette[2] if depth > 0.2 else palette[1]))
         return commands
 
     @classmethod
@@ -279,12 +275,11 @@ class TextCube(Component):
         for point_x, point_y in occupied:
             shadow.add((point_x + 2, point_y + 1))
         commands = []
-        for point_x, point_y in sorted(shadow):
+        for point_x, point_y in shadow:
             if (point_x, point_y) not in occupied:
                 commands.append(renderer.fill(
                     point_x, point_y, 1, 1, ThemeColor.MUTED))
-        for (point_x, point_y), (_depth, color) in sorted(
-                occupied.items(), key=lambda item: item[1][0]):
+        for (point_x, point_y), (_depth, color) in occupied.items():
             commands.append(renderer.fill(point_x, point_y, 2, 2, color))
         return commands
 
