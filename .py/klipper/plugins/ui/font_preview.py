@@ -6,6 +6,7 @@ out of the printer runtime path. Keys may name an exact face or a face family
 without the trailing ``<size>pt`` suffix.
 """
 
+FONT_PREVIEW_DPI = 160
 
 _MONOSPACE_FALLBACK = (
     "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace")
