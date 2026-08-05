@@ -6,7 +6,7 @@ from .actions import Action, action_metadata
 from .bindings import (
     Binding, StateStore, binding_metadata, resolve, resolve_deep,
 )
-from .identity import serialize_key
+from .identity import FrameworkKey, serialize_key
 from .layout import Grid, LAYOUT_SCHEMA, List, Overlay, When, WrapPanel
 from .properties import property_names
 from .source import (
@@ -17,11 +17,10 @@ from . import REFLECTION_SCHEMA_VERSION
 
 
 def _value(value):
+    if isinstance(value, FrameworkKey):
+        return serialize_key(value)
     if isinstance(value, Enum):
-        try:
-            return serialize_key(value)
-        except TypeError:
-            return value.value
+        return value.value
     return value
 
 
