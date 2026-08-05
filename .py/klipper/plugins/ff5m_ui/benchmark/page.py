@@ -10,6 +10,8 @@ from .state import BenchmarkState
 
 
 CONTENT = Rect(18, 56, 764, 386)
+CUBE_WIDTH = 460
+CUBE_HEIGHT = 300
 
 
 def create_page():
@@ -20,7 +22,9 @@ def create_page():
             bind(BenchmarkState.ANGLE_Z),
             bind(BenchmarkState.PALETTE_PHASE),
             bind(BenchmarkState.MODE),
-        ).repaint_boundary(),
+        ).size(CUBE_WIDTH, CUBE_HEIGHT) \
+            .align(horizontal="center", vertical="center") \
+            .repaint_boundary(),
         Hitbox(NEXT_MODE),
     )
     root = Grid(

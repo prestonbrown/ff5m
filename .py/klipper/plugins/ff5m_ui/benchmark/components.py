@@ -25,6 +25,10 @@ class TextCube(Component):
         (1.0, 1.0, 1.0), (-1.0, 1.0, 1.0),
     )
     _GLYPHS = "FEATHERX"
+    # Keep animated primitives away from the repaint-boundary border.  The
+    # asymmetric vertical inset also moves the cube slightly down: the text
+    # raster extends farther above its anchor than below it on the device.
+    _CONTENT_INSETS = (8, 12, 8, 4)
     _PALETTES = (
         (ThemeColor.PRIMARY, ThemeColor.SECONDARY, ThemeColor.BRIGHT),
         (ThemeColor.SECONDARY, ThemeColor.SUCCESS, ThemeColor.BRIGHT),
@@ -67,6 +71,16 @@ class TextCube(Component):
         return tuple(cls._project(cls._rotate(
             vertex, angle_x, angle_y, angle_z))
             for vertex in cls._VERTICES)
+
+    @classmethod
+    def _content_bounds(cls, bounds):
+        x, y, width, height = bounds
+        left, top, right, bottom = cls._CONTENT_INSETS
+        return (
+            x + left, y + top,
+            max(1, width - left - right),
+            max(1, height - top - bottom),
+        )
 
     @classmethod
     def _rows(cls, projected):
@@ -166,7 +180,10 @@ class TextCube(Component):
     @classmethod
     def _draw_text_mode(cls, renderer, bounds, projected, palette):
         x, y, width, height = bounds
-        advance_x = renderer.font_advance("JetBrainsMono 8pt")
+        advance_x = max(
+            renderer.font_advance("JetBrainsMono 8pt"),
+            renderer.font_advance("JetBrainsMono Bold 8pt"),
+        )
         line_height = 21
         text_width = cls._COLUMNS * advance_x
         text_height = cls._ROWS * line_height
@@ -284,12 +301,16 @@ class TextCube(Component):
             renderer.fill(x, y, width, height, ThemeColor.BACKGROUND),
             renderer.stroke(x, y, width, height, ThemeColor.BORDER, 1),
         ]
+        content_bounds = self._content_bounds(bounds)
         if mode == "lines":
-            commands += self._draw_line_mode(renderer, bounds, projected, palette)
+            commands += self._draw_line_mode(
+                renderer, content_bounds, projected, palette)
         elif mode == "dots":
-            commands += self._draw_dots_mode(renderer, bounds, projected, palette)
+            commands += self._draw_dots_mode(
+                renderer, content_bounds, projected, palette)
         else:
-            commands += self._draw_text_mode(renderer, bounds, projected, palette)
+            commands += self._draw_text_mode(
+                renderer, content_bounds, projected, palette)
         return commands
 
 
