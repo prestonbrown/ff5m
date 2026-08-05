@@ -8,6 +8,7 @@ from collections import deque
 from ui import Page, PrintState, ReceiptTracker
 from ui.lazy import LazyModule
 from feather_feature_manager import FeatureHostProxy
+from ff5m_ui.benchmark.actions import BenchmarkAction, BenchmarkRoute
 
 
 benchmark_page = LazyModule("ff5m_ui.benchmark.page")
@@ -23,6 +24,12 @@ class BenchmarkFeature(FeatureHostProxy):
     WARMUP_FRAMES = 30
     WINDOW_FRAMES = 120
     STATS_INTERVAL = 6
+    MODES = ("text", "lines", "dots")
+    MODE_LABELS = {
+        "text": "TEXT",
+        "lines": "LINES",
+        "dots": "DOTS",
+    }
 
     def __init__(self, host):
         super().__init__(host)
@@ -36,8 +43,9 @@ class BenchmarkFeature(FeatureHostProxy):
         self.next_target = 0.0
         self.samples = deque(maxlen=self.WINDOW_FRAMES)
         self.receipt_times = deque(maxlen=self.WINDOW_FRAMES * 2)
+        self.mode = self.MODES[0]
         self.display_values = "--\n--\n--\n--\n--\n--\n--"
-        self.display_status = "WARMUP 0/%d" % self.WARMUP_FRAMES
+        self.display_status = self._warmup_status()
         self.last_angles = (0.0, 0.0, 0.0)
 
     def initialize(self):
@@ -49,14 +57,32 @@ class BenchmarkFeature(FeatureHostProxy):
             raise ValueError("benchmark feature cannot render %s" % page)
         if self.print_state != PrintState.IDLE:
             raise RuntimeError("Render benchmark requires an idle printer")
-        self._start_session()
-        self._submit_frame(self.reactor.monotonic(), full=True)
+        self.mode = self.MODES[0]
+        self.page_tree = benchmark_page.create_page()
+        self.active = True
+        now = self.reactor.monotonic()
+        self._reset_measurements(now)
+        self._submit_frame(now, full=True)
 
     def allows_action(self, page, action):
         return page == Page.RENDER_BENCHMARK and action == "nav.back"
 
     def handle_action(self, page, action):
         return False
+
+    def resolve_semantic_action(self, page, wire_id):
+        if page != Page.RENDER_BENCHMARK or self.page_tree is None:
+            return None
+        return self.page_tree.resolve_action(wire_id)
+
+    def handle_semantic_action(self, page, action):
+        if page != Page.RENDER_BENCHMARK:
+            return False
+        if (isinstance(action, BenchmarkAction)
+                and action.route == BenchmarkRoute.NEXT_MODE):
+            self._cycle_mode(self.reactor.monotonic())
+            return True
+        raise KeyError("Unsupported benchmark action: %s" % action)
 
     def back(self, page):
         if page != Page.RENDER_BENCHMARK:
@@ -89,7 +115,7 @@ class BenchmarkFeature(FeatureHostProxy):
         if measurement is None:
             return
         if not receipt.success:
-            self._fail("FAILED RECEIPT", eventtime)
+            self._fail("FAILED RECEIPT")
             return
 
         metadata = measurement.metadata or {}
@@ -125,19 +151,29 @@ class BenchmarkFeature(FeatureHostProxy):
                 pass
             self.timer = None
 
-    def _start_session(self):
-        self._stop_session()
-        self.active = True
+    @property
+    def mode_label(self):
+        return self.MODE_LABELS.get(self.mode, self.mode.upper())
+
+    def _warmup_status(self):
+        return "%s / WARMUP %d/%d" % (
+            self.mode_label, min(self.frame, self.WARMUP_FRAMES),
+            self.WARMUP_FRAMES)
+
+    def _live_status(self):
+        return "%s / LIVE 60 FPS" % self.mode_label
+
+    def _reset_measurements(self, eventtime):
+        self.tracker.cancel()
         self.session += 1
         self.frame = 0
-        self.session_started = self.reactor.monotonic()
-        self.next_target = self.session_started
+        self.session_started = float(eventtime)
+        self.next_target = float(eventtime)
         self.samples.clear()
         self.receipt_times.clear()
         self.display_values = "--\n--\n--\n--\n--\n--\n--"
-        self.display_status = "WARMUP 0/%d" % self.WARMUP_FRAMES
+        self.display_status = self._warmup_status()
         self.last_angles = (0.0, 0.0, 0.0)
-        self.page_tree = benchmark_page.create_page()
 
     def _stop_session(self):
         self.active = False
@@ -165,6 +201,7 @@ class BenchmarkFeature(FeatureHostProxy):
             state.ANGLE_Y: angles[1],
             state.ANGLE_Z: angles[2],
             state.PALETTE_PHASE: int(elapsed // 2.5),
+            state.MODE: self.mode,
             state.VALUES: self.display_values,
             state.STATUS: self.display_status,
         }
@@ -196,13 +233,14 @@ class BenchmarkFeature(FeatureHostProxy):
             commands, kind=kind, key=key, receipt=token)
         if not accepted:
             self.tracker.cancel()
-            self.display_status = "QUEUE BUSY"
+            self.display_status = "%s / QUEUE BUSY" % self.mode_label
             self.reactor.update_timer(
                 self.timer, submitted_at + self.FRAME_INTERVAL)
             return submitted_at + self.FRAME_INTERVAL
 
         self.frame += 1
-        self.next_target = max(self.next_target, submitted_at) + self.FRAME_INTERVAL
+        self.next_target = max(
+            self.next_target, submitted_at) + self.FRAME_INTERVAL
         deadline = self.tracker.pending.deadline
         self.reactor.update_timer(self.timer, deadline)
         return deadline
@@ -211,7 +249,7 @@ class BenchmarkFeature(FeatureHostProxy):
         if not self.active:
             return self.reactor.NEVER
         if self.tracker.expired(eventtime):
-            self._fail("RECEIPT TIMEOUT", eventtime)
+            self._fail("RECEIPT TIMEOUT")
             return self.reactor.NEVER
         if self.tracker.pending is not None:
             return self.tracker.pending.deadline
@@ -231,8 +269,7 @@ class BenchmarkFeature(FeatureHostProxy):
     def _refresh_display(self, eventtime):
         completed = self.frame
         if completed <= self.WARMUP_FRAMES:
-            self.display_status = "WARMUP %d/%d" % (
-                completed, self.WARMUP_FRAMES)
+            self.display_status = self._warmup_status()
             return
         samples = tuple(self.samples)
         if not samples:
@@ -258,12 +295,20 @@ class BenchmarkFeature(FeatureHostProxy):
                     item["python_ms"] for item in samples),
                 missed,
             ))
-        self.display_status = "LIVE / 60 FPS CAP"
+        self.display_status = self._live_status()
 
-    def _fail(self, status, eventtime):
+    def _cycle_mode(self, eventtime):
+        if not self.active or self.page != Page.RENDER_BENCHMARK:
+            return
+        index = self.MODES.index(self.mode)
+        self.mode = self.MODES[(index + 1) % len(self.MODES)]
+        self._reset_measurements(eventtime)
+        self._submit_frame(eventtime, full=True)
+
+    def _fail(self, status):
         self.tracker.cancel()
         self.active = False
-        self.display_status = str(status)
+        self.display_status = "%s / %s" % (self.mode_label, str(status))
         if self.timer is not None:
             self.reactor.update_timer(self.timer, self.reactor.NEVER)
         page_tree = self.page_tree
@@ -271,6 +316,7 @@ class BenchmarkFeature(FeatureHostProxy):
             return
         state = benchmark_state.BenchmarkState
         commands = page_tree.update(self.renderer, {
+            state.MODE: self.mode,
             state.VALUES: self.display_values,
             state.STATUS: self.display_status,
         })

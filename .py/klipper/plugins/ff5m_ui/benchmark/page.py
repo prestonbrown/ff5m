@@ -1,9 +1,10 @@
 """Declarative render benchmark page."""
 
-from ui import FLEX, Grid, PageTree, Rect
+from ui import FLEX, Grid, Hitbox, Overlay, PageTree, Rect
 from ui.bindings import bind
 
 from ..keys import AppPage
+from .actions import NEXT_MODE
 from .components import BenchmarkStats, TextCube
 from .state import BenchmarkState
 
@@ -12,14 +13,19 @@ CONTENT = Rect(18, 56, 764, 386)
 
 
 def create_page():
+    cube_surface = Overlay(
+        TextCube(
+            bind(BenchmarkState.ANGLE_X),
+            bind(BenchmarkState.ANGLE_Y),
+            bind(BenchmarkState.ANGLE_Z),
+            bind(BenchmarkState.PALETTE_PHASE),
+            bind(BenchmarkState.MODE),
+        ).repaint_boundary(),
+        Hitbox(NEXT_MODE),
+    )
     root = Grid(
         matrix=((
-            TextCube(
-                bind(BenchmarkState.ANGLE_X),
-                bind(BenchmarkState.ANGLE_Y),
-                bind(BenchmarkState.ANGLE_Z),
-                bind(BenchmarkState.PALETTE_PHASE),
-            ).repaint_boundary(),
+            cube_surface,
             BenchmarkStats(
                 bind(BenchmarkState.VALUES),
                 bind(BenchmarkState.STATUS),
