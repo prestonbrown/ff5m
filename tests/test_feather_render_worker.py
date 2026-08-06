@@ -103,13 +103,14 @@ class RenderQueueTest(unittest.TestCase):
 
 class RenderWorkerTest(unittest.TestCase):
     @staticmethod
-    def worker(queue=None, blending=False):
+    def worker(queue=None, blending=False, raster_acceleration="scalar"):
         renderer = FeatherRenderer()
         return TyperRenderWorker(
             queue or RenderBatchQueue(), renderer._encode_frames, False,
             ("typer", "/tmp/draw", "/tmp/event", "/dev/input/touch"),
             lambda callback: callback(0.0), lambda old, new: None,
-            blending=blending)
+            blending=blending,
+            raster_acceleration=raster_acceleration)
 
     def test_renderer_enables_blending_for_typer_by_default(self):
         renderer = FeatherRenderer()
@@ -439,6 +440,45 @@ class RenderWorkerTest(unittest.TestCase):
         args = popen.call_args.args[0]
         self.assertIn("--blending", args)
         self.assertLess(args.index("--blending"), args.index("batch"))
+
+    def test_optional_neon_acceleration_is_forwarded_to_typer(self):
+        worker = self.worker(raster_acceleration="neon")
+        process = mock.Mock()
+        process.poll.return_value = None
+        worker._wait_for_orphan = lambda timeout: True
+        worker._prepare_fifos = lambda: None
+        worker._schedule_and_wait = lambda old, new: None
+
+        with mock.patch("ui.render_worker.subprocess.call"), \
+                mock.patch("ui.render_worker.os.open", side_effect=(10, 11)), \
+                mock.patch("ui.render_worker.subprocess.Popen",
+                           return_value=process) as popen:
+            worker._launch()
+
+        args = popen.call_args.args[0]
+        acceleration = args.index("--raster-acceleration")
+        self.assertEqual(args[acceleration + 1], "neon")
+        self.assertLess(acceleration, args.index("batch"))
+
+    def test_scalar_acceleration_keeps_legacy_typer_arguments(self):
+        worker = self.worker(raster_acceleration="scalar")
+        process = mock.Mock()
+        process.poll.return_value = None
+        worker._wait_for_orphan = lambda timeout: True
+        worker._prepare_fifos = lambda: None
+        worker._schedule_and_wait = lambda old, new: None
+
+        with mock.patch("ui.render_worker.subprocess.call"), \
+                mock.patch("ui.render_worker.os.open", side_effect=(10, 11)), \
+                mock.patch("ui.render_worker.subprocess.Popen",
+                           return_value=process) as popen:
+            worker._launch()
+
+        self.assertNotIn("--raster-acceleration", popen.call_args.args[0])
+
+    def test_invalid_raster_acceleration_is_rejected(self):
+        with self.assertRaisesRegex(ValueError, "raster acceleration"):
+            FeatherRenderer(raster_acceleration="dsp")
 
     def test_worker_enables_deferred_page_publish_by_default(self):
         worker = self.worker()

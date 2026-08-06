@@ -139,6 +139,11 @@ class FeatherScreen(FeatherPagesMixin, FeatherControlsMixin):
         self.gcode = self.printer.lookup_object("gcode")
         self.debug = config.getboolean("debug", False)
         self.blending = config.getboolean("blending", True)
+        self.raster_acceleration = str(
+            config.get("raster_acceleration", "scalar")).strip().lower()
+        if self.raster_acceleration not in ("scalar", "neon"):
+            raise config.error(
+                "feather_screen raster_acceleration must be scalar or neon")
         self.dim_timeout = config.getfloat("dim_timeout", 60.0, minval=10.0)
         self.z_offset_limit = config.getfloat("z_offset_limit", 2.0, minval=0.1)
         # Parse the retired option so existing user configs keep loading. The
@@ -164,7 +169,8 @@ class FeatherScreen(FeatherPagesMixin, FeatherControlsMixin):
         self.cold_pull_materials = ()
         self.cold_pull_profiles = {}
         self.renderer = FeatherRenderer(
-            self.debug, blending=self.blending)
+            self.debug, blending=self.blending,
+            raster_acceleration=self.raster_acceleration)
         register_async = getattr(
             self.reactor, "register_async_callback", None)
         if register_async is None:

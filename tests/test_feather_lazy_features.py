@@ -149,9 +149,10 @@ class Printer:
         pass
 
 class Config:
-    def __init__(self, blending=None):
+    def __init__(self, blending=None, raster_acceleration=None):
         self.printer = Printer()
         self.blending = blending
+        self.raster_acceleration = raster_acceleration
     def get_printer(self):
         return self.printer
     def getboolean(self, name, default=False):
@@ -161,6 +162,8 @@ class Config:
     def getfloat(self, name, default=None, minval=None):
         return default
     def get(self, name, default=None):
+        if name == 'raster_acceleration' and self.raster_acceleration is not None:
+            return self.raster_acceleration
         return default
     def error(self, message):
         return ValueError(message)
@@ -171,9 +174,20 @@ assert controller.feature_manager.loaded() == ()
 assert controller.gcode.immediate == {'FEATHER_ABORT'}
 assert controller.blending is True
 assert controller.renderer.blending is True
+assert controller.raster_acceleration == 'scalar'
+assert controller.renderer.raster_acceleration == 'scalar'
 disabled = feather_screen.FeatherScreen(Config(False))
 assert disabled.blending is False
 assert disabled.renderer.blending is False
+accelerated = feather_screen.FeatherScreen(Config(raster_acceleration='NeOn'))
+assert accelerated.raster_acceleration == 'neon'
+assert accelerated.renderer.raster_acceleration == 'neon'
+try:
+    feather_screen.FeatherScreen(Config(raster_acceleration='dsp'))
+except ValueError as error:
+    assert 'raster_acceleration must be scalar or neon' in str(error)
+else:
+    raise AssertionError('invalid raster acceleration was accepted')
 blocked = (
     'feather_feature_ui_test',
     'feather_feature_filament', 'ff5m_ui.filament',

@@ -214,7 +214,8 @@ class TyperRenderWorker:
 
     def __init__(self, batch_queue, encode_frames, debug, paths,
                  schedule_async, event_fd_changed, restarted=None,
-                 font_loader=None, blending=False):
+                 font_loader=None, blending=False,
+                 raster_acceleration="scalar"):
         self.queue = batch_queue
         self.encode_frames = encode_frames
         self.debug = bool(debug)
@@ -225,6 +226,10 @@ class TyperRenderWorker:
         self.restarted = restarted
         self.font_loader = font_loader
         self.blending = bool(blending)
+        self.raster_acceleration = str(raster_acceleration).strip().lower()
+        if self.raster_acceleration not in ("scalar", "neon"):
+            raise ValueError("invalid Typer raster acceleration: %s" %
+                             raster_acceleration)
         self.thread = None
         self.process = None
         self.draw_fd = None
@@ -419,6 +424,8 @@ class TyperRenderWorker:
                  "--present-guard-us", str(PRESENT_GUARD_US)]
         if self.blending:
             args.append("--blending")
+        if self.raster_acceleration != "scalar":
+            args += ["--raster-acceleration", self.raster_acceleration]
         args += ["--double-buffered", "--touch-device", self.touch_device,
                  "--event-pipe", self.event_pipe, "batch", "--pipe",
                  self.draw_pipe]

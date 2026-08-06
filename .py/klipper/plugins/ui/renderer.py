@@ -131,9 +131,14 @@ class FeatherRenderer:
     BUTTON_TEXT_PADDING = 16
     HINT_TEXT_PADDING = 20
     DIALOG_TEXT_PADDING = 28
-    def __init__(self, debug=False, theme_directories=None, blending=True):
+    def __init__(self, debug=False, theme_directories=None, blending=True,
+                 raster_acceleration="scalar"):
         self.debug = debug
         self.blending = bool(blending)
+        self.raster_acceleration = str(raster_acceleration).strip().lower()
+        if self.raster_acceleration not in ("scalar", "neon"):
+            raise ValueError("invalid raster acceleration: %s" %
+                             raster_acceleration)
         self._theme_directories = tuple(
             theme_directories or (THEME_DIRECTORY, USER_THEME_DIRECTORY))
         self._theme_catalog = ThemeCatalog.from_directories(
@@ -217,7 +222,8 @@ class FeatherRenderer:
             self._batch_queue, self._encode_frames, self.debug,
             (TYPER_BINARY, DRAW_PIPE, EVENT_PIPE, TOUCH_DEVICE),
             self._async_scheduler, self._worker_event_fd_changed,
-            self._worker_restarted, load_fonts, blending=self.blending)
+            self._worker_restarted, load_fonts, blending=self.blending,
+            raster_acceleration=self.raster_acceleration)
         started = self._worker.start()
         self._busy_label = None
         self._last_footer = None

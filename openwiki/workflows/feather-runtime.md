@@ -194,6 +194,15 @@ untouched ordinary work. The worker encodes frames below 3,584 bytes
 is scheduled on the reactor. Typer also locks the draw FIFO to reject a
 competing daemon.
 
+Raster acceleration is an explicit runtime choice. Typer defaults to
+`--raster-acceleration scalar`; `[feather_screen]` accepts
+`raster_acceleration: scalar|neon` and only adds the Typer option for `neon`.
+The ARM backend checks the kernel NEON capability before accepting the mode and
+otherwise fails startup instead of silently changing rendering behavior. It
+vectorizes solid opaque and source-alpha spans used by fills, strokes, lines,
+and scaled glyph rectangles. Framebuffer publication and individual glyph
+coverage pixels remain on their existing paths.
+
 The `[feather_screen]` status object exposes `worker_state`, queue depth/capacity
 and high-watermark, submitted/rendered/coalesced/dropped batch counters,
 `typer_restarts`, and `worker_last_error` for on-printer diagnosis.
