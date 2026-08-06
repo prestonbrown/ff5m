@@ -105,7 +105,7 @@ def _position_card():
     ).padding(left=12, top=10, right=12, bottom=10) \
      .ref(JoystickRef.POSITION_METRICS)
     return Overlay(
-        Panel(border=border, line_width=1).ref(JoystickRef.POSITION_PANEL),
+        Panel(border=ThemeColor.WARNING, line_width=1).ref(JoystickRef.POSITION_PANEL),
         metrics,
     ).ref(JoystickRef.POSITION_CARD).repaint_boundary()
 
