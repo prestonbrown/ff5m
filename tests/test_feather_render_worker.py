@@ -440,6 +440,28 @@ class RenderWorkerTest(unittest.TestCase):
         self.assertIn("--blending", args)
         self.assertLess(args.index("--blending"), args.index("batch"))
 
+    def test_worker_enables_deferred_page_publish_by_default(self):
+        worker = self.worker()
+        process = mock.Mock()
+        process.poll.return_value = None
+        worker._wait_for_orphan = lambda timeout: True
+        worker._prepare_fifos = lambda: None
+        worker._schedule_and_wait = lambda old, new: None
+
+        with mock.patch("ui.render_worker.subprocess.call"), \
+                mock.patch("ui.render_worker.os.open", side_effect=(10, 11)), \
+                mock.patch("ui.render_worker.subprocess.Popen",
+                           return_value=process) as popen:
+            worker._launch()
+
+        args = popen.call_args.args[0]
+        deferred = args.index("--deferred-page-publish")
+        guard = args.index("--present-guard-us")
+        self.assertEqual(args[deferred + 1], "auto")
+        self.assertEqual(args[guard + 1], "3000")
+        self.assertLess(deferred, args.index("batch"))
+        self.assertLess(guard, args.index("batch"))
+
 
 if __name__ == "__main__":
     unittest.main()

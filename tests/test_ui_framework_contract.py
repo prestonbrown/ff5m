@@ -31,22 +31,23 @@ class FrameworkContractTest(unittest.TestCase):
         self.assertTrue((PLUGINS / "ui" / "__init__.py").is_file())
         self.assertTrue((PLUGINS / "ff5m_ui" / "__init__.py").is_file())
 
-    def test_manifest_is_framework_v2_1(self):
-        self.assertEqual(ui.__version__, "2.1.0")
+    def test_manifest_is_framework_v2_2(self):
+        self.assertEqual(ui.__version__, "2.2.0")
         self.assertEqual(ui.FRAMEWORK_API_VERSION, 2)
         self.assertEqual(ui.REFLECTION_SCHEMA_VERSION, 2)
         self.assertEqual(ui.framework_manifest(), {
             "name": "feather-ui",
-            "version": "2.1.0",
+            "version": "2.2.0",
             "api_version": 2,
             "reflection_schema_version": 2,
             "capabilities": list(ui.FRAMEWORK_CAPABILITIES),
         })
 
     def test_vendored_framework_contract(self):
-        self.assertEqual(ui.__version__, "2.1.0")
+        self.assertEqual(ui.__version__, "2.2.0")
         self.assertEqual(ui.FRAMEWORK_API_VERSION, 2)
         self.assertEqual(ui.REFLECTION_SCHEMA_VERSION, 2)
+        self.assertIn("binding-source-authoring", ui.FRAMEWORK_CAPABILITIES)
         for name in (
                 "ThemeColor", "ThemeRole", "FeatherRenderer", "PageKey",
                 "Action", "StateStore", "DeclarativePage", "Button"):

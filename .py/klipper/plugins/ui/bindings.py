@@ -11,6 +11,16 @@ from .theme import ThemeColor, ThemeRole
 _UNAVAILABLE = object()
 
 
+def _capture_binding(binding, names=()):
+    return None
+
+
+def _install_source_hook(capture_binding):
+    """Install the optional neutral binding provenance hook."""
+    global _capture_binding
+    _capture_binding = capture_binding
+
+
 def _type_name(value_type):
     return "%s.%s" % (
         getattr(value_type, "__module__", "builtins"),
@@ -263,11 +273,12 @@ class Binding:
 
 
 class DirectBinding(Binding):
-    __slots__ = ("key",)
+    __slots__ = ("key", "_source")
 
     def __init__(self, key):
         state_spec(key)
         self.key = key
+        self._source = None
 
     @property
     def keys(self):
@@ -281,7 +292,7 @@ class DirectBinding(Binding):
 
 
 class DerivedBinding(Binding):
-    __slots__ = ("function", "inputs")
+    __slots__ = ("function", "inputs", "_source")
 
     def __init__(self, function, inputs):
         if not callable(function):
@@ -292,6 +303,7 @@ class DerivedBinding(Binding):
         _validate_callable_arity(function, len(inputs))
         self.function = function
         self.inputs = inputs
+        self._source = None
 
     @property
     def keys(self):
@@ -342,11 +354,15 @@ def _validate_callable_arity(function, count):
 
 
 def bind(key):
-    return DirectBinding(key)
+    binding = DirectBinding(key)
+    binding._source = _capture_binding(binding, names=("bind",))
+    return binding
 
 
 def derived(function, *inputs):
-    return DerivedBinding(function, inputs)
+    binding = DerivedBinding(function, inputs)
+    binding._source = _capture_binding(binding, names=("derived",))
+    return binding
 
 
 def resolve(value, store):
@@ -401,6 +417,27 @@ def _callable_metadata(function):
     return result
 
 
+def _binding_source_metadata(binding):
+    trace = getattr(binding, "_source", None)
+    if not isinstance(trace, dict):
+        return None
+    anchor = trace.get("anchor")
+    if not isinstance(anchor, dict):
+        return None
+    return {
+        "file": anchor.get("file"),
+        "relative_file": anchor.get("relative_file"),
+        "range": anchor.get("range"),
+        "expression": anchor.get("expression"),
+        "kind": anchor.get("kind"),
+        "callable": anchor.get("callable"),
+        "fingerprint": anchor.get("fingerprint"),
+        "context_fingerprint": anchor.get("context_fingerprint"),
+        "file_fingerprint": anchor.get("file_fingerprint"),
+        "call_chain": list(trace.get("chain", ())),
+    }
+
+
 def binding_metadata(binding, store):
     """Return resolved, recursive Designer metadata for one binding.
 
@@ -418,6 +455,7 @@ def binding_metadata(binding, store):
             "keys": keys,
             "direct_keys": keys,
             "transitive_keys": [],
+            "source": _binding_source_metadata(binding),
         }
         result.update(_binding_resolution(binding, store))
         return result
@@ -437,6 +475,7 @@ def binding_metadata(binding, store):
             "transitive_keys": [key for key in transitive if key not in direct],
             "inputs": inputs,
             "callable": _callable_metadata(binding.function),
+            "source": _binding_source_metadata(binding),
         }
         result.update(_binding_resolution(binding, store))
         return result

@@ -1,6 +1,6 @@
 ## Public Feather UI package.
 
-__version__ = "2.1.0"
+__version__ = "2.2.0"
 FRAMEWORK_API_VERSION = 2
 REFLECTION_SCHEMA_VERSION = 2
 FRAMEWORK_CAPABILITIES = (
@@ -10,6 +10,7 @@ FRAMEWORK_CAPABILITIES = (
     "typed-state",
     "on-demand-reflection",
     "on-demand-source-provenance",
+    "binding-source-authoring",
     "structural-editing",
     "package-relative-themes",
     "typed-theme-tokens",
