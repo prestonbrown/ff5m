@@ -103,11 +103,17 @@ process:
 
 ```sh
 /root/printer_data/bin/typer \
+  --deferred-page-publish auto \
+  --present-guard-us 3000 \
   --double-buffered \
   --touch-device /dev/input/guppy \
   --event-pipe /tmp/feather-events \
   batch --pipe /tmp/typer
 ```
+
+Feather enables vsync-driven deferred page publication by default. The
+3 ms guard is based on the measured printer timing margin; `auto` preserves the
+synchronous fallback when page flipping or a usable vsync source is absent.
 
 The worker hands the event FIFO to Klipper's reactor through
 `register_async_callback`; touch remains a direct reactor FD for low-latency

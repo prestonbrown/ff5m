@@ -19,6 +19,7 @@ MAX_BATCHES = 16
 MAX_BATCH_BYTES = 64 * 1024
 RENDER_STALL_TIMEOUT = 5.0
 HANDOFF_TIMEOUT = 5.0
+PRESENT_GUARD_US = 3000
 
 RenderBatch = namedtuple(
     "RenderBatch",
@@ -414,6 +415,8 @@ class TyperRenderWorker:
         args = [self.typer_binary]
         if self.debug:
             args.append("--debug")
+        args += ["--deferred-page-publish", "auto",
+                 "--present-guard-us", str(PRESENT_GUARD_US)]
         if self.blending:
             args.append("--blending")
         args += ["--double-buffered", "--touch-device", self.touch_device,
