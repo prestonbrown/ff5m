@@ -248,12 +248,10 @@ def _resolved_tracks(total, tracks, gap):
     return tuple(result)
 
 
-def split(rect, direction, tracks, gap=0):
+def _split_sizes(rect, direction, sizes, gap=0):
     horizontal = direction == "horizontal"
     if not horizontal and direction != "vertical":
         raise ValueError("Unknown split direction: %s" % direction)
-    sizes = _resolved_tracks(
-        rect.width if horizontal else rect.height, tracks, gap)
     result = []
     cursor = rect.x if horizontal else rect.y
     for size in sizes:
@@ -263,6 +261,15 @@ def split(rect, direction, tracks, gap=0):
             result.append(Rect(rect.x, cursor, rect.width, size))
         cursor += size + int(gap)
     return tuple(result)
+
+
+def split(rect, direction, tracks, gap=0):
+    horizontal = direction == "horizontal"
+    if not horizontal and direction != "vertical":
+        raise ValueError("Unknown split direction: %s" % direction)
+    sizes = _resolved_tracks(
+        rect.width if horizontal else rect.height, tracks, gap)
+    return _split_sizes(rect, direction, sizes, gap)
 
 
 def subdivision_positions(start, span, depth):
@@ -676,6 +683,18 @@ class Node:
         """
         return None
 
+    def content_extent(self, direction, cross_extent=None):
+        """Return an optional minimum content size for intrinsic containers.
+
+        Flow containers use :meth:`preferred_extent` only when a child opts into
+        content sizing.  Intrinsic containers such as an auto-sized ``Grid``
+        additionally need the natural size of their cells even when a leaf would
+        normally stretch in a Row/Column.  The default keeps both contracts the
+        same; leaves may publish a more useful minimum without changing ordinary
+        flow behavior.
+        """
+        return self.preferred_extent(direction, cross_extent)
+
     def auto_gap_extent(self, direction, cross_extent=None):
         """Return an intrinsic size used only by ``gap=None`` lists.
 
@@ -837,11 +856,18 @@ class List(Node):
         options = child.layout_options
         margin = options.margin
         size = options.width if self.direction == "horizontal" else options.height
+        preferred_cross = cross_extent
+        if preferred_cross is not None:
+            preferred_cross = max(
+                0, int(preferred_cross) -
+                (margin.vertical if self.direction == "horizontal"
+                 else margin.horizontal))
         if size is None:
-            preferred = child.preferred_extent(self.direction, cross_extent)
+            preferred = child.preferred_extent(
+                self.direction, preferred_cross)
             if preferred is None and self.gap is None:
                 preferred = child.auto_gap_extent(
-                    self.direction, cross_extent)
+                    self.direction, preferred_cross)
             if preferred is not None:
                 size = preferred
         if size is None:
@@ -1046,10 +1072,100 @@ class Grid(Node):
             raise ValueError("Grid span is outside its tracks")
         return rects[start], rects[start + count - 1]
 
+    @staticmethod
+    def _distribute(value, indexes, tracks):
+        if value <= 0 or not indexes:
+            return dict((index, 0) for index in indexes)
+        total_weight = sum(tracks[index].weight for index in indexes)
+        result = dict(
+            (index, value * tracks[index].weight // total_weight)
+            for index in indexes)
+        remainder = value - sum(result.values())
+        for offset in range(remainder):
+            result[indexes[offset % len(indexes)]] += 1
+        return result
+
+    def _intrinsic_row_sizes(self, width):
+        if not self.rows:
+            return ()
+        column_sizes = _resolved_tracks(width, self.columns, self.column_gap)
+        sizes = [
+            0 if isinstance(track, Flex) else int(track)
+            for track in self.rows]
+        flexible = [
+            isinstance(track, Flex) for track in self.rows]
+        measured = False
+        for item in self.cells:
+            child = item.child
+            margin = child.layout_options.margin
+            first = item.column
+            last = item.column + item.column_span
+            cell_width = (
+                sum(column_sizes[first:last]) +
+                self.column_gap * max(0, item.column_span - 1))
+            child_width = max(0, cell_width - margin.horizontal)
+            extent = child.layout_options.height
+            if extent is None:
+                extent = child.content_extent("vertical", child_width)
+            if extent is None:
+                continue
+            measured = True
+            required = int(extent) + margin.vertical
+            row_first = item.row
+            row_last = item.row + item.row_span
+            current = (
+                sum(sizes[row_first:row_last]) +
+                self.row_gap * max(0, item.row_span - 1))
+            indexes = [
+                index for index in range(row_first, row_last)
+                if flexible[index]]
+            additions = self._distribute(
+                max(0, required - current), indexes, self.rows)
+            for index, amount in additions.items():
+                sizes[index] += amount
+        if any(flexible) and not measured:
+            return None
+        return tuple(sizes)
+
+    def preferred_extent(self, direction, cross_extent=None):
+        if direction != "vertical" or cross_extent is None:
+            return None
+        width = (self.layout_options.width
+                 if self.layout_options.width is not None
+                 else int(cross_extent))
+        width = max(0, width - self.layout_options.padding.horizontal)
+        sizes = self._intrinsic_row_sizes(width)
+        if sizes is None:
+            return None
+        return (sum(sizes) + self.row_gap * max(0, len(sizes) - 1) +
+                self.layout_options.padding.vertical)
+
+    def _row_areas(self, bounds):
+        # Preserve the legacy flex-track behavior unless this Grid is actually
+        # being content-sized by a vertical flow parent.  Intrinsic measurement
+        # is a sizing hint for Column/List; it must not silently redefine row
+        # tracks of existing fixed/stretch Grid layouts.
+        parent = self.parent
+        if (self.layout_options.height is not None or
+                not isinstance(parent, List) or parent.direction != "vertical"):
+            return split(bounds, "vertical", self.rows, self.row_gap)
+        intrinsic = self._intrinsic_row_sizes(bounds.width)
+        if intrinsic is None:
+            return split(bounds, "vertical", self.rows, self.row_gap)
+        minimum = (sum(intrinsic) +
+                   self.row_gap * max(0, len(self.rows) - 1))
+        if bounds.height != minimum:
+            return split(bounds, "vertical", self.rows, self.row_gap)
+        return _split_sizes(bounds, "vertical", intrinsic, self.row_gap)
+
+    def grid_areas(self, bounds):
+        return (
+            split(bounds, "horizontal", self.columns, self.column_gap),
+            self._row_areas(bounds),
+        )
+
     def _arrange(self, bounds, result):
-        column_areas = split(
-            bounds, "horizontal", self.columns, self.column_gap)
-        row_areas = split(bounds, "vertical", self.rows, self.row_gap)
+        column_areas, row_areas = self.grid_areas(bounds)
         for item in self.cells:
             first_column, last_column = self._span(
                 column_areas, item.column, item.column_span)

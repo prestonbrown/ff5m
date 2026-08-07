@@ -293,11 +293,7 @@ class Text(Component):
         elif name == "text_color" and self.color is None:
             self.color = value
 
-    def preferred_extent(self, direction, cross_extent=None):
-        if direction != "vertical" or not self.auto_height:
-            return None
-        if not isinstance(self.value, str):
-            return None
+    def _content_height(self, cross_extent=None, dynamic_minimum=False):
         metrics = get_font_metrics()
         font = self.font if isinstance(self.font, str) else "JetBrainsMono 8pt"
         metric = metrics.metric(font)
@@ -306,17 +302,36 @@ class Text(Component):
         if wrap:
             width = self.kwargs.get("max_width")
             if width is None:
-                width = cross_extent
-            if width is None:
+                width = (self.layout_options.width
+                         if self.layout_options.width is not None
+                         else cross_extent)
+            if width is None and not dynamic_minimum:
                 return None
-            width = max(1, int(width) - self.layout_options.padding.horizontal)
+            if width is not None:
+                width = max(1, int(width) - self.layout_options.padding.horizontal)
         maximum = self.kwargs.get("max_height")
-        text_height = metrics.text_height(
-            self.value, font, max_width=width, wrap=wrap)
+        if isinstance(self.value, (str, int, float)):
+            text_height = metrics.text_height(
+                self.value, font, max_width=width, wrap=wrap and width is not None)
+        elif dynamic_minimum:
+            text_height = metric.glyph_height
+        else:
+            return None
         height = text_height + self.layout_options.padding.vertical
         if maximum is not None:
             height = min(height, int(maximum))
         return max(metric.glyph_height, height)
+
+    def preferred_extent(self, direction, cross_extent=None):
+        wrap = bool(self.kwargs.get("wrap", False))
+        if direction != "vertical" or not (self.auto_height or wrap):
+            return None
+        return self._content_height(cross_extent)
+
+    def content_extent(self, direction, cross_extent=None):
+        if direction != "vertical":
+            return None
+        return self._content_height(cross_extent, dynamic_minimum=True)
 
     def draw(self, renderer, state, bounds):
         horizontal = resolve(self.horizontal, state)
