@@ -6,7 +6,9 @@
 
 import os
 import pathlib
+import queue
 import tempfile
+import threading
 import unittest
 from unittest import mock
 
@@ -162,6 +164,97 @@ def base_controller(state="idle"):
 
 
 class FileWorkflowTest(unittest.TestCase):
+    def test_file_scan_worker_keeps_io_off_caller_and_delivers_on_scheduler(self):
+        callbacks = queue.Queue()
+        delivered = []
+        worker = FILES.FileScanWorker(callbacks.put)
+        try:
+            self.assertTrue(worker.submit(
+                lambda: threading.current_thread().name,
+                lambda value, error: delivered.append((value, error))))
+            callback = callbacks.get(timeout=1.0)
+            self.assertEqual(delivered, [])
+            callback(0.0)
+            self.assertEqual(delivered, [("feather-file-scan", None)])
+        finally:
+            worker.stop()
+        self.assertFalse(worker.submit(lambda: None, lambda value, error: None))
+
+    def test_file_browser_loads_in_background_and_pages_use_cached_scan(self):
+        class PendingWorker:
+            def __init__(self):
+                self.requests = []
+
+            def submit(self, task, callback):
+                self.requests.append((task, callback))
+                return True
+
+        controller = base_controller()
+        controller.page = FEATHER.Page.FILE_BROWSER
+        controller.file_source = "internal"
+        controller.file_page = 0
+        controller.file_entries = []
+        controller.file_entry_cache = {}
+        controller.file_scan_loading = False
+        controller.file_scan_source = None
+        controller.file_scan_phase = 0
+        controller.file_scan_token = 0
+        controller.usb_storage = None
+        controller.file_scan_worker = PendingWorker()
+        controller.renderer = FEATHER.FeatherRenderer()
+        batches = []
+        controller.renderer.send = batches.append
+
+        old_entries = [FILES.FileEntry(
+            "old-%d.gcode" % index, "/data/old-%d.gcode" % index)
+            for index in range(7)]
+        new_entries = [FILES.FileEntry(
+            "new-%d.gcode" % index, "/data/new-%d.gcode" % index)
+            for index in range(7)]
+        controller._build_file_scan_task = lambda source: lambda: old_entries
+
+        controller._render_file_browser()
+
+        self.assertEqual(len(controller.file_scan_worker.requests), 1)
+        self.assertTrue(controller.file_scan_loading)
+        self.assertTrue(any(
+            "LOADING PRINT FILES" in command
+            for command in batches[-1]))
+
+        # A newer request supersedes an in-flight result. This covers USB
+        # changes and explicit refreshes racing a slow flash scan.
+        first_callback = controller.file_scan_worker.requests[0][1]
+        controller._invalidate_file_entries("internal")
+        controller.file_scan_loading = False
+        controller._build_file_scan_task = lambda source: lambda: new_entries
+        controller._start_file_scan("internal")
+        second_callback = controller.file_scan_worker.requests[1][1]
+        first_callback(old_entries, None)
+        self.assertNotIn("internal", controller.file_entry_cache)
+        second_callback(new_entries, None)
+
+        self.assertFalse(controller.file_scan_loading)
+        self.assertIs(controller.file_entry_cache["internal"], new_entries)
+        self.assertIn("file.refresh", controller.renderer._buttons)
+        requests_before_page_change = len(
+            controller.file_scan_worker.requests)
+
+        controller._handle_file_action("file.next")
+
+        self.assertEqual(controller.file_page, 1)
+        self.assertEqual(
+            len(controller.file_scan_worker.requests),
+            requests_before_page_change)
+
+        controller._build_file_scan_task = lambda source: lambda: new_entries
+        controller._handle_file_action("file.refresh")
+
+        self.assertEqual(controller.file_source, "internal")
+        self.assertEqual(controller.file_page, 0)
+        self.assertEqual(
+            len(controller.file_scan_worker.requests),
+            requests_before_page_change + 1)
+
     def test_file_browser_flattens_two_levels_and_skips_hidden_trees(self):
         with tempfile.TemporaryDirectory() as root:
             level_one = os.path.join(root, "models")
@@ -319,7 +412,10 @@ class FileWorkflowTest(unittest.TestCase):
         self.assertEqual(controller.file_source, "usb")
         self.assertEqual(rendered, ["usb"])
 
+        controller.file_page = 3
         controller._handle_file_action("file.refresh")
+        self.assertEqual(controller.file_source, "usb")
+        self.assertEqual(controller.file_page, 0)
         self.assertEqual(rendered, ["usb", "usb"])
 
         controller.page = FEATHER.Page.FILE_BROWSER

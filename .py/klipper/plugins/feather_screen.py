@@ -35,7 +35,8 @@ from feather_screen_pages import (
         FeatherPagesMixin, FILE_ROWS,
         NETWORK_HELPER, NETWORK_TIMEOUTS)
 from feather_files import (
-        DEFAULT_HISTORY_PATH, PrintHistory, UsbStorageMonitor)
+        DEFAULT_HISTORY_PATH, FileScanWorker, PrintHistory,
+        UsbStorageMonitor)
 from feather_screen_controls import (
         FeatherControlsMixin,
         joystick_ui, joystick_motion,
@@ -64,7 +65,8 @@ EXACT_ACTIONS = {
                      "nav.network"),
     Page.CONTROL_HOME: ("nav.back", "nav.move", "nav.heat", "nav.calibration",
                         "nav.settings"),
-    Page.FILE_BROWSER: ("nav.back", "file.prev", "file.next"),
+    Page.FILE_BROWSER: (
+        "nav.back", "file.prev", "file.next", "file.refresh"),
     Page.FILE_CONFIRM: ("nav.back", "file.start"),
     Page.PRINTING: ("nav.home", "print.pause", "print.filament",
                     "print.cancel", "print.z"),
@@ -176,9 +178,11 @@ class FeatherScreen(FeatherPagesMixin, FeatherControlsMixin):
         if register_async is None:
             raise config.error(
                 "feather_screen requires reactor.register_async_callback")
+        self.file_scan_schedule_async = register_async
         self.renderer.configure_worker(
             register_async, self._renderer_event_fd_changed,
             self._renderer_restarted)
+        self.file_scan_worker = FileScanWorker(register_async)
         self.feature_manager = LazyFeatureManager(self, FEATURE_SPECS)
         self.safety = self._build_safety_registry()
 
@@ -212,6 +216,11 @@ class FeatherScreen(FeatherPagesMixin, FeatherControlsMixin):
 
         self.file_page = 0
         self.file_entries = []
+        self.file_entry_cache = {}
+        self.file_scan_loading = False
+        self.file_scan_source = None
+        self.file_scan_phase = 0
+        self.file_scan_token = 0
         self.selected_file = None
         self.file_source = "internal"
         self.usb_storage = None
@@ -424,6 +433,12 @@ class FeatherScreen(FeatherPagesMixin, FeatherControlsMixin):
         self.startup_timer = None
 
     def _init(self):
+        if getattr(self, "file_scan_worker", None) is None:
+            self.file_scan_worker = FileScanWorker(
+                self.file_scan_schedule_async)
+        self.file_entry_cache.clear()
+        self.file_scan_loading = False
+        self.file_scan_source = None
         self.shutdown_active = False
         self.restart_pending = False
         self.startup_restarting = False
@@ -557,6 +572,12 @@ class FeatherScreen(FeatherPagesMixin, FeatherControlsMixin):
         if self.usb_storage is not None:
             self.usb_storage.stop()
             self.usb_storage = None
+        file_scan_worker = getattr(self, "file_scan_worker", None)
+        if file_scan_worker is not None:
+            self.file_scan_token = getattr(self, "file_scan_token", 0) + 1
+            self.file_scan_loading = False
+            file_scan_worker.stop()
+            self.file_scan_worker = None
         self._cleanup_network_credentials()
         self.pending_action = None
         self.cancel_requested = False
@@ -922,6 +943,7 @@ class FeatherScreen(FeatherPagesMixin, FeatherControlsMixin):
             elif action == "nav.files":
                 self.file_page = 0
                 self.file_source = "internal"
+                self._invalidate_file_entries("internal")
                 self._show_page(Page.FILE_BROWSER)
             elif action == "nav.control":
                 self._require_idle()
@@ -958,6 +980,7 @@ class FeatherScreen(FeatherPagesMixin, FeatherControlsMixin):
                 else:
                     self.file_page = 0
                     self.file_source = "internal"
+                    self._invalidate_file_entries("internal")
                     self._show_page(Page.FILE_BROWSER)
             elif owner is not None:
                 if not owner.handle_action(self.page, action):
@@ -1636,7 +1659,14 @@ class FeatherScreen(FeatherPagesMixin, FeatherControlsMixin):
                 elif self.page in (Page.PRINTING, Page.PAUSED):
                     self.pending_action = None
                     self._show_page(self.page)
-        if self.busy_message is not None:
+        if (getattr(self, "file_scan_loading", False)
+                and self.page == Page.FILE_BROWSER):
+            self.file_scan_phase = (self.file_scan_phase + 1) % 5
+            label = ("LOADING USB FILES..."
+                     if getattr(self, "file_scan_source", None) == "usb"
+                     else "LOADING PRINT FILES...")
+            self.renderer.loader(label, self.file_scan_phase)
+        elif self.busy_message is not None:
             self.busy_phase = (self.busy_phase + 1) % 5
             self.renderer.loader(self.busy_message, self.busy_phase)
         elif self.page in (Page.PRINTING, Page.PAUSED):
@@ -1678,6 +1708,10 @@ class FeatherScreen(FeatherPagesMixin, FeatherControlsMixin):
         monitor.resume(eventtime)
         if not monitor.tick(eventtime):
             return
+        self._invalidate_file_entries()
+        self.file_scan_token = getattr(self, "file_scan_token", 0) + 1
+        self.file_scan_loading = False
+        self.file_scan_source = None
         if (not monitor.available
                 and getattr(self, "file_source", "internal") == "usb"):
             self.file_source = "internal"

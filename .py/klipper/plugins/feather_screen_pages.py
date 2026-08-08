@@ -83,36 +83,115 @@ class FeatherPagesMixin:
                                              font="JetBrainsMono 12pt")
         self.renderer.send(commands)
 
-    def _load_file_entries(self):
+    def _normalize_file_source(self):
+        source = getattr(self, "file_source", "internal")
+        usb_storage = getattr(self, "usb_storage", None)
+        if source == "usb" and (
+                usb_storage is None or not usb_storage.available):
+            source = "internal"
+            self.file_source = source
+            self.file_page = 0
+        return source
+
+    def _build_file_scan_task(self, source):
         root = self.virtual_sdcard.sdcard_dirname
         history = getattr(self, "print_history", None)
+        history_snapshot = dict(getattr(history, "timestamps", {}))
         usb_storage = getattr(self, "usb_storage", None)
-        if getattr(self, "file_source", "internal") == "usb":
-            if usb_storage is None or not usb_storage.available:
-                self.file_source = "internal"
-                self.file_page = 0
-            else:
+        if source == "usb":
+            mount_point = usb_storage.mount_point
+            history_prefix = os.path.relpath(mount_point, root)
+
+            def scan_usb():
                 try:
-                    self.file_entries = scan_gcode_files(
-                        usb_storage.mount_point, history,
-                        history_prefix=os.path.relpath(
-                            usb_storage.mount_point, root))
+                    return scan_gcode_files(
+                        mount_point, history_snapshot,
+                        history_prefix=history_prefix)
                 except RuntimeError as exc:
                     # Removable media can disappear between the monitor tick
                     # and directory traversal. Keep the UI responsive; the
                     # next tick will remove the USB entry if its mount is gone.
                     logging.info(
                         "[feather_screen] USB file scan deferred: %s", exc)
-                    self.file_entries = []
-                return
+                    return []
+            return scan_usb
 
         excluded = ((usb_storage.mount_point,)
                     if usb_storage is not None else ())
-        self.file_entries = scan_gcode_files(
-            root, history, excluded_paths=excluded)
-        if usb_storage is not None and usb_storage.available:
-            self.file_entries.insert(0, FileEntry(
-                "USB", usb_storage.mount_point, directory=True))
+        usb_available = bool(
+            usb_storage is not None and usb_storage.available)
+        usb_mount_point = (usb_storage.mount_point
+                           if usb_storage is not None else None)
+
+        def scan_internal():
+            entries = scan_gcode_files(
+                root, history_snapshot, excluded_paths=excluded)
+            if usb_available:
+                entries.insert(0, FileEntry(
+                    "USB", usb_mount_point, directory=True))
+            return entries
+        return scan_internal
+
+    def _load_file_entries(self):
+        """Synchronous compatibility helper for tests and maintenance tools."""
+        source = self._normalize_file_source()
+        self.file_entries = self._build_file_scan_task(source)()
+
+    def _invalidate_file_entries(self, source=None):
+        cache = getattr(self, "file_entry_cache", None)
+        if cache is None:
+            return
+        if source is None:
+            cache.clear()
+        else:
+            cache.pop(source, None)
+
+    def _render_file_loading(self, source):
+        self.file_scan_loading = True
+        self.file_scan_source = source
+        self.file_scan_phase = 0
+        label = ("LOADING USB FILES..." if source == "usb"
+                 else "LOADING PRINT FILES...")
+        self.renderer.loader(label, self.file_scan_phase)
+
+    def _start_file_scan(self, source):
+        if (getattr(self, "file_scan_loading", False)
+                and getattr(self, "file_scan_source", None) == source
+                and getattr(self, "file_scan_token", 0) > 0):
+            return
+        self.file_scan_token = getattr(self, "file_scan_token", 0) + 1
+        token = self.file_scan_token
+        self._render_file_loading(source)
+        task = self._build_file_scan_task(source)
+        submitted = self.file_scan_worker.submit(
+            task, lambda entries, error:
+            self._finish_file_scan(token, source, entries, error))
+        if not submitted:
+            self._finish_file_scan(
+                token, source, None, RuntimeError("File scanner stopped"))
+
+    def _finish_file_scan(self, token, source, entries, error):
+        if token != getattr(self, "file_scan_token", 0):
+            return
+        self.file_scan_loading = False
+        self.file_scan_source = None
+        if error is not None:
+            logging.error(
+                "[feather_screen] unable to scan %s files: %s",
+                source, error)
+            entries = []
+            message = "Unable to load USB files" if source == "usb" \
+                else "Unable to load print files"
+        else:
+            message = None
+        self.file_entry_cache[source] = entries
+        if source == getattr(self, "file_source", "internal"):
+            self.file_entries = entries
+        if (self.page == Page.FILE_BROWSER
+                and source == getattr(self, "file_source", "internal")):
+            self._render_file_browser()
+            if message is not None:
+                self._toast(message)
 
     def _record_current_print(self):
         history = getattr(self, "print_history", None)
@@ -126,18 +205,32 @@ class FeatherPagesMixin:
         root = virtual_sdcard.sdcard_dirname
         if history.record(root, path, time.time()):
             self.last_job_name = os.path.basename(path)
+            self._invalidate_file_entries()
 
     def _render_file_browser(self):
-        self._load_file_entries()
+        # Isolated tests and third-party extensions that construct the mixin
+        # without FeatherScreen keep the old synchronous helper behavior.
+        if getattr(self, "file_scan_worker", None) is None:
+            self._load_file_entries()
+            return self._render_file_entries()
+        source = self._normalize_file_source()
+        if source not in self.file_entry_cache:
+            if not (getattr(self, "file_scan_loading", False)
+                    and getattr(self, "file_scan_source", None) == source):
+                self._start_file_scan(source)
+            return
+        self.file_entries = self.file_entry_cache[source]
+        self._render_file_entries()
+
+    def _render_file_entries(self):
         pagination = Pagination(self.file_entries, self.file_page, FILE_ROWS)
         self.file_page = pagination.page
         usb_page = getattr(self, "file_source", "internal") == "usb"
         title = "USB files" if usb_page else "Print files"
         commands = self.renderer.begin_page(title, back=True)
-        if usb_page:
-            commands += self.renderer.button(
-                "file.refresh", 640, 7, 146, 46, "REFRESH",
-                font="JetBrainsMono Bold 8pt")
+        commands += self.renderer.button(
+            "file.refresh", 640, 7, 146, 46, "REFRESH",
+            font="JetBrainsMono Bold 8pt")
         rows = pagination.visible
         for index, entry in enumerate(rows):
             y = 62 + index * 65
@@ -162,6 +255,9 @@ class FeatherPagesMixin:
             self.file_page += 1
             self._render_file_browser()
         elif action == "file.refresh":
+            self.file_page = 0
+            self._invalidate_file_entries(
+                getattr(self, "file_source", "internal"))
             self._render_file_browser()
         elif action == "file.start":
             self._start_selected_file()
@@ -177,6 +273,7 @@ class FeatherPagesMixin:
                 self.file_source = "usb"
                 self.file_page = 0
                 self.selected_file = None
+                self._invalidate_file_entries("usb")
                 self._render_file_browser()
                 return
             self.selected_file = entry
