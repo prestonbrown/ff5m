@@ -936,6 +936,19 @@ class RendererStateTest(unittest.TestCase):
         self.assertEqual(
             set(renderer._buttons), {"dialog.close", "dialog.apply"})
 
+    def test_dialog_supports_five_lines_below_title(self):
+        renderer = FEATHER.FeatherRenderer()
+        lines = tuple("LINE %d" % index for index in range(1, 7))
+
+        drawing = "\n".join(renderer.dialog(
+            "Notice", lines, (), x=80, y=85, width=640, height=325))
+
+        for index in range(1, 6):
+            self.assertIn("LINE %d" % index, drawing)
+        self.assertNotIn("LINE 6", drawing)
+        self.assertIn("-p 400 171", drawing)
+        self.assertNotIn("-p 400 163", drawing)
+
     def test_hints_and_dialog_lines_keep_horizontal_padding(self):
         renderer = FEATHER.FeatherRenderer()
         long_text = "X" * 120

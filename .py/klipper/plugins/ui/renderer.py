@@ -1115,9 +1115,9 @@ class FeatherRenderer:
             x + width // 2, y + 34, str(title).upper(), border,
             "JetBrainsMono Bold 16pt", "center", "middle",
             max_width=width - 2 * self.DIALOG_TEXT_PADDING, truncate=True))
-        for index, line in enumerate(tuple(lines)[:4]):
+        for index, line in enumerate(tuple(lines)[:5]):
             commands.append(self.text(
-                x + width // 2, y + 78 + index * 24, str(line), ThemeColor.TEXT,
+                x + width // 2, y + 86 + index * 24, str(line), ThemeColor.TEXT,
                 "JetBrainsMono 8pt", "center", "middle",
                 max_width=width - 2 * self.DIALOG_TEXT_PADDING,
                 truncate=True))

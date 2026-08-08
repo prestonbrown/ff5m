@@ -1544,11 +1544,11 @@ class FeatherScreen(FeatherPagesMixin, FeatherControlsMixin):
             x=80, y=85, width=640, height=325, tone="danger")
         commands += [
             self.renderer.text(
-                400, 163, self.error_message, ThemeColor.TEXT, "JetBrainsMono 8pt",
-                "center", "middle", max_width=584, max_height=66, wrap=True,
+                400, 200, self.error_message, ThemeColor.TEXT, "JetBrainsMono 8pt",
+                "center", "middle", max_width=584, max_height=110, wrap=True,
                 truncate=True),
             self.renderer.text(
-                400, 235, advice, ThemeColor.TEXT, "JetBrainsMono 8pt", "center",
+                400, 285, advice, ThemeColor.TEXT, "JetBrainsMono 8pt", "center",
                 "middle", max_width=584, truncate=True),
         ]
         self.renderer.prioritize_next_batch("critical", "error-screen")

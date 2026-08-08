@@ -104,6 +104,11 @@ def _step_value_label(value):
     return "%g MM" % value
 
 
+def _step_preset_selected(current, preset):
+    active = 10.0 if current >= 10.0 else (1.0 if current >= 1.0 else 0.1)
+    return "selected" if active == preset else "enabled"
+
+
 def _axis_status(label, homed, refs):
     color = derived(
         lambda ready: ThemeColor.PRIMARY if ready else ThemeColor.WARNING,
@@ -220,7 +225,7 @@ def _control_layout():
                 SetValue(MoveState.JOG_STEP, value), "%g" % value,
                 state=derived(
                     lambda current, expected=value:
-                    "selected" if current == expected else "enabled",
+                    _step_preset_selected(current, expected),
                     bind(MoveState.JOG_STEP)),
             ).ref(STEP_REFS[index])
             for index, value in enumerate(STEP_VALUES)),

@@ -19,7 +19,9 @@ except ImportError:
     from test_feather_screen import (
         FEATHER, RESURRECTION, GCodeRecorder, Reactor, StatusObject)
 
+from ui import Increment
 from ff5m_ui.move import runtime as MOVE_UI
+from ff5m_ui.move.step import page as MOVE_STEP_PAGE
 from ff5m_ui.heat import runtime as HEAT_UI
 from ff5m_ui.filament import runtime as FILAMENT_UI
 from ff5m_ui.filament.actions import select as select_filament
@@ -1440,6 +1442,39 @@ class MotionHeatSettingsTest(unittest.TestCase):
 
         self.assertEqual([command for command, _message in blocking],
                          ["G28", "G28 X Y"])
+
+    def test_step_adjustment_uses_magnitude_bands_in_both_directions(self):
+        controller = ScenarioController.__new__(ScenarioController)
+        controller._render_move = lambda: None
+        plus = Increment(MOVE_UI.MoveState.JOG_STEP, 1)
+        minus = Increment(MOVE_UI.MoveState.JOG_STEP, -1)
+
+        expected = (
+            (0.1, plus, 0.2),
+            (0.9, plus, 1.0),
+            (1.0, plus, 2.0),
+            (9.0, plus, 10.0),
+            (10.0, plus, 20.0),
+            (20.0, minus, 10.0),
+            (10.0, minus, 9.0),
+            (2.0, minus, 1.0),
+            (1.0, minus, 0.9),
+            (0.1, minus, 0.1),
+            (100.0, plus, 100.0),
+        )
+        for current, action, result in expected:
+            with self.subTest(current=current, amount=action.amount):
+                controller.jog_step = current
+                controller._dispatch_semantic_ui_action(action)
+                self.assertEqual(controller.jog_step, result)
+
+    def test_step_presets_follow_the_active_magnitude_band(self):
+        selected = MOVE_STEP_PAGE._step_preset_selected
+
+        self.assertEqual(selected(0.9, 0.1), "selected")
+        self.assertEqual(selected(2.0, 1.0), "selected")
+        self.assertEqual(selected(20.0, 10.0), "selected")
+        self.assertEqual(selected(2.0, 0.1), "enabled")
 
     def test_move_requires_homed_axis_and_uses_conservative_speed(self):
         controller = base_controller()

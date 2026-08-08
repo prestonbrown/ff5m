@@ -11,7 +11,7 @@ import time
 
 from ui import (
         Back, Command, Increment, Navigate, Page, PrintState, Replace,
-        SetValue, ThemeColor, Toggle, state_spec,
+        SetValue, ThemeColor, Toggle,
     )
 from ui.lazy import LazyModule
 from ff5m_ui.keys import AppPage
@@ -34,6 +34,8 @@ from feather_materials import (
 home_ui = LazyModule("ff5m_ui.home.page")
 z_offset_ui = LazyModule("ff5m_ui.z_offset.runtime")
 SAFE_Z_ADJUST_STEP = 1.0
+JOG_STEP_MINIMUM = 0.1
+JOG_STEP_MAXIMUM = 100.0
 
 
 MOVE_SAFE_Z_MAX_MARGIN = 10.0
@@ -58,6 +60,29 @@ CALIBRATION_ITEMS = (
 )
 
 class FeatherControlsMixin:
+    @staticmethod
+    def _adjust_jog_step(value, amount):
+        result = float(value)
+        direction = 1 if amount > 0 else -1
+        for _index in range(abs(int(amount))):
+            if direction > 0:
+                if result < 1.0:
+                    result = min(1.0, result + 0.1)
+                elif result < 10.0:
+                    result = min(10.0, result + 1.0)
+                else:
+                    result = min(JOG_STEP_MAXIMUM, result + 10.0)
+            else:
+                if result <= 1.0:
+                    result = max(JOG_STEP_MINIMUM, result - 0.1)
+                elif result <= 10.0:
+                    result = max(1.0, result - 1.0)
+                else:
+                    result = max(10.0, result - 10.0)
+            result = round(result, 1)
+            result = max(JOG_STEP_MINIMUM, min(JOG_STEP_MAXIMUM, result))
+        return result
+
     @staticmethod
     def _intersect_axis_limits(configured, restricted):
         lower = max(float(configured[0]), float(restricted[0]))
@@ -603,13 +628,8 @@ class FeatherControlsMixin:
             raise KeyError("Unsupported product toggle: %s" % action.key)
         if isinstance(action, Increment):
             if action.key == move_ui.MoveState.JOG_STEP:
-                choices = tuple(state_spec(action.key).choices)
-                index = choices.index(float(self.jog_step)) + int(action.amount)
-                if action.wrap:
-                    index %= len(choices)
-                else:
-                    index = max(0, min(len(choices) - 1, index))
-                self.jog_step = choices[index]
+                self.jog_step = self._adjust_jog_step(
+                    self.jog_step, action.amount)
                 self._render_move()
                 return
             raise KeyError("Unsupported product increment: %s" % action.key)

@@ -2610,8 +2610,10 @@ class ControllerSafetyTest(unittest.TestCase):
         self.assertIsNotNone(height)
         self.assertGreater(int(width.group(1)), 0)
         self.assertGreater(int(height.group(1)), 0)
+        self.assertEqual(int(height.group(1)), 110)
         self.assertLessEqual(int(width.group(1)), UI.SCREEN_WIDTH)
         self.assertLessEqual(int(height.group(1)), UI.SCREEN_HEIGHT)
+        self.assertIn("-p 400 200", command)
         self.assertNotIn("communication time...", command)
 
     def test_recovery_confirmation_is_wrapped_by_typer(self):
