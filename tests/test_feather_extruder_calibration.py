@@ -9,6 +9,7 @@ import pathlib
 import stat
 import tempfile
 import threading
+import types
 import unittest
 from unittest import mock
 
@@ -389,6 +390,127 @@ class ExtruderCalibrationControllerTest(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "No cold-pull"):
             controller._handle_extruder_calibration_action(
                 "extruder.coldpull")
+
+    def test_cold_pull_page_offers_cancel_only_during_temperature_wait(self):
+        controller = calibration_controller()
+        batches = []
+        controller.renderer.send = batches.append
+        session = controller.extruder_calibration
+        session.phase = "cold_pull"
+        session.cold_pull_material = "PLA"
+        controller.temperature_wait = types.SimpleNamespace(
+            variables={"active": False})
+
+        controller._render_extruder_calibration()
+
+        self.assertNotIn(
+            "extruder.coldpull.cancel", "\n".join(batches[-1]))
+        self.assertNotIn("nav.back", "\n".join(batches[-1]))
+
+        controller.temperature_wait.variables.update({
+            "active": True,
+            "stage": "HEATING NOZZLE",
+        })
+        controller._render_extruder_calibration()
+
+        drawing = "\n".join(batches[-1])
+        self.assertIn("extruder.coldpull.cancel", drawing)
+        self.assertIn("CANCEL", drawing)
+        self.assertIn("HEATING NOZZLE", drawing)
+
+    def test_cold_pull_cancel_dispatches_m108_once_and_disables_button(self):
+        controller = calibration_controller()
+        batches = []
+        commands = []
+        controller.renderer.send = batches.append
+        session = controller.extruder_calibration
+        session.phase = "cold_pull"
+        session.cold_pull_material = "PLA"
+        controller.temperature_wait = types.SimpleNamespace(
+            variables={"active": True, "stage": "COOLING NOZZLE"})
+        controller._run_immediate_command = commands.append
+
+        controller._cancel_cold_pull_temperature_wait()
+        controller._cancel_cold_pull_temperature_wait()
+
+        self.assertEqual(commands, ["M108"])
+        self.assertTrue(
+            controller.extruder_calibration.cold_pull_cancel_requested)
+        self.assertIn("CANCELLING...", "\n".join(batches[-1]))
+        self.assertNotIn(
+            "extruder.coldpull.cancel", controller.renderer._buttons)
+
+    def test_cold_pull_runs_on_its_feature_page_without_blocking_loader(self):
+        controller = calibration_controller()
+        batches = []
+        events = []
+        controller.renderer.send = batches.append
+        controller.temperature_wait = types.SimpleNamespace(
+            variables={"active": False})
+        lease = types.SimpleNamespace(
+            release=lambda: events.append("release"))
+        registry = types.SimpleNamespace(
+            activity=lambda reason: (
+                events.append(("activity", reason)) or lease))
+        controller._ensure_safety_registry = lambda: registry
+        controller._refresh_emergency_stop = (
+            lambda: events.append("refresh"))
+        controller._run_script = (
+            lambda command: events.append(("run", command)))
+
+        controller._run_cold_pull_material("PLA", 220, 100)
+
+        session = controller.extruder_calibration
+        self.assertEqual(session.phase, "cold_pull")
+        self.assertEqual(session.cold_pull_material, "PLA")
+        self.assertIsNone(controller.busy_message)
+        self.assertIn("COLD PULL", "\n".join(batches[-1]).upper())
+        self.assertIn(("activity", "cold-pull"), events)
+        self.assertIn(
+            ("run", "_COLDPULL_LOAD_MATERIAL TEMP=220 COLD=100"),
+            events)
+        self.assertIn("release", events)
+
+    def test_cancelled_cold_pull_returns_to_material_selection(self):
+        controller = calibration_controller()
+        controller.cold_pull_profiles = {"PLA": (220, 100)}
+        pages = []
+
+        def cancel_during_wait(material, hot, cold):
+            self.assertEqual((material, hot, cold), ("PLA", 220, 100))
+            session = controller.extruder_calibration
+            session.cold_pull_cancel_requested = True
+            session.cold_pull_cancel_dispatched = True
+            raise RuntimeError("Temperature waiting cancelled")
+
+        controller._run_cold_pull_material = cancel_during_wait
+        controller._show_page = pages.append
+
+        controller._handle_extruder_calibration_action(
+            "extruder.material.PLA")
+
+        session = controller.extruder_calibration
+        self.assertEqual(session.phase, "material")
+        self.assertFalse(session.cold_pull_cancel_requested)
+        self.assertFalse(session.cold_pull_cancel_dispatched)
+        self.assertEqual(pages, [FEATHER.Page.EXTRUDER_CALIBRATION])
+
+    def test_extruder_feature_routes_page_cancel_as_immediate_action(self):
+        from feather_feature_extruder import ExtruderCalibrationFeature
+
+        host = types.SimpleNamespace()
+        feature = ExtruderCalibrationFeature(host)
+        feature.extruder_calibration.phase = "cold_pull"
+        calls = []
+        feature._cancel_cold_pull_temperature_wait = (
+            lambda: calls.append("cancel"))
+
+        handled = feature.handle_immediate_action(
+            FEATHER.Page.EXTRUDER_CALIBRATION,
+            "extruder.coldpull.cancel")
+
+        self.assertTrue(handled)
+        self.assertEqual(calls, ["cancel"])
 
     def test_cold_move_scopes_override_and_restores_gcode_state(self):
         controller = calibration_controller()

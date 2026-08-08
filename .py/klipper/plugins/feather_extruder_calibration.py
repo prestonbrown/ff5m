@@ -369,6 +369,10 @@ class ExtruderCalibrationSession:
         self.save_file_written = False
         self.backup_path = None
         self.exit_return_phase = None
+        self.cold_pull_cancel_requested = False
+        self.cold_pull_cancel_dispatched = False
+        self.cold_pull_material = None
+        self.cold_pull_progress_signature = None
 
     def begin(self, rotation_distance):
         path = self.user_cfg_path
@@ -490,6 +494,8 @@ class FeatherExtruderCalibrationMixin:
                     400, 230, "NO COLD PULL MATERIALS ENABLED", ThemeColor.DIM,
                     "JetBrainsMono Bold 10pt", "center", "middle"))
             self.renderer.send(commands)
+        elif phase == "cold_pull":
+            self._render_cold_pull_progress()
         elif phase == "cut":
             self._extruder_simple_page(
                 "Prepare filament", "REMOVE AND CUT FILAMENT",
@@ -585,6 +591,52 @@ class FeatherExtruderCalibrationMixin:
             18, 65, 764, 370, "Distance between marks",
             session.input_text, actions, subtitle="mm",
             mode=MEASUREMENT_INPUT, confirm_label="CALCULATE")
+        self.renderer.send(commands)
+
+    def _render_cold_pull_progress(self):
+        session = self.extruder_calibration
+        wait = getattr(self, "temperature_wait", None)
+        variables = ({} if wait is None
+                     else getattr(wait, "variables", {}))
+        waiting = bool(variables.get("active", False))
+        stage = str(variables.get("stage", "")).strip().upper()
+        status = self.extruder.get_status(self.reactor.monotonic())
+        temperature = float(status.get("temperature", 0.0))
+        target = float(status.get("target", 0.0))
+        material = session.cold_pull_material or "MATERIAL"
+        heading = stage or "COLD PULL IN PROGRESS"
+        if waiting:
+            body = (
+                "NOZZLE %.1f / %.0f C\n\n"
+                "Temperature waiting can be cancelled safely."
+                % (temperature, target))
+        else:
+            body = (
+                "POSITIONING, EXTRUDING, OR FINISHING THE COLD PULL.\n\n"
+                "This step is not interruptible; use ABORT only if required.")
+        commands = self.renderer.begin_page(
+            "Cold pull: %s" % material, back=False)
+        commands += self.renderer.panel(
+            24, 72, 752, 276, border=ThemeColor.WARNING,
+            background=ThemeColor.PANEL)
+        commands += [
+            self.renderer.text(
+                400, 120, heading, ThemeColor.WARNING,
+                "JetBrainsMono Bold 12pt", "center", "middle",
+                max_width=690, truncate=True),
+            self.renderer.text(
+                400, 220, body, ThemeColor.TEXT, "JetBrainsMono 8pt",
+                "center", "middle", max_width=680, max_height=150,
+                wrap=True, truncate=True),
+        ]
+        if waiting or session.cold_pull_cancel_requested:
+            commands += self.renderer.button(
+                "extruder.coldpull.cancel", 235, 372, 330, 56,
+                ("CANCELLING..." if session.cold_pull_cancel_requested
+                 else "CANCEL"),
+                state=("busy" if session.cold_pull_cancel_requested
+                       else "danger"),
+                font="JetBrainsMono Bold 8pt")
         self.renderer.send(commands)
 
     def _refresh_extruder_file_snapshot(self):
@@ -732,7 +784,12 @@ class FeatherExtruderCalibrationMixin:
 
     def _poll_extruder_calibration(self, eventtime, force=False):
         session = getattr(self, "extruder_calibration", None)
-        if session is None or not session.active or session.phase != "cooling":
+        if session is None or not session.active:
+            return
+        if session.phase == "cold_pull":
+            self._poll_cold_pull_progress(eventtime, force=force)
+            return
+        if session.phase != "cooling":
             return
         status = self.extruder.get_status(eventtime)
         temperature = float(status.get("temperature", 0.0))
@@ -759,6 +816,42 @@ class FeatherExtruderCalibrationMixin:
                 self._run_script("BEEP", show_notice=False)
         elif force or old_display != int(temperature):
             self._render_extruder_calibration()
+
+    def _poll_cold_pull_progress(self, eventtime, force=False):
+        session = self.extruder_calibration
+        wait = getattr(self, "temperature_wait", None)
+        variables = ({} if wait is None
+                     else getattr(wait, "variables", {}))
+        status = self.extruder.get_status(eventtime)
+        signature = (
+            bool(variables.get("active", False)),
+            str(variables.get("stage", "")),
+            session.cold_pull_cancel_requested,
+            int(float(status.get("temperature", 0.0))),
+            int(float(status.get("target", 0.0))),
+        )
+        if force or signature != session.cold_pull_progress_signature:
+            session.cold_pull_progress_signature = signature
+            self._render_extruder_calibration()
+
+    def _run_cold_pull_material(self, material, hot, cold):
+        session = self.extruder_calibration
+        controller = getattr(self, "_host", self)
+        session.phase = "cold_pull"
+        session.cold_pull_material = material
+        session.cold_pull_progress_signature = None
+        session.cold_pull_cancel_requested = False
+        session.cold_pull_cancel_dispatched = False
+        safety_lease = controller._ensure_safety_registry().activity(
+            "cold-pull")
+        try:
+            controller._refresh_emergency_stop()
+            self._render_extruder_calibration()
+            controller._run_script(
+                "_COLDPULL_LOAD_MATERIAL TEMP=%g COLD=%g" % (hot, cold))
+        finally:
+            safety_lease.release()
+            controller._refresh_emergency_stop()
 
     def _append_extruder_input(self, token):
         session = self.extruder_calibration
@@ -870,9 +963,24 @@ class FeatherExtruderCalibrationMixin:
             if material not in self.cold_pull_profiles:
                 raise ValueError("Unknown cold-pull material")
             hot, cold = self.cold_pull_profiles[material]
-            self._run_blocking_gcode(
-                "_COLDPULL_LOAD_MATERIAL TEMP=%g COLD=%g" % (hot, cold),
-                "COLD PULL %s..." % material)
+            try:
+                self._run_cold_pull_material(material, hot, cold)
+            except Exception:
+                cancelled = (session.cold_pull_cancel_requested
+                             and session.cold_pull_cancel_dispatched)
+                session.cold_pull_cancel_requested = False
+                session.cold_pull_cancel_dispatched = False
+                session.cold_pull_material = None
+                session.cold_pull_progress_signature = None
+                session.phase = "material"
+                if cancelled:
+                    logging.info(
+                        "[feather_screen] cold pull temperature wait cancelled")
+                    self._show_page(Page.EXTRUDER_CALIBRATION)
+                    return
+                raise
+            session.cold_pull_material = None
+            session.cold_pull_progress_signature = None
             session.phase = "cut"
         elif action == "extruder.prepared":
             self._prepare_extruder_calibration()
@@ -939,3 +1047,20 @@ class FeatherExtruderCalibrationMixin:
         else:
             return
         self._show_page(Page.EXTRUDER_CALIBRATION)
+
+    def _cancel_cold_pull_temperature_wait(self):
+        session = self.extruder_calibration
+        controller = getattr(self, "_host", self)
+        if (session.phase != "cold_pull"
+                or not controller._temperature_wait_active()
+                or session.cold_pull_cancel_requested):
+            return
+        session.cold_pull_cancel_requested = True
+        session.cold_pull_cancel_dispatched = True
+        self._render_extruder_calibration()
+        try:
+            controller._run_immediate_command("M108")
+        except Exception:
+            session.cold_pull_cancel_requested = False
+            session.cold_pull_cancel_dispatched = False
+            raise

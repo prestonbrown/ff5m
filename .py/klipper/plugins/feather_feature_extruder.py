@@ -35,6 +35,14 @@ class ExtruderCalibrationFeature(FeatherExtruderCalibrationMixin,
         self._handle_extruder_calibration_action(action)
         return True
 
+    def handle_immediate_action(self, page, action):
+        if (action == "extruder.coldpull.cancel"
+                and page == Page.EXTRUDER_CALIBRATION
+                and self.extruder_calibration.phase == "cold_pull"):
+            self._cancel_cold_pull_temperature_wait()
+            return True
+        return False
+
     def back(self, page):
         if page != Page.EXTRUDER_CALIBRATION:
             return False
@@ -43,6 +51,11 @@ class ExtruderCalibrationFeature(FeatherExtruderCalibrationMixin,
 
     def update(self, eventtime):
         self._poll_extruder_calibration(eventtime)
+
+    def on_print_status(self, status):
+        if self.extruder_calibration.phase == "cold_pull":
+            self._poll_extruder_calibration(
+                self.reactor.monotonic(), force=True)
 
     def safety_armed_reasons(self, page, eventtime):
         return (("extruder-controls",)

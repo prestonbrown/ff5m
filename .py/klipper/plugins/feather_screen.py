@@ -1199,7 +1199,15 @@ class FeatherScreen(FeatherPagesMixin, FeatherControlsMixin):
     def _temperature_wait_cancelled(self):
         wait = getattr(self, "temperature_wait", None)
         return bool(wait is not None and
-                    getattr(wait, "variables", {}).get("cancel", False))
+                    (getattr(wait, "variables", {}).get("cancel", False) or
+                     getattr(wait, "variables", {}).get(
+                         "cancel_pending", False)))
+
+    def _temperature_wait_pending(self):
+        wait = getattr(self, "temperature_wait", None)
+        return bool(wait is not None and
+                    getattr(wait, "variables", {}).get(
+                        "cancel_pending", False))
 
     def _build_safety_registry(self):
         registry = SafetyRegistry(excluded_routes=(Page.IDLE_HOME,))

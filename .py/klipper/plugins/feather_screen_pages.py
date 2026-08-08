@@ -544,24 +544,21 @@ class FeatherPagesMixin:
                                "JetBrainsMono 8pt", "left", "middle",
                                max_width=750, truncate=True)])
 
-    cmd_FEATHER_ABORT_help = "Request cooperative cancellation of START_PRINT"
+    cmd_FEATHER_ABORT_help = "Latch cancellation for a managed heat wait"
     def cmd_FEATHER_ABORT(self, gcmd):
-        """Request cancellation while START_PRINT owns the G-code mutex."""
+        """Latch a one-shot heat-wait cancellation outside the G-code mutex."""
         flow = getattr(self, "print_flow", None)
         variables = getattr(flow, "variables", {})
-        if "cancel_requested" not in variables:
-            raise gcmd.error("_PRINT_FLOW is not configured")
         if not variables.get("active", False):
             gcmd.respond_raw("There is no active START_PRINT flow")
             return
-        flow.variables = dict(variables)
-        flow.variables["cancel_requested"] = True
 
         wait_cmd = getattr(self, "temperature_wait", None)
         wait_variables = getattr(wait_cmd, "variables", {})
-        if wait_variables.get("active", False):
-            wait_cmd.variables = dict(wait_variables)
-            wait_cmd.variables["cancel"] = True
+        if "cancel_pending" not in wait_variables:
+            raise gcmd.error("_WAIT_TEMPERATURE is not configured")
+        wait_cmd.variables = dict(wait_variables)
+        wait_cmd.variables["cancel_pending"] = True
         gcmd.respond_raw("Feather cancellation requested")
 
     def _handle_print_action(self, action):
@@ -618,19 +615,18 @@ class FeatherPagesMixin:
             self.cancel_requested = True
             self.cancel_waiting_for_heat = self._temperature_wait_active()
             flow = self._print_flow_status()
-            started = bool(getattr(getattr(self, "start_print_macro", None),
-                                   "variables", {}).get(
-                "print_started", False))
-            if flow["active"] and not started:
-                # START_PRINT owns the dispatcher. Request a cooperative abort
-                # and let the macro stop at the next safe boundary. During a
-                # temperature wait FEATHER_ABORT also sets the M108 flag.
+            if flow["active"]:
+                # Latch the one-shot wait cancellation immediately, then put
+                # the ordinary cancellation behind the macro which currently
+                # owns the dispatcher. Homing/probing/motion remain atomic;
+                # any managed wait encountered first unwinds that macro.
                 self.cancel_mode = "cooperative"
                 self.cancel_phase = flow["phase"]
                 self._render_cancel_confirm()
                 self._run_immediate_command("FEATHER_ABORT")
-                if not self._print_flow_status()["cancel_requested"]:
+                if not self._temperature_wait_pending():
                     raise RuntimeError("START_PRINT did not accept cancellation")
+                self._run_script("CANCEL_PRINT")
             else:
                 # The preparation macro has returned and virtual SD is now
                 # printing regular G-code. Dispatch CANCEL_PRINT exactly once.
@@ -648,7 +644,8 @@ class FeatherPagesMixin:
                 "STOPPING PRINT")
             commands.append(self.renderer.text(
                 400, 170, label, ThemeColor.WARNING,
-                "JetBrainsMono Bold 16pt", "center", "middle"))
+                "JetBrainsMono Bold 16pt", "center", "middle",
+                max_width=700, truncate=True))
             commands.append(self.renderer.text(
                 400, 225, "CANCEL REQUEST ACCEPTED", ThemeColor.PRIMARY,
                 "JetBrainsMono 12pt", "center", "middle"))
@@ -678,23 +675,28 @@ class FeatherPagesMixin:
     def _print_flow_status(self):
         variables = getattr(getattr(self, "print_flow", None), "variables", {})
         return {"active": bool(variables.get("active", False)),
-                "cancel_requested": bool(variables.get("cancel_requested", False)),
-                "cancel_dispatched": bool(variables.get("cancel_dispatched", False)),
                 "phase": str(variables.get("phase", "PRINTING")).upper()}
 
     def _cancel_progress_label(self):
+        if (self._temperature_wait_active() or
+                getattr(self, "cancel_waiting_for_heat", False)):
+            variables = getattr(
+                getattr(self, "temperature_wait", None), "variables", {})
+            context = str(variables.get("context", "")).strip().upper()
+            stage = str(variables.get("stage", "")).strip().upper()
+            if context and stage:
+                return "INTERRUPTING %s: %s..." % (context, stage)
+            return "INTERRUPTING TEMPERATURE WAIT..."
         flow = self._print_flow_status()
         phase = (flow["phase"] if flow["active"] else
                  (getattr(self, "cancel_phase", None) or "PRINTING"))
-        labels = {"PREPARING": "STOPPING PREPARATION...",
-                  "HOMING": "STOPPING AFTER HOMING...",
-                  "LEVELING": "STOPPING AFTER LEVELING...",
-                  "PARKING": "STOPPING AFTER PARKING...",
-                  "HEATING": "STOPPING HEAT WAIT...",
-                  "PRIMING": "STOPPING AFTER PRIME LINE...",
-                  "CANCELLING": "CANCEL_PRINT RUNNING...",
-                  "PRINTING": "CANCELLING PRINT..."}
-        return labels.get(phase, "STOPPING %s..." % phase)
+        if phase in ("CANCELLING", "PRINTING"):
+            return "CANCEL_PRINT RUNNING..."
+        status = str(getattr(self, "print_status_text", "")).strip()
+        status = status.rstrip(".").upper()
+        if status:
+            return "WILL STOP AFTER %s" % status
+        return "WILL STOP AFTER %s" % phase
 
     def _update_cancel_progress(self):
         if self.page != Page.CANCEL_CONFIRM or not self.cancel_requested:
@@ -708,7 +710,8 @@ class FeatherPagesMixin:
             commands = [self.renderer.fill(100, 140, 600, 65, ThemeColor.BACKGROUND),
                         self.renderer.text(400, 170, label, ThemeColor.WARNING,
                                            "JetBrainsMono Bold 16pt", "center",
-                                           "middle")]
+                                           "middle", max_width=700,
+                                           truncate=True)]
         for index in range(5):
             commands.append(self.renderer.fill(
                 290 + index * 48, 325, 32, 12,
