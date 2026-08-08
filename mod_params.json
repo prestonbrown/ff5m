@@ -188,6 +188,16 @@
       "order": 10003
     },
     {
+      "key": "m600_z_min",
+      "type": "float",
+      "default": 50.0,
+      "label": "Filament change minimum Z, mm",
+      "description": "Set the minimum absolute Z position used when parking for a filament change.",
+      "minimum": 0.0,
+      "fraction_digits": 1,
+      "order": 10004
+    },
+    {
       "key": "sound",
       "type": "bool",
       "default": 1,

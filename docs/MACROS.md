@@ -93,7 +93,7 @@ This document provides a concise overview of the G-code macros defined in the `b
     - `X` (float, optional): X-coordinate for parking.
     - `Y` (float, optional): Y-coordinate for parking.
     - `Z` (float, optional): Z-coordinate for parking.
-  - **Defaults**: Uses current position if coordinates are not specified.
+  - **Defaults**: Parks at the greater of the normal pause lift or the configured `m600_z_min` height (50 mm by default), capped 10 mm below the configured Klipper Z maximum.
 
 - **COLDPULL**
   - **Description**: Performs a cold pull to clean the nozzle, supporting multiple material types.

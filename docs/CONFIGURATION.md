@@ -54,6 +54,12 @@ The mod supports a wide range of parameters to customize printer behavior. Below
 
   Feather can calculate this value from the bed position in **Control → Calibration → Z Offset**. Re-run the Safe Z step after changing the nozzle or bed setup.
 
+- **`m600_z_min`**: Sets the minimum absolute Z position for `M600`. The default is `50` mm. The pause lift is still applied, and the final target is capped 10 mm below the configured Klipper Z maximum.
+
+  ```gcode
+  SET_MOD PARAM=m600_z_min VALUE=50
+  ```
+
 - **`check_md5`**: Enables MD5 checksum verification for G-code files.  
   **Note**: Requires a [post-processing script](/docs/SLICING.md#md5-checksum-validation) in your slicer. Scripts are available in *Configuration → mod* (`addMD5.sh` or `addMD5.bat`).  
 
