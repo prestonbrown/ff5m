@@ -824,13 +824,15 @@ class FeatherPagesMixin:
                                    truncate=True),
             ]
             kind = mod_ui.parameter_kind(param)
-            value = mod_ui.display_value(self.params, param)
             state = "disabled" if getattr(param, "readonly", False) else "enabled"
             if kind == "bool":
+                raw_value = self.params.variables.get(param.key, param.default)
                 commands += self.renderer.toggle(
-                    action, 624, y + 13, 76, 38, value == "ON",
+                    action, 624, y + 13, 76, 38,
+                    mod_ui.bool_display_active(param, raw_value),
                     enabled=state == "enabled")
             else:
+                value = mod_ui.display_value(self.params, param)
                 label = value + " >"
                 commands += self.renderer.button(
                     action, 520, y + 9, 180, 46, label, state=state,
@@ -865,18 +867,20 @@ class FeatherPagesMixin:
         kind = mod_ui.parameter_kind(param)
         if kind == "bool":
             current = bool(self.params.variables.get(param.key, param.default))
+            new_value = not current
             action = "mod.item.%d" % index
             scheduler = lambda callback, delay: self.reactor.register_callback(
                 callback, self.reactor.monotonic() + delay)
             animate = getattr(self.renderer, "animate_toggle", None)
             if animate is not None:
-                animate(action, not current, scheduler)
+                animate(action, mod_ui.bool_display_active(
+                    param, new_value), scheduler)
 
             def complete():
                 self._render_mod_settings()
                 self._toast("UPDATED: %s" % param.label)
 
-            self._set_mod_value(param, "0" if current else "1",
+            self._set_mod_value(param, "1" if new_value else "0",
                                 complete, minimum_duration=0.14)
             return
         self.mod_parameter = param

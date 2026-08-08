@@ -39,6 +39,7 @@ class Parameter:
     maximum: Optional[float] = None
     fraction_digits: Optional[int] = None
     restart: Optional[str] = None
+    ui_inverted: bool = False
 
 
 class ModParamManagement:
@@ -110,6 +111,20 @@ class ModParamManagement:
                 logging.error(f'[mod_params]: Parameter "{param_data["key"]}" has wrong type "{param_data["type"]}"!')
                 continue
 
+            # ui.inverted is display metadata for boolean controls only.  It
+            # must never transform values loaded, saved, or exposed to macros.
+            ui_data = param_data.get("ui", {})
+            if not isinstance(ui_data, dict):
+                raise ValueError(
+                    f'[mod_params]: Parameter "{param_data["key"]}" has invalid UI metadata!')
+            ui_inverted = ui_data.get("inverted", False)
+            if not isinstance(ui_inverted, bool):
+                raise ValueError(
+                    f'[mod_params]: Parameter "{param_data["key"]}" has non-boolean ui.inverted!')
+            if "inverted" in ui_data and param_type is not bool:
+                raise ValueError(
+                    f'[mod_params]: Parameter "{param_data["key"]}" uses ui.inverted but is not boolean!')
+
             # Handle enum default values
             if issubclass(param_type, Enum):
                 param_data["default"] = param_type[param_data["default"]].name
@@ -129,6 +144,7 @@ class ModParamManagement:
                 maximum=param_data.get("maximum"),
                 fraction_digits=param_data.get("fraction_digits"),
                 restart=param_data.get("restart"),
+                ui_inverted=ui_inverted,
                 deprecated=DeprecationParameter(
                     key=param_data["deprecated"]["key"],
                     new_key=param_data["key"],

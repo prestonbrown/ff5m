@@ -152,12 +152,13 @@ class ModManager:
 
 
 def mod_param(key, param_type, default, label, description="Description",
-              options=None, readonly=False, hidden=False, restart=None):
+              options=None, readonly=False, hidden=False, restart=None,
+              ui_inverted=False):
     return type("Param", (), {
         "key": key, "type": param_type, "default": default,
         "label": label, "description": description, "options": options,
         "readonly": readonly, "hidden": hidden, "warning": None,
-        "restart": restart,
+        "restart": restart, "ui_inverted": ui_inverted,
     })()
 
 
@@ -501,6 +502,106 @@ class FeatherUtilitiesTest(unittest.TestCase):
         labels = MOD_UI.bool_labels(parameter)
         self.assertEqual(len(labels), 2)
         self.assertNotEqual(labels[0], labels[1])
+
+    def test_mod_boolean_display_inversion_does_not_change_raw_value(self):
+        normal = mod_param("normal", bool, False, "Normal")
+        inverted = mod_param(
+            "inverted", bool, False, "Inverted", ui_inverted=True)
+
+        self.assertFalse(MOD_UI.bool_display_active(normal, False))
+        self.assertTrue(MOD_UI.bool_display_active(normal, True))
+        self.assertTrue(MOD_UI.bool_display_active(inverted, False))
+        self.assertFalse(MOD_UI.bool_display_active(inverted, True))
+        with self.assertRaisesRegex(TypeError, "not boolean"):
+            MOD_UI.bool_display_active(
+                mod_param("count", int, 0, "Count"), 0)
+
+    def test_mod_declaration_loads_optional_ui_inversion(self):
+        declaration = {
+            "parameters": [
+                {"key": "normal", "type": "bool", "default": 0,
+                 "label": "Normal"},
+                {"key": "inverted", "type": "bool", "default": 0,
+                 "label": "Inverted", "ui": {"inverted": True}},
+            ]
+        }
+        with tempfile.NamedTemporaryFile(
+                mode="w", encoding="utf-8", suffix=".json") as declaration_file:
+            json.dump(declaration, declaration_file)
+            declaration_file.flush()
+            manager = MOD_PARAMS.ModParamManagement.__new__(
+                MOD_PARAMS.ModParamManagement)
+            manager.declaration = declaration_file.name
+            manager.printer = type("Printer", (), {
+                "command_error": staticmethod(RuntimeError)})()
+
+            manager._load_declaration()
+
+        params = {parameter.key: parameter for parameter in manager.params}
+        self.assertFalse(params["normal"].ui_inverted)
+        self.assertTrue(params["inverted"].ui_inverted)
+
+    def test_mod_declaration_rejects_ui_inversion_for_non_boolean(self):
+        declaration = {
+            "parameters": [
+                {"key": "count", "type": "int", "default": 0,
+                 "label": "Count", "ui": {"inverted": False}},
+            ]
+        }
+        with tempfile.NamedTemporaryFile(
+                mode="w", encoding="utf-8", suffix=".json") as declaration_file:
+            json.dump(declaration, declaration_file)
+            declaration_file.flush()
+            manager = MOD_PARAMS.ModParamManagement.__new__(
+                MOD_PARAMS.ModParamManagement)
+            manager.declaration = declaration_file.name
+            manager.printer = type("Printer", (), {
+                "command_error": staticmethod(RuntimeError)})()
+
+            with self.assertRaisesRegex(ValueError, "not boolean"):
+                manager._load_declaration()
+
+    def test_only_boolean_parameters_use_ui_inversion_metadata(self):
+        declaration = json.loads((pathlib.Path(__file__).parents[1] /
+                                  "mod_params.json").read_text(encoding="utf-8"))
+        inverted = {
+            item["key"] for item in declaration["parameters"]
+            if item.get("ui", {}).get("inverted", False)
+        }
+        self.assertEqual(inverted, {
+            "disable_priming", "disable_cleaning",
+            "disable_screen_led", "disable_skew",
+        })
+        self.assertTrue(all(
+            item["type"] == "bool" for item in declaration["parameters"]
+            if item["key"] in inverted))
+
+    def test_ui_inversion_does_not_affect_mod_parameter_storage(self):
+        parameter = MOD_PARAMS.Parameter(
+            key="disable_priming", type=bool, default=False,
+            label="Nozzle priming", options=["YES", "NO"],
+            ui_inverted=True)
+        manager = MOD_PARAMS.ModParamManagement.__new__(
+            MOD_PARAMS.ModParamManagement)
+        manager.params_map = {parameter.key: parameter}
+        manager.variables = {parameter.key: False}
+        saved = []
+        manager._save_all = lambda: saved.append(dict(manager.variables))
+        manager.changes_gcode_present = False
+
+        result = manager.set_value(parameter.key, "1")
+
+        self.assertEqual(result, 1)
+        self.assertTrue(manager.variables[parameter.key])
+        self.assertEqual(saved, [{parameter.key: True}])
+        self.assertFalse(manager._load_param(parameter, "0"))
+        self.assertTrue(manager._load_param(parameter, "1"))
+        self.assertEqual(manager._transform(parameter, False), 0)
+        self.assertEqual(manager._transform(parameter, True), 1)
+        self.assertEqual(manager._format_label(parameter, False),
+                         "Nozzle priming: YES")
+        self.assertEqual(manager._format_label(parameter, True),
+                         "Nozzle priming: NO")
 
     def test_mod_params_public_setter_preserves_types_and_notifies(self):
         Display = enum.Enum("Display", {"FEATHER": 1, "GUPPY": 3})

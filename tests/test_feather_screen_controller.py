@@ -1406,6 +1406,30 @@ class ControllerSafetyTest(unittest.TestCase):
         self.assertIn("mod.prev", controller.renderer._buttons)
         self.assertNotIn("mod.next", controller.renderer._buttons)
 
+    def test_mod_settings_renders_raw_and_inverted_boolean_states(self):
+        params = [
+            mod_param("normal_false", bool, False, "Normal false"),
+            mod_param("normal_true", bool, True, "Normal true"),
+            mod_param("inverted_false", bool, False, "Inverted false",
+                      ui_inverted=True),
+            mod_param("inverted_true", bool, True, "Inverted true",
+                      ui_inverted=True),
+        ]
+        controller = mod_controller(params, {
+            "normal_false": False,
+            "normal_true": True,
+            "inverted_false": False,
+            "inverted_true": True,
+        })
+
+        controller._render_mod_settings()
+
+        states = [
+            controller.renderer._toggles["mod.item.%d" % index][4]
+            for index in range(4)
+        ]
+        self.assertEqual(states, [False, True, True, False])
+
     def test_mod_boolean_toggle_updates_without_opening_an_editor(self):
         flag = mod_param("camera", bool, False, "Alt camera")
         controller = mod_controller([flag], {"camera": False})
@@ -1415,6 +1439,28 @@ class ControllerSafetyTest(unittest.TestCase):
         self.assertEqual(controller.params.updated, [("camera", True)])
         self.assertIsNone(controller.mod_parameter)
         self.assertIn("mod.item.0", controller.renderer._toggles)
+        self.assertTrue(controller.renderer._toggles["mod.item.0"][4])
+
+    def test_inverted_mod_toggle_animates_display_but_saves_raw_value(self):
+        flag = mod_param(
+            "disable_priming", bool, False, "Nozzle priming",
+            ui_inverted=True)
+        controller = mod_controller([flag], {"disable_priming": False})
+        controller._render_mod_settings()
+        self.assertTrue(controller.renderer._toggles["mod.item.0"][4])
+
+        controller._handle_mod_action("mod.item.0")
+
+        self.assertEqual(controller.params.updated,
+                         [("disable_priming", True)])
+        self.assertFalse(controller.renderer._toggles["mod.item.0"][4])
+
+        controller._handle_mod_action("mod.item.0")
+
+        self.assertEqual(controller.params.updated, [
+            ("disable_priming", True),
+            ("disable_priming", False),
+        ])
         self.assertTrue(controller.renderer._toggles["mod.item.0"][4])
 
     def test_theme_parameter_refreshes_users_once_and_uses_stable_snapshot(self):

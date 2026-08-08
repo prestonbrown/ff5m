@@ -78,6 +78,13 @@ def display_value(manager, param):
     return str(value) if str(value) else "<EMPTY>"
 
 
+def bool_display_active(param, raw_value):
+    """Map a raw boolean to its visual toggle state without changing data."""
+    if parameter_kind(param) != "bool":
+        raise TypeError("Parameter is not boolean")
+    return bool(raw_value) != bool(getattr(param, "ui_inverted", False))
+
+
 def bool_labels(param):
     """Return the user-facing labels for false and true switch positions."""
     options = getattr(param, "options", None)
