@@ -217,6 +217,7 @@ class FeatherScreen(FeatherPagesMixin, FeatherControlsMixin):
         self.file_page = 0
         self.file_entries = []
         self.file_entry_cache = {}
+        self.file_entry_loaded_at = {}
         self.file_scan_loading = False
         self.file_scan_source = None
         self.file_scan_phase = 0
@@ -437,6 +438,7 @@ class FeatherScreen(FeatherPagesMixin, FeatherControlsMixin):
             self.file_scan_worker = FileScanWorker(
                 self.file_scan_schedule_async)
         self.file_entry_cache.clear()
+        self.file_entry_loaded_at.clear()
         self.file_scan_loading = False
         self.file_scan_source = None
         self.shutdown_active = False
@@ -943,7 +945,7 @@ class FeatherScreen(FeatherPagesMixin, FeatherControlsMixin):
             elif action == "nav.files":
                 self.file_page = 0
                 self.file_source = "internal"
-                self._invalidate_file_entries("internal")
+                self._expire_file_entries_if_stale("internal")
                 self._show_page(Page.FILE_BROWSER)
             elif action == "nav.control":
                 self._require_idle()
@@ -980,7 +982,7 @@ class FeatherScreen(FeatherPagesMixin, FeatherControlsMixin):
                 else:
                     self.file_page = 0
                     self.file_source = "internal"
-                    self._invalidate_file_entries("internal")
+                    self._expire_file_entries_if_stale("internal")
                     self._show_page(Page.FILE_BROWSER)
             elif owner is not None:
                 if not owner.handle_action(self.page, action):

@@ -195,6 +195,7 @@ class FileWorkflowTest(unittest.TestCase):
         controller.file_page = 0
         controller.file_entries = []
         controller.file_entry_cache = {}
+        controller.file_entry_loaded_at = {}
         controller.file_scan_loading = False
         controller.file_scan_source = None
         controller.file_scan_phase = 0
@@ -239,6 +240,8 @@ class FileWorkflowTest(unittest.TestCase):
         requests_before_page_change = len(
             controller.file_scan_worker.requests)
 
+        # A browser left open keeps its snapshot even after the reopen TTL.
+        controller.reactor.now += PAGES.FILE_CACHE_TTL + 1.0
         controller._handle_file_action("file.next")
 
         self.assertEqual(controller.file_page, 1)
@@ -254,6 +257,24 @@ class FileWorkflowTest(unittest.TestCase):
         self.assertEqual(
             len(controller.file_scan_worker.requests),
             requests_before_page_change + 1)
+
+    def test_file_cache_ttl_applies_when_browser_is_reopened(self):
+        controller = base_controller()
+        entries = [FILES.FileEntry("part.gcode", "/data/part.gcode")]
+        controller.file_entry_cache = {"internal": entries, "usb": entries}
+        controller.file_entry_loaded_at = {"internal": 100.0, "usb": 100.0}
+
+        controller.reactor.now = 100.0 + PAGES.FILE_CACHE_TTL - 0.01
+        self.assertFalse(
+            controller._expire_file_entries_if_stale("internal"))
+        self.assertIn("internal", controller.file_entry_cache)
+
+        controller.reactor.now = 100.0 + PAGES.FILE_CACHE_TTL
+        self.assertTrue(
+            controller._expire_file_entries_if_stale("internal"))
+        self.assertNotIn("internal", controller.file_entry_cache)
+        self.assertNotIn("internal", controller.file_entry_loaded_at)
+        self.assertIn("usb", controller.file_entry_cache)
 
     def test_file_browser_flattens_two_levels_and_skips_hidden_trees(self):
         with tempfile.TemporaryDirectory() as root:

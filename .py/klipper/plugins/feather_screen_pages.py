@@ -23,6 +23,7 @@ home_state = LazyModule("ff5m_ui.home.state")
 mod_ui = LazyModule("feather_mod_settings")
 
 FILE_ROWS = 5
+FILE_CACHE_TTL = 5.0
 NETWORK_HELPER = "/root/printer_data/scripts/commands/znetwork.sh"
 NETWORK_TIMEOUTS = {
     "scan": 15.0,
@@ -141,10 +142,27 @@ class FeatherPagesMixin:
         cache = getattr(self, "file_entry_cache", None)
         if cache is None:
             return
+        loaded_at = getattr(self, "file_entry_loaded_at", None)
         if source is None:
             cache.clear()
+            if loaded_at is not None:
+                loaded_at.clear()
         else:
             cache.pop(source, None)
+            if loaded_at is not None:
+                loaded_at.pop(source, None)
+
+    def _expire_file_entries_if_stale(self, source):
+        cache = getattr(self, "file_entry_cache", {})
+        if source not in cache:
+            return True
+        loaded_at = getattr(self, "file_entry_loaded_at", {})
+        timestamp = loaded_at.get(source)
+        now = self.reactor.monotonic()
+        if timestamp is None or now - timestamp >= FILE_CACHE_TTL:
+            self._invalidate_file_entries(source)
+            return True
+        return False
 
     def _render_file_loading(self, source):
         self.file_scan_loading = True
@@ -185,6 +203,7 @@ class FeatherPagesMixin:
         else:
             message = None
         self.file_entry_cache[source] = entries
+        self.file_entry_loaded_at[source] = self.reactor.monotonic()
         if source == getattr(self, "file_source", "internal"):
             self.file_entries = entries
         if (self.page == Page.FILE_BROWSER
@@ -273,7 +292,7 @@ class FeatherPagesMixin:
                 self.file_source = "usb"
                 self.file_page = 0
                 self.selected_file = None
-                self._invalidate_file_entries("usb")
+                self._expire_file_entries_if_stale("usb")
                 self._render_file_browser()
                 return
             self.selected_file = entry
