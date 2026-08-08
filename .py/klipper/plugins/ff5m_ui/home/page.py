@@ -12,7 +12,7 @@ from ui.components import Button, Fill, Hitbox, Panel, Text
 from ui.layout import Overlay, PageTree, Rect
 
 from ..keys import AppPage
-from .actions import FILAMENT, HEAT, JOB, MENU, MOVE, NETWORK
+from .actions import FILAMENT, HEAT, JOB, LAST_JOB, MENU, MOVE, NETWORK
 from .state import HomeState, collect_dashboard, dashboard_values
 
 
@@ -219,6 +219,7 @@ def create_page():
         _placed(Hitbox(HEAT), 25, 72, 492, 132),
         _placed(Hitbox(NETWORK), 539, 72, 236, 132),
         _placed(Hitbox(JOB), 25, 220, 750, 112),
+        _placed(Hitbox(LAST_JOB), 25, 345, 257, 97),
         _placed(Hitbox(FILAMENT), 283, 345, 259, 97),
         _placed(Hitbox(MOVE), 543, 345, 232, 97),
     ).ref(HomeRef.ROOT)

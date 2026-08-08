@@ -66,7 +66,7 @@ class ControllerSafetyTest(unittest.TestCase):
             action.wire_id for action in HOME_PAGE.PAGE.actions.values())
         for wire_id in (
                 "nav.menu", "nav.heat", "nav.network", "nav.job",
-                "nav.filament", "nav.move"):
+                "home.last_job", "nav.filament", "nav.move"):
             self.assertIn(wire_id, available)
 
     def test_home_semantic_route_preserves_existing_navigation(self):
@@ -108,7 +108,7 @@ class ControllerSafetyTest(unittest.TestCase):
         self.assertIn("nav.menu", controller.renderer._buttons)
         for action in (
                 "nav.heat", "nav.network", "nav.job",
-                "nav.filament", "nav.move"):
+                "home.last_job", "nav.filament", "nav.move"):
             self.assertIn(action, controller.renderer._hitboxes)
 
     def test_move_caution_loads_existing_auto_bed_profile(self):

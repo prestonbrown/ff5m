@@ -321,6 +321,7 @@ class FileWorkflowTest(unittest.TestCase):
             history = FEATHER.PrintHistory(history_path)
             history.record(root, old_printed, 40)
             history.record(root, recently_added, 20)
+            self.assertEqual(history.latest_path(), "old-printed.gcode")
 
             controller = base_controller()
             controller.virtual_sdcard = VirtualSD(root)
@@ -350,7 +351,91 @@ class FileWorkflowTest(unittest.TestCase):
             reloaded = FEATHER.PrintHistory(history_path)
             self.assertEqual(
                 reloaded.last_printed("models/part.gcode"), 1234.0)
+            self.assertEqual(reloaded.latest_path(), "models/part.gcode")
+            self.assertEqual(controller.last_job_path, "models/part.gcode")
             self.assertEqual(controller.last_job_name, "part.gcode")
+
+    def test_idle_last_job_opens_repeat_print_confirmation(self):
+        with tempfile.TemporaryDirectory() as root:
+            relative = "models/part.gcode"
+            path = os.path.join(root, relative)
+            os.makedirs(os.path.dirname(path))
+            pathlib.Path(path).write_text("G28\n", encoding="utf-8")
+            controller = base_controller()
+            controller.virtual_sdcard = VirtualSD(root)
+            controller.last_job_path = relative
+            controller.last_job_name = "part.gcode"
+            shown = []
+            controller._show_page = shown.append
+
+            action = controller._resolve_semantic_ui_action("home.last_job")
+            controller._dispatch_semantic_ui_action(action)
+
+            self.assertEqual(shown, [FEATHER.Page.FILE_CONFIRM])
+            self.assertEqual(
+                controller.selected_file["path"], os.path.realpath(path))
+            self.assertEqual(controller.selected_file["name"], "part.gcode")
+            self.assertEqual(
+                controller.file_confirm_return_page, FEATHER.Page.IDLE_HOME)
+            self.assertTrue(controller.file_confirm_repeat)
+
+    def test_last_job_is_inactive_while_printing(self):
+        controller = base_controller("printing")
+        opened = []
+        controller._open_last_job = lambda: opened.append(True)
+
+        action = controller._resolve_semantic_ui_action("home.last_job")
+        controller._dispatch_semantic_ui_action(action)
+
+        self.assertEqual(opened, [])
+
+        controller = base_controller()
+        controller.print_state = FEATHER.PrintState.PREPARING
+        controller._open_last_job = lambda: opened.append(True)
+        action = controller._resolve_semantic_ui_action("home.last_job")
+        controller._dispatch_semantic_ui_action(action)
+
+        self.assertEqual(opened, [])
+
+    def test_missing_last_job_file_is_rejected_before_confirmation(self):
+        with tempfile.TemporaryDirectory() as root:
+            controller = base_controller()
+            controller.virtual_sdcard = VirtualSD(root)
+            controller.last_job_path = "removed.gcode"
+
+            with self.assertRaisesRegex(
+                    RuntimeError, "no longer available"):
+                controller._open_last_job()
+
+    def test_repeat_confirmation_returns_to_dashboard(self):
+        controller = base_controller()
+        controller.page = FEATHER.Page.FILE_CONFIRM
+        controller.selected_file = {"path": "/data/part.gcode"}
+        controller.file_confirm_return_page = FEATHER.Page.IDLE_HOME
+        controller.file_confirm_repeat = True
+        shown = []
+        controller._show_page = shown.append
+
+        controller._go_back()
+
+        self.assertEqual(shown, [FEATHER.Page.IDLE_HOME])
+        self.assertIsNone(controller.selected_file)
+        self.assertFalse(controller.file_confirm_repeat)
+
+    def test_repeat_confirmation_uses_repeat_copy(self):
+        controller = base_controller()
+        controller.renderer = FEATHER.FeatherRenderer()
+        controller.selected_file = FILES.FileEntry(
+            "part.gcode", "/data/part.gcode", size=1024)
+        controller.file_confirm_repeat = True
+        batches = []
+        controller.renderer.send = batches.append
+
+        controller._render_file_confirm()
+
+        drawing = "\n".join(batches[0])
+        self.assertIn("PRINT AGAIN?", drawing)
+        self.assertIn("PRINT AGAIN", drawing)
 
     def test_start_file_rechecks_path_and_escapes_filename(self):
         with tempfile.TemporaryDirectory() as root:
@@ -363,6 +448,7 @@ class FileWorkflowTest(unittest.TestCase):
             self.assertEqual(
                 controller.gcode.commands,
                 ['SDCARD_PRINT_FILE FILENAME="part \\"one\\".gcode"'])
+            self.assertEqual(controller.last_job_path, 'part "one".gcode')
             os.unlink(path)
             with self.assertRaisesRegex(RuntimeError, "no longer available"):
                 controller._start_selected_file()

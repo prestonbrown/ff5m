@@ -549,6 +549,18 @@ class FeatherControlsMixin:
                 self.file_source = "internal"
                 self._show_page(Page.FILE_BROWSER)
             return
+        if route == HomeRoute.LAST_JOB:
+            stats = self.print_stats.get_status(
+                self.reactor.monotonic()).get("state")
+            print_state = getattr(self, "print_state", PrintState.IDLE)
+            if (print_state in (
+                    PrintState.PREPARING, PrintState.PRINTING,
+                    PrintState.PAUSED)
+                    or stats in ("printing", "paused")
+                    or self.virtual_sdcard.is_active()):
+                return
+            self._open_last_job()
+            return
         raise KeyError("Unsupported home route: %s" % route)
 
     def _dispatch_semantic_ui_action(self, action):

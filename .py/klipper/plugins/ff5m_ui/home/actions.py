@@ -15,6 +15,7 @@ class HomeRoute(Enum):
     HEAT = "nav.heat"
     NETWORK = "nav.network"
     JOB = "nav.job"
+    LAST_JOB = "home.last_job"
     FILAMENT = "nav.filament"
     MOVE = "nav.move"
 
@@ -42,11 +43,12 @@ MENU = HomeNavigate(HomeRoute.MENU)
 HEAT = HomeNavigate(HomeRoute.HEAT)
 NETWORK = HomeNavigate(HomeRoute.NETWORK)
 JOB = HomeNavigate(HomeRoute.JOB)
+LAST_JOB = HomeNavigate(HomeRoute.LAST_JOB)
 FILAMENT = HomeNavigate(HomeRoute.FILAMENT)
 MOVE = HomeNavigate(HomeRoute.MOVE)
 
 
 __all__ = (
-    "FILAMENT", "HEAT", "JOB", "MENU", "MOVE", "NETWORK",
+    "FILAMENT", "HEAT", "JOB", "LAST_JOB", "MENU", "MOVE", "NETWORK",
     "HomeNavigate", "HomeRoute",
 )

@@ -60,7 +60,7 @@ MAX_TOUCH_EVENT = 256
 EXACT_ACTIONS = {
     Page.IDLE_HOME: (
         "nav.menu", "nav.heat", "nav.network", "nav.job",
-        "nav.filament", "nav.move"),
+        "home.last_job", "nav.filament", "nav.move"),
     Page.MAIN_MENU: ("nav.back", "nav.files", "nav.control", "nav.filament",
                      "nav.network"),
     Page.CONTROL_HOME: ("nav.back", "nav.move", "nav.heat", "nav.calibration",
@@ -223,6 +223,8 @@ class FeatherScreen(FeatherPagesMixin, FeatherControlsMixin):
         self.file_scan_phase = 0
         self.file_scan_token = 0
         self.selected_file = None
+        self.file_confirm_return_page = Page.FILE_BROWSER
+        self.file_confirm_repeat = False
         self.file_source = "internal"
         self.usb_storage = None
         self.jog_step = 1.0
@@ -292,7 +294,9 @@ class FeatherScreen(FeatherPagesMixin, FeatherControlsMixin):
         self.move_return_page = Page.CONTROL_HOME
         self.filament_return_page = Page.MAIN_MENU
         self._last_dashboard = None
-        self.last_job_name = "NONE"
+        self.last_job_path = self.print_history.latest_path()
+        self.last_job_name = (os.path.basename(self.last_job_path)
+                              if self.last_job_path else "NONE")
 
         self.printer.register_event_handler("klippy:ready", self._init)
         self.printer.register_event_handler("klippy:shutdown", self._shutdown)
@@ -1102,7 +1106,11 @@ class FeatherScreen(FeatherPagesMixin, FeatherControlsMixin):
             self.selected_file = None
             self._show_page(Page.FILE_BROWSER)
         elif self.page == Page.FILE_CONFIRM:
-            self._show_page(Page.FILE_BROWSER)
+            return_page = getattr(
+                self, "file_confirm_return_page", Page.FILE_BROWSER)
+            self.selected_file = None
+            self.file_confirm_repeat = False
+            self._show_page(return_page)
         elif self.page == Page.CONTROL_HOME:
             self._show_page(Page.MAIN_MENU)
         elif self.page == Page.NETWORK_HOME:

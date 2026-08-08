@@ -166,6 +166,12 @@ class PrintHistory:
     def last_printed(self, relative_path):
         return self.timestamps.get(relative_path, 0.0)
 
+    def latest_path(self):
+        if not self.timestamps:
+            return None
+        return max(
+            self.timestamps.items(), key=lambda item: (item[1], item[0]))[0]
+
     def record(self, root, path, timestamp):
         relative = _relative_path(root, path)
         if relative is None:

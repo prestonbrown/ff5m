@@ -223,6 +223,8 @@ class FeatherPagesMixin:
             return
         root = virtual_sdcard.sdcard_dirname
         if history.record(root, path, time.time()):
+            self.last_job_path = os.path.relpath(path, root).replace(
+                os.sep, "/")
             self.last_job_name = os.path.basename(path)
             self._invalidate_file_entries()
 
@@ -296,18 +298,45 @@ class FeatherPagesMixin:
                 self._render_file_browser()
                 return
             self.selected_file = entry
+            self.file_confirm_return_page = Page.FILE_BROWSER
+            self.file_confirm_repeat = False
             self._show_page(Page.FILE_CONFIRM)
+
+    def _open_last_job(self):
+        self._require_idle()
+        relative = getattr(self, "last_job_path", None)
+        if not relative:
+            history = getattr(self, "print_history", None)
+            relative = (history.latest_path()
+                        if history is not None else None)
+        if not relative:
+            raise RuntimeError("No previous print is available")
+        root = os.path.realpath(self.virtual_sdcard.sdcard_dirname)
+        path = os.path.realpath(os.path.join(root, relative))
+        if not os.path.isfile(path) or not path.startswith(root + os.sep):
+            raise RuntimeError("The last print file is no longer available")
+        stat = os.stat(path)
+        self.last_job_path = relative
+        self.last_job_name = os.path.basename(relative)
+        self.selected_file = FileEntry(
+            self.last_job_name, path, size=stat.st_size, mtime=stat.st_mtime)
+        self.file_confirm_return_page = Page.IDLE_HOME
+        self.file_confirm_repeat = True
+        self._show_page(Page.FILE_CONFIRM)
 
     def _render_file_confirm(self):
         entry = self.selected_file
-        commands = self.renderer.begin_page("Start print?", back=True)
+        repeat = getattr(self, "file_confirm_repeat", False)
+        commands = self.renderer.begin_page(
+            "Print again?" if repeat else "Start print?", back=True)
         commands.append(self.renderer.text(
             400, 150, entry["name"], ThemeColor.BRIGHT, "Roboto Bold 16pt", "center",
             "middle", max_width=720, truncate=True))
         commands.append(self.renderer.text(400, 220, self._format_size(entry["size"]),
                                            ThemeColor.PRIMARY, "Roboto 12pt", "center", "middle"))
         commands += self.renderer.button("file.start", 220, 310, 360, 100,
-                                         "START PRINT", font="Roboto Bold 16pt")
+                                         "PRINT AGAIN" if repeat else "START PRINT",
+                                         font="Roboto Bold 16pt")
         self.renderer.send(commands)
 
     def _start_selected_file(self):
@@ -320,6 +349,7 @@ class FeatherPagesMixin:
         if any(ord(ch) < 32 for ch in relpath):
             raise RuntimeError("Unsupported filename")
         escaped = relpath.replace("\\", "\\\\").replace('"', '\\"')
+        self.last_job_path = relpath.replace(os.sep, "/")
         self.last_job_name = os.path.basename(relpath)
         self._run_script(
             'SDCARD_PRINT_FILE FILENAME="%s"' % escaped)

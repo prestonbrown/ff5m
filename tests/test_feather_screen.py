@@ -389,6 +389,7 @@ class FeatherUtilitiesTest(unittest.TestCase):
         self.assertTrue(allowed(FEATHER.Page.IDLE_HOME, "nav.heat"))
         self.assertTrue(allowed(FEATHER.Page.IDLE_HOME, "nav.network"))
         self.assertTrue(allowed(FEATHER.Page.IDLE_HOME, "nav.job"))
+        self.assertTrue(allowed(FEATHER.Page.IDLE_HOME, "home.last_job"))
         self.assertTrue(allowed(FEATHER.Page.IDLE_HOME, "nav.filament"))
         self.assertTrue(allowed(FEATHER.Page.IDLE_HOME, "nav.move"))
         self.assertTrue(allowed(FEATHER.Page.PRINTING, "nav.home"))
@@ -1326,7 +1327,7 @@ class RendererStateTest(unittest.TestCase):
         for page_buttons in (file_buttons, wifi_buttons, keyboard_buttons):
             rectangles = []
             for action, spec in page_buttons.items():
-                if action == "nav.back":
+                if action in ("nav.back", "file.refresh"):
                     continue
                 rectangle = spec[:4]
                 self.assertGreaterEqual(rectangle[1], UI.HEADER_BOTTOM + 1,
