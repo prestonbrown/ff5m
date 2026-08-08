@@ -4,12 +4,14 @@
 ##
 ## This file may be distributed under the terms of the GNU GPLv3 license
 
+import configparser
 import importlib.util
 import enum
 import json
 import pathlib
 import re
 import tempfile
+import threading
 import unittest
 from unittest import mock
 
@@ -132,6 +134,13 @@ class ModManager:
         self.params = params
         self.variables = dict(variables)
         self.updated = []
+        self.params_map = dict((param.key, param) for param in params)
+        category_ids = set(
+            getattr(param, "ui_category", None) for param in params)
+        self.ui_categories_map = dict(
+            (category_id, type("Category", (), {
+                "label": str(category_id).upper()})())
+            for category_id in category_ids if category_id is not None)
 
     def set_value(self, key, value):
         param = next(param for param in self.params if param.key == key)
@@ -153,12 +162,13 @@ class ModManager:
 
 def mod_param(key, param_type, default, label, description="Description",
               options=None, readonly=False, hidden=False, restart=None,
-              ui_inverted=False):
+              ui_inverted=False, ui_category=None, ui_visible_if=None):
     return type("Param", (), {
         "key": key, "type": param_type, "default": default,
         "label": label, "description": description, "options": options,
         "readonly": readonly, "hidden": hidden, "warning": None,
         "restart": restart, "ui_inverted": ui_inverted,
+        "ui_category": ui_category, "ui_visible_if": ui_visible_if,
     })()
 
 
@@ -541,6 +551,249 @@ class FeatherUtilitiesTest(unittest.TestCase):
         params = {parameter.key: parameter for parameter in manager.params}
         self.assertFalse(params["normal"].ui_inverted)
         self.assertTrue(params["inverted"].ui_inverted)
+
+    def test_mod_declaration_metadata_is_additive_and_orders_all_parameters(self):
+        declaration_path = pathlib.Path(__file__).parents[1] / "mod_params.json"
+        declaration = json.loads(declaration_path.read_text(encoding="utf-8"))
+        manager = MOD_PARAMS.ModParamManagement.__new__(
+            MOD_PARAMS.ModParamManagement)
+        manager.declaration = str(declaration_path)
+        manager.printer = type("Printer", (), {
+            "command_error": staticmethod(RuntimeError)})()
+
+        manager._load_declaration()
+
+        visible = [param.key for param in manager.params if not param.hidden]
+        categorized = [
+            key for category in declaration["ui"]["categories"]
+            for key in category["parameters"]]
+        self.assertEqual(visible, categorized)
+        self.assertEqual(len(set(categorized)), len(categorized))
+        self.assertEqual(
+            visible[:5],
+            ["display", "z_offset", "load_zoffset", "use_kamp", "camera"])
+        self.assertEqual(
+            [key for key in visible if key in (
+                "tune_config", "tune_klipper", "use_swap",
+                "klipper_rt", "zram_algo", "midi_on")],
+            ["tune_config", "tune_klipper", "use_swap",
+             "klipper_rt", "zram_algo", "midi_on"])
+        fallback = next(category for category in declaration["ui"]["categories"]
+                        if category.get("fallback", False))
+        self.assertEqual((fallback["id"], fallback["label"]),
+                         ("other", "OTHER"))
+        self.assertEqual({
+            param.key: param.ui_category for param in manager.params
+            if param.key in ("current_material", "show_feather_promo")
+        }, {
+            "current_material": "other",
+            "show_feather_promo": "other",
+        })
+
+        future_declaration = json.loads(
+            declaration_path.read_text(encoding="utf-8"))
+        future_declaration["parameters"].append({
+            "key": "future_parameter",
+            "type": "bool",
+            "default": 0,
+            "label": "Future parameter",
+            "description": "A parameter unknown to this category schema.",
+        })
+        with tempfile.NamedTemporaryFile(
+                mode="w", encoding="utf-8", suffix=".json") as declaration_file:
+            json.dump(future_declaration, declaration_file)
+            declaration_file.flush()
+            future_manager = MOD_PARAMS.ModParamManagement.__new__(
+                MOD_PARAMS.ModParamManagement)
+            future_manager.declaration = declaration_file.name
+            future_manager.printer = type("Printer", (), {
+                "command_error": staticmethod(RuntimeError)})()
+            future_manager._load_declaration()
+
+        future = future_manager.params_map["future_parameter"]
+        self.assertEqual(future.ui_category, "other")
+        self.assertEqual(
+            [param.key for param in future_manager.params if not param.hidden][-1],
+            "future_parameter")
+
+        # A legacy-like loader selects only fields it knows.  Top-level UI
+        # metadata and unknown nested UI keys therefore do not alter parameter
+        # keys, defaults, types, or the existing inversion metadata object.
+        known_fields = ("key", "type", "default", "label", "description",
+                        "options", "readonly", "hidden", "order", "warning",
+                        "deprecated", "minimum", "maximum", "fraction_digits",
+                        "restart")
+        legacy = [
+            dict((field, item[field]) for field in known_fields if field in item)
+            for item in declaration["parameters"]]
+        self.assertEqual(
+            [item["key"] for item in legacy],
+            [item["key"] for item in declaration["parameters"]])
+        self.assertEqual(
+            {item["key"]: item["default"] for item in legacy},
+            {item["key"]: item["default"]
+             for item in declaration["parameters"]})
+        self.assertTrue(declaration["parameters"][2]["ui"]["inverted"])
+
+    def test_all_strict_mod_visibility_dependencies(self):
+        declaration_path = pathlib.Path(__file__).parents[1] / "mod_params.json"
+        manager = MOD_PARAMS.ModParamManagement.__new__(
+            MOD_PARAMS.ModParamManagement)
+        manager.declaration = str(declaration_path)
+        manager.printer = type("Printer", (), {
+            "command_error": staticmethod(RuntimeError)})()
+        manager._load_declaration()
+        manager.variables = dict((param.key, param.default)
+                                 for param in manager.params)
+        cases = (
+            ("weight_check_max", "weight_check", False, True),
+            ("bed_mesh_validation_clear", "bed_mesh_validation", False, True),
+            ("bed_mesh_validation_tolerance", "bed_mesh_validation", False, True),
+            ("load_zoffset_cleaning", "disable_cleaning", True, False),
+            ("zram_algo", "use_swap", 1, 3),
+        )
+        for child, parent, hidden_value, visible_value in cases:
+            with self.subTest(child=child):
+                manager.variables[parent] = hidden_value
+                self.assertNotIn(
+                    child, [param.key for param in
+                            MOD_UI.visible_parameters(manager)])
+                manager.variables[parent] = visible_value
+                self.assertIn(
+                    child, [param.key for param in
+                            MOD_UI.visible_parameters(manager)])
+
+    def test_mod_parameter_writes_are_serialized_and_preserve_full_state(self):
+        params = [
+            MOD_PARAMS.Parameter("first", int, 0, "First"),
+            MOD_PARAMS.Parameter("second", int, 0, "Second"),
+        ]
+        with tempfile.NamedTemporaryFile(suffix=".cfg") as variables_file:
+            manager = MOD_PARAMS.ModParamManagement.__new__(
+                MOD_PARAMS.ModParamManagement)
+            manager.params = params
+            manager.params_map = dict((param.key, param) for param in params)
+            manager.migration_map = {}
+            manager.variables = {"first": 0, "second": 0}
+            manager.filename = variables_file.name
+            manager._variables_lock = threading.RLock()
+            manager.changes_gcode_present = False
+            manager.gcode = type("GCode", (), {
+                "error": staticmethod(RuntimeError)})()
+
+            manager.set_value("first", "11")
+
+            class SetCommand:
+                values = {"PARAM": "second", "VALUE": "22"}
+
+                def get(command, key, default=None):
+                    return command.values.get(key, default)
+
+                @staticmethod
+                def error(message):
+                    return RuntimeError(message)
+
+                @staticmethod
+                def respond_raw(message):
+                    pass
+
+            manager.cmd_SET_MOD_PARAM(SetCommand())
+            manager._reload()
+
+            self.assertEqual(manager.variables, {"first": 11, "second": 22})
+            parser = configparser.ConfigParser()
+            parser.read(variables_file.name)
+            self.assertEqual(parser.getint("Variables", "first"), 11)
+            self.assertEqual(parser.getint("Variables", "second"), 22)
+
+            original_save = manager._save_all
+            entered = []
+
+            def reentrant_save():
+                if not entered:
+                    entered.append(True)
+                    manager.set_value("second", "33")
+                original_save()
+
+            manager._save_all = reentrant_save
+            manager.set_value("first", "44")
+            manager._save_all = original_save
+            manager._reload()
+            self.assertEqual(manager.variables, {"first": 44, "second": 33})
+
+    def test_concurrent_mod_parameter_writes_cannot_overwrite_newer_snapshot(self):
+        params = [
+            MOD_PARAMS.Parameter("first", int, 0, "First"),
+            MOD_PARAMS.Parameter("second", int, 0, "Second"),
+        ]
+        manager = MOD_PARAMS.ModParamManagement.__new__(
+            MOD_PARAMS.ModParamManagement)
+        manager.params = params
+        manager.params_map = dict((param.key, param) for param in params)
+        manager.variables = {"first": 0, "second": 0}
+        manager._variables_lock = threading.RLock()
+        manager.changes_gcode_present = False
+        first_snapshot_ready = threading.Event()
+        release_first_snapshot = threading.Event()
+        second_save_entered = threading.Event()
+        persisted = {}
+        failures = []
+
+        def controlled_save():
+            snapshot = dict(manager.variables)
+            if threading.current_thread().name == "first-mod-writer":
+                first_snapshot_ready.set()
+                if not release_first_snapshot.wait(1.0):
+                    raise RuntimeError("first writer was not released")
+            else:
+                second_save_entered.set()
+            persisted.clear()
+            persisted.update(snapshot)
+
+        def write(key, value):
+            try:
+                manager.set_value(key, value)
+            except Exception as exc:
+                failures.append(exc)
+
+        manager._save_all = controlled_save
+        first = threading.Thread(
+            target=write, args=("first", "11"), name="first-mod-writer")
+        second = threading.Thread(
+            target=write, args=("second", "22"), name="second-mod-writer")
+        first.start()
+        self.assertTrue(first_snapshot_ready.wait(1.0))
+        second.start()
+        self.assertFalse(second_save_entered.wait(0.1))
+        release_first_snapshot.set()
+        first.join(1.0)
+        second.join(1.0)
+
+        self.assertFalse(first.is_alive())
+        self.assertFalse(second.is_alive())
+        self.assertEqual(failures, [])
+        self.assertEqual(manager.variables, {"first": 11, "second": 22})
+        self.assertEqual(persisted, {"first": 11, "second": 22})
+
+    def test_failed_mod_parameter_write_rolls_back_without_notification(self):
+        parameter = MOD_PARAMS.Parameter("value", int, 1, "Value")
+        manager = MOD_PARAMS.ModParamManagement.__new__(
+            MOD_PARAMS.ModParamManagement)
+        manager.params = [parameter]
+        manager.params_map = {parameter.key: parameter}
+        manager.variables = {parameter.key: 1}
+        manager._variables_lock = threading.RLock()
+        manager.changes_gcode_present = True
+        callbacks = []
+        manager.reactor = type("Reactor", (), {
+            "register_callback": callbacks.append})()
+        manager._save_all = mock.Mock(side_effect=RuntimeError("write failed"))
+
+        with self.assertRaisesRegex(RuntimeError, "write failed"):
+            manager.set_value("value", "2")
+
+        self.assertEqual(manager.variables, {"value": 1})
+        self.assertEqual(callbacks, [])
 
     def test_mod_declaration_rejects_ui_inversion_for_non_boolean(self):
         declaration = {

@@ -835,9 +835,18 @@ class FeatherPagesMixin:
     def _mod_parameters(self):
         return mod_ui.visible_parameters(self.params)
 
-    def _render_mod_settings(self):
+    def _render_mod_settings(self, anchor_key=None):
         self._require_idle()
         parameters = self._mod_parameters()
+        if anchor_key is None:
+            anchor_key = getattr(self, "mod_restore_anchor_key", None)
+        self.mod_restore_anchor_key = None
+        if anchor_key is not None:
+            anchor_index = next(
+                (index for index, param in enumerate(parameters)
+                 if param.key == anchor_key), None)
+            if anchor_index is not None:
+                self.mod_page = anchor_index // mod_ui.VISIBLE_ROWS
         pagination = Pagination(
             parameters, getattr(self, "mod_page", 0),
             mod_ui.VISIBLE_ROWS)
@@ -848,9 +857,14 @@ class FeatherPagesMixin:
         commands = self.renderer.begin_page("Mod settings", back=True)
         first = start + 1 if total else 0
         last = min(total, start + len(visible))
+        category_label = mod_ui.page_category_label(
+            self.params, visible) if visible else "MOD PARAMETERS"
         commands.append(self.renderer.text(
-            25, 72, "MOD PARAMETERS // %02d-%02d / %02d" % (first, last, total),
+            25, 72, "%s // %02d-%02d / %02d" % (
+                category_label, first, last, total),
             ThemeColor.PRIMARY, "JetBrainsMono 8pt"))
+        self.mod_action_keys = dict(
+            (start + row, param.key) for row, param in enumerate(visible))
 
         row_x, row_width, row_height = 25, 690, 64
         for row, param in enumerate(visible):
@@ -907,11 +921,24 @@ class FeatherPagesMixin:
 
     def _open_mod_parameter(self, index, return_page=Page.MOD_SETTINGS):
         parameters = self._mod_parameters()
-        if index < 0 or index >= len(parameters):
-            raise RuntimeError("Parameter is no longer available")
-        param = parameters[index]
+        rendered_key = getattr(self, "mod_action_keys", {}).get(index)
+        if rendered_key is not None:
+            param = next(
+                (candidate for candidate in parameters
+                 if candidate.key == rendered_key), None)
+            if param is None:
+                raise RuntimeError("Parameter is no longer available")
+        else:
+            if index < 0 or index >= len(parameters):
+                raise RuntimeError("Parameter is no longer available")
+            param = parameters[index]
         if getattr(param, "readonly", False):
             raise RuntimeError("This parameter is read-only")
+        page_start = min(
+            getattr(self, "mod_page", 0) * mod_ui.VISIBLE_ROWS,
+            max(0, len(parameters) - 1))
+        self.mod_restore_anchor_key = (
+            parameters[page_start].key if parameters else None)
         self.mod_return_page = return_page
         kind = mod_ui.parameter_kind(param)
         if kind == "bool":

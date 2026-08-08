@@ -52,6 +52,154 @@
       }
     }
   },
+  "ui": {
+    "schema_version": 1,
+    "categories": [
+      {
+        "id": "primary",
+        "label": "ESSENTIAL",
+        "order": 1,
+        "parameters": [
+          "display",
+          "z_offset",
+          "load_zoffset",
+          "use_kamp",
+          "camera",
+          "print_leveling",
+          "safe_z",
+          "m600_z_min",
+          "filament_switch_sensor",
+          "chamber_light"
+        ]
+      },
+      {
+        "id": "safety_tuning",
+        "label": "SAFETY & TUNING",
+        "order": 2,
+        "parameters": [
+          "weight_check",
+          "weight_check_max",
+          "cell_weight",
+          "bed_mesh_validation",
+          "bed_mesh_validation_clear",
+          "bed_mesh_validation_tolerance",
+          "tune_config",
+          "tune_klipper"
+        ]
+      },
+      {
+        "id": "behavior_ui",
+        "label": "PRINT & INTERFACE",
+        "order": 3,
+        "parameters": [
+          "disable_priming",
+          "zclear",
+          "disable_cleaning",
+          "clear_cooldown_temp",
+          "load_zoffset_cleaning",
+          "disable_skew",
+          "park_dz",
+          "stop_motor",
+          "auto_reboot",
+          "power_loss_recovery",
+          "feather_theme",
+          "backlight",
+          "backlight_eco",
+          "sound",
+          "close_dialogs"
+        ]
+      },
+      {
+        "id": "system_services",
+        "label": "SYSTEM SERVICES",
+        "order": 4,
+        "parameters": [
+          "use_swap",
+          "check_md5",
+          "block_cloud",
+          "zssh",
+          "disable_screen_led",
+          "disable_web",
+          "disable_moonraker"
+        ]
+      },
+      {
+        "id": "experimental",
+        "label": "EXPERIMENTAL",
+        "order": 5,
+        "parameters": [
+          "klipper_rt",
+          "zram_algo"
+        ]
+      },
+      {
+        "id": "midi",
+        "label": "MIDI",
+        "order": 6,
+        "parameters": [
+          "midi_on",
+          "midi_start",
+          "midi_end"
+        ]
+      },
+      {
+        "id": "other",
+        "label": "OTHER",
+        "order": 7,
+        "fallback": true,
+        "parameters": []
+      }
+    ],
+    "strict_visibility_dependencies": [
+      {
+        "parameter": "weight_check_max",
+        "depends_on": "weight_check",
+        "operator": "equals",
+        "value": true
+      },
+      {
+        "parameter": "bed_mesh_validation_clear",
+        "depends_on": "bed_mesh_validation",
+        "operator": "equals",
+        "value": true
+      },
+      {
+        "parameter": "bed_mesh_validation_tolerance",
+        "depends_on": "bed_mesh_validation",
+        "operator": "equals",
+        "value": true
+      },
+      {
+        "parameter": "zram_algo",
+        "depends_on": "use_swap",
+        "operator": "equals",
+        "value": "ZRAM"
+      },
+      {
+        "parameter": "load_zoffset_cleaning",
+        "depends_on": "disable_cleaning",
+        "operator": "equals",
+        "value": false
+      }
+    ],
+    "independent_but_grouped": [
+      {
+        "parameter": "cell_weight",
+        "note": "Keep near load-cell safety but do not hide behind weight_check."
+      },
+      {
+        "parameters": [
+          "tune_config",
+          "tune_klipper"
+        ],
+        "note": "Group together; they are independent settings."
+      }
+    ],
+    "warning_only_not_dependencies": [
+      "disable_web",
+      "disable_moonraker"
+    ]
+  },
   "parameters": [
     {
       "key": "auto_reboot",

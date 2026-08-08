@@ -5,7 +5,7 @@
 ## This file may be distributed under the terms of the GNU GPLv3 license
 
 
-import ast, configparser, logging
+import ast, configparser, logging, threading
 import json
 
 from dataclasses import dataclass
@@ -40,6 +40,16 @@ class Parameter:
     fraction_digits: Optional[int] = None
     restart: Optional[str] = None
     ui_inverted: bool = False
+    ui_category: Optional[str] = None
+    ui_visible_if: Optional[Dict[str, Any]] = None
+    ui_order: Optional[int] = None
+
+
+@dataclass(frozen=True)
+class ParameterCategory:
+    id: str
+    label: str
+    order: int = 0
 
 
 class ModParamManagement:
@@ -53,6 +63,10 @@ class ModParamManagement:
         self.declaration = self.config.get("declaration")
         self.filename = self.config.get("filename")
         self.variables = dict()
+        # Both G-code and local UIs use this manager.  Keep their read-modify-
+        # write sequences serialized so a full variables-file write cannot
+        # discard a value committed by another caller.
+        self._variables_lock = threading.RLock()
 
         self.reactor = self.printer.get_reactor()
         gcode_macro = self.printer.load_object(config, "gcode_macro")
@@ -96,6 +110,71 @@ class ModParamManagement:
             "str": str
         }
 
+        declaration_ui = data.get("ui", {})
+        if not isinstance(declaration_ui, dict):
+            raise ValueError("[mod_params]: Invalid declaration UI metadata!")
+        categories = []
+        category_ids = set()
+        category_by_parameter = {}
+        ui_order_by_parameter = {}
+        next_ui_order = 0
+        fallback_category_id = None
+        for category_data in declaration_ui.get("categories", []):
+            if not isinstance(category_data, dict):
+                raise ValueError("[mod_params]: Invalid UI category metadata!")
+            category = ParameterCategory(
+                id=str(category_data["id"]),
+                label=str(category_data["label"]),
+                order=int(category_data.get("order", 0)))
+            if category.id in category_ids:
+                raise ValueError(
+                    '[mod_params]: Duplicate UI category "%s"!' % category.id)
+            category_ids.add(category.id)
+            categories.append(category)
+            fallback = category_data.get("fallback", False)
+            if not isinstance(fallback, bool):
+                raise ValueError(
+                    '[mod_params]: UI category "%s" has invalid fallback!'
+                    % category.id)
+            if fallback:
+                if fallback_category_id is not None:
+                    raise ValueError(
+                        "[mod_params]: Multiple fallback UI categories!")
+                fallback_category_id = category.id
+            category_parameters = category_data.get("parameters", [])
+            if not isinstance(category_parameters, list):
+                raise ValueError(
+                    '[mod_params]: UI category "%s" has invalid parameters!'
+                    % category.id)
+            for parameter_key in category_parameters:
+                if (not isinstance(parameter_key, str)
+                        or parameter_key in category_by_parameter):
+                    raise ValueError(
+                        '[mod_params]: Invalid or duplicate categorized parameter!')
+                category_by_parameter[parameter_key] = category.id
+                ui_order_by_parameter[parameter_key] = next_ui_order
+                next_ui_order += 1
+        self.ui_categories = sorted(
+            categories, key=lambda category: (category.order, category.label))
+        self.ui_categories_map = dict(
+            (category.id, category) for category in self.ui_categories)
+        dependency_by_parameter = {}
+        for dependency in declaration_ui.get(
+                "strict_visibility_dependencies", []):
+            if (not isinstance(dependency, dict)
+                    or not isinstance(dependency.get("parameter"), str)
+                    or not isinstance(dependency.get("depends_on"), str)
+                    or dependency.get("operator") != "equals"
+                    or "value" not in dependency
+                    or dependency["parameter"] in dependency_by_parameter):
+                raise ValueError(
+                    "[mod_params]: Invalid UI visibility dependency!")
+            dependency_by_parameter[dependency["parameter"]] = {
+                "parameter": dependency["depends_on"],
+                "operator": dependency["operator"],
+                "value": dependency["value"],
+            }
+
         for enum_name, enum_data in data.get("enums", {}).items():
             if enum_name in self.type_mapping:
                 logging.error(f'[mod_params]: Type "{enum_name}" already exists!')
@@ -124,6 +203,26 @@ class ModParamManagement:
             if "inverted" in ui_data and param_type is not bool:
                 raise ValueError(
                     f'[mod_params]: Parameter "{param_data["key"]}" uses ui.inverted but is not boolean!')
+            ui_category = ui_data.get(
+                "category", category_by_parameter.get(
+                    param_data["key"], fallback_category_id))
+            if ui_category is not None:
+                if not isinstance(ui_category, str):
+                    raise ValueError(
+                        f'[mod_params]: Parameter "{param_data["key"]}" has invalid ui.category!')
+                if ui_category not in self.ui_categories_map:
+                    raise ValueError(
+                        f'[mod_params]: Parameter "{param_data["key"]}" uses unknown ui.category!')
+            ui_visible_if = ui_data.get(
+                "visible_if", dependency_by_parameter.get(param_data["key"]))
+            if ui_visible_if is not None:
+                if (not isinstance(ui_visible_if, dict)
+                        or not isinstance(ui_visible_if.get("parameter"), str)
+                        or ui_visible_if.get("operator") != "equals"
+                        or "value" not in ui_visible_if):
+                    raise ValueError(
+                        f'[mod_params]: Parameter "{param_data["key"]}" has invalid ui.visible_if!')
+                ui_visible_if = dict(ui_visible_if)
 
             # Handle enum default values
             if issubclass(param_type, Enum):
@@ -145,6 +244,9 @@ class ModParamManagement:
                 fraction_digits=param_data.get("fraction_digits"),
                 restart=param_data.get("restart"),
                 ui_inverted=ui_inverted,
+                ui_category=ui_category,
+                ui_visible_if=ui_visible_if,
+                ui_order=ui_order_by_parameter.get(param_data["key"]),
                 deprecated=DeprecationParameter(
                     key=param_data["deprecated"]["key"],
                     new_key=param_data["key"],
@@ -157,8 +259,30 @@ class ModParamManagement:
 
             params.append(param)
 
+        params.sort(key=lambda param: (
+            param.ui_order is None,
+            param.ui_order if param.ui_order is not None else param.order,
+            param.label))
         self.params = params
         self.params_map = {p.key: p for p in params}
+        unknown_categorized = set(category_by_parameter) - set(self.params_map)
+        if unknown_categorized:
+            raise ValueError(
+                "[mod_params]: UI categories contain unknown parameters: %s"
+                % ", ".join(sorted(unknown_categorized)))
+        unknown_dependencies = (
+            set(dependency_by_parameter) - set(self.params_map))
+        if unknown_dependencies:
+            raise ValueError(
+                "[mod_params]: UI dependencies contain unknown parameters: %s"
+                % ", ".join(sorted(unknown_dependencies)))
+        for param in params:
+            condition = param.ui_visible_if
+            if (condition is not None
+                    and condition["parameter"] not in self.params_map):
+                raise ValueError(
+                    '[mod_params]: Parameter "%s" depends on unknown parameter "%s"!'
+                    % (param.key, condition["parameter"]))
         self.migration_map = {p.deprecated.key: p.deprecated for p in params if p.deprecated}
 
     def _create_enum_from_json(self, enum_name: str, enum_data: Dict[str, Any]) -> Type[Enum]:
@@ -170,6 +294,13 @@ class ModParamManagement:
             raise self.printer.command_error(msg)
 
     def _reload(self):
+        lock = getattr(self, "_variables_lock", None)
+        if lock is None:
+            lock = self._variables_lock = threading.RLock()
+        with lock:
+            self._reload_locked()
+
+    def _reload_locked(self):
         result = dict()
         parser = configparser.ConfigParser()
 
@@ -264,13 +395,31 @@ class ModParamManagement:
                 new_value = self._load_param(param, str(value))
         except Exception:
             raise ValueError('Failed to update parameter "%s"' % key)
-        if new_value != self.variables[key]:
-            self.variables[key] = new_value
-            self._save_all()
-            if self.changes_gcode_present:
-                self.reactor.register_callback(
-                    lambda _, __param=param: self._notify_changed(__param))
-        return self._transform(param, self.variables[key])
+        self._store_value(param, new_value)
+        lock = getattr(self, "_variables_lock", None)
+        with lock:
+            return self._transform(param, self.variables[key])
+
+    def _store_value(self, param: Parameter, new_value: Any):
+        """Atomically update one value and persist the complete snapshot."""
+        lock = getattr(self, "_variables_lock", None)
+        if lock is None:
+            lock = self._variables_lock = threading.RLock()
+        changed = False
+        with lock:
+            previous_value = self.variables[param.key]
+            if new_value != previous_value:
+                self.variables[param.key] = new_value
+                try:
+                    self._save_all()
+                except Exception:
+                    self.variables[param.key] = previous_value
+                    raise
+                changed = True
+        if changed and self.changes_gcode_present:
+            self.reactor.register_callback(
+                lambda _, __param=param: self._notify_changed(__param))
+        return changed
 
     def _format_label(self, param: Parameter, value: Any):
         if param.options:
@@ -338,12 +487,7 @@ class ModParamManagement:
         except:
             raise gcmd.error(f'Failed to update parameter "{key}" with value: "{value}"')
 
-        if new_value != self.variables[key]:
-            self.variables[key] = new_value
-            self._save_all()
-
-            if self.changes_gcode_present:
-                self.reactor.register_callback(lambda _, __param=param: self._notify_changed(__param))
+        self._store_value(param, new_value)
 
         if not param.hidden:
             transformed = self._transform(param, self.variables[key])

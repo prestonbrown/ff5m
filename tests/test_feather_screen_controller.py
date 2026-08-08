@@ -1406,6 +1406,155 @@ class ControllerSafetyTest(unittest.TestCase):
         self.assertIn("mod.prev", controller.renderer._buttons)
         self.assertNotIn("mod.next", controller.renderer._buttons)
 
+    def test_mod_settings_category_context_handles_page_boundaries(self):
+        params = [
+            mod_param("a%d" % index, bool, False, "A %d" % index,
+                      ui_category="first") for index in range(5)] + [
+            mod_param("b0", bool, False, "B 0", ui_category="second")]
+        controller = mod_controller(
+            params, dict((param.key, False) for param in params))
+        controller.params.ui_categories_map["first"].label = "FIRST"
+        controller.params.ui_categories_map["second"].label = "SECOND"
+
+        controller._render_mod_settings()
+        first = "\n".join(controller.draw_batches[-1])
+        self.assertIn('"FIRST // 01-05 / 06"', first)
+        self.assertNotIn("SECOND >", first)
+
+        controller._handle_mod_action("mod.next")
+        second = "\n".join(controller.draw_batches[-1])
+        self.assertIn('"SECOND // 06-06 / 06"', second)
+        controller._handle_mod_action("mod.prev")
+        self.assertIn('"FIRST // 01-05 / 06"',
+                      "\n".join(controller.draw_batches[-1]))
+
+        mixed = params[3:5] + params[5:]
+        mixed_controller = mod_controller(
+            mixed, dict((param.key, False) for param in mixed))
+        mixed_controller.params.ui_categories_map["first"].label = "FIRST"
+        mixed_controller.params.ui_categories_map["second"].label = "SECOND"
+        mixed_controller._render_mod_settings()
+        self.assertIn('"FIRST > SECOND // 01-03 / 03"',
+                      "\n".join(mixed_controller.draw_batches[-1]))
+
+    def test_mod_dependency_toggle_repaginates_and_preserves_anchor(self):
+        condition = {"parameter": "parent", "operator": "equals",
+                     "value": True}
+        params = [
+            mod_param("before%d" % index, bool, False, "Before %d" % index,
+                      ui_category="first") for index in range(4)] + [
+            mod_param("parent", bool, False, "Parent", ui_category="first"),
+            mod_param("child", int, 1, "Child", ui_category="first",
+                      ui_visible_if=condition),
+            mod_param("tail", bool, False, "Tail", ui_category="second"),
+        ]
+        controller = mod_controller(
+            params, dict((param.key, param.default) for param in params))
+        controller.params.ui_categories_map["first"].label = "FIRST"
+        controller.params.ui_categories_map["second"].label = "SECOND"
+
+        controller._render_mod_settings()
+        self.assertIn("01-05 / 06", "\n".join(controller.draw_batches[-1]))
+        controller._handle_mod_action("mod.item.4")
+
+        expanded = "\n".join(controller.draw_batches[-1])
+        self.assertIn("01-05 / 07", expanded)
+        self.assertEqual(controller.mod_page, 0)
+        controller._handle_mod_action("mod.next")
+        expanded_second = "\n".join(controller.draw_batches[-1])
+        self.assertIn("06-07 / 07", expanded_second)
+        self.assertIn('"FIRST > SECOND // 06-07 / 07"', expanded_second)
+        self.assertEqual(
+            set(controller.renderer._buttons) & {"mod.item.5", "mod.item.6"},
+            {"mod.item.5"})
+
+        controller._handle_mod_action("mod.prev")
+        controller._handle_mod_action("mod.item.4")
+        self.assertIn("01-05 / 06", "\n".join(controller.draw_batches[-1]))
+        controller.mod_page = 99
+        controller._render_mod_settings()
+        self.assertEqual(controller.mod_page, 1)
+        collapsed_second = "\n".join(controller.draw_batches[-1])
+        self.assertIn("06-06 / 06", collapsed_second)
+        self.assertIn('"SECOND // 06-06 / 06"', collapsed_second)
+
+    def test_mod_enum_dependency_updates_after_apply_in_both_directions(self):
+        Swap = enum.Enum("Swap", {"OFF": 0, "ZRAM": 3})
+        condition = {"parameter": "use_swap", "operator": "equals",
+                     "value": "ZRAM"}
+        params = [
+            mod_param("before%d" % index, bool, False, "Before %d" % index)
+            for index in range(4)] + [
+            mod_param("use_swap", Swap, 0, "Swap"),
+            mod_param("zram_algo", str, "zstd", "Compression",
+                      ui_visible_if=condition),
+        ]
+        controller = mod_controller(
+            params, dict((param.key, param.default) for param in params))
+
+        controller._render_mod_settings()
+        self.assertIn("01-05 / 05", "\n".join(controller.draw_batches[-1]))
+        controller._handle_mod_action("mod.item.4")
+        controller._handle_mod_action("mod.option.1")
+        controller._handle_mod_action("mod.apply")
+
+        self.assertEqual(controller.page, FEATHER.Page.MOD_SETTINGS)
+        self.assertIn("01-05 / 06", "\n".join(controller.draw_batches[-1]))
+        self.assertEqual(controller.mod_page, 0)
+        controller._handle_mod_action("mod.next")
+        self.assertIn("06-06 / 06", "\n".join(controller.draw_batches[-1]))
+
+        controller._handle_mod_action("mod.prev")
+        controller._handle_mod_action("mod.item.4")
+        controller._handle_mod_action("mod.option.0")
+        controller._handle_mod_action("mod.apply")
+
+        self.assertEqual(controller.mod_page, 0)
+        self.assertIn("01-05 / 05", "\n".join(controller.draw_batches[-1]))
+
+    def test_stale_mod_action_index_never_opens_a_different_parameter(self):
+        condition = {"parameter": "parent", "operator": "equals",
+                     "value": True}
+        parent = mod_param("parent", bool, True, "Parent")
+        child = mod_param("child", int, 1, "Child", ui_visible_if=condition)
+        tail = mod_param("tail", bool, False, "Tail")
+        controller = mod_controller(
+            [parent, child, tail],
+            {"parent": True, "child": 1, "tail": False})
+        controller._render_mod_settings()
+
+        controller.params.variables["parent"] = False
+        controller._handle_mod_action("mod.item.2")
+
+        self.assertEqual(controller.params.updated, [("tail", True)])
+
+    def test_mod_ui_uses_only_public_setter_for_updates(self):
+        flag = mod_param("camera", bool, False, "Camera")
+
+        class GuardedVariables(dict):
+            def __setitem__(self, key, value):
+                raise AssertionError("UI mutated variables directly")
+
+        class PublicManager:
+            def __init__(manager):
+                manager.params = [flag]
+                manager.params_map = {flag.key: flag}
+                manager.variables = GuardedVariables(camera=False)
+                manager.calls = []
+
+            def set_value(manager, key, value):
+                manager.calls.append((key, value))
+                dict.__setitem__(manager.variables, key, bool(int(value)))
+                return int(manager.variables[key])
+
+        controller = mod_controller([flag], {"camera": False})
+        manager = PublicManager()
+        controller.params = manager
+
+        controller._handle_mod_action("mod.item.0")
+
+        self.assertEqual(manager.calls, [("camera", "1")])
+
     def test_mod_settings_renders_raw_and_inverted_boolean_states(self):
         params = [
             mod_param("normal_false", bool, False, "Normal false"),
@@ -1671,6 +1820,7 @@ class ControllerSafetyTest(unittest.TestCase):
         controller._set_mod_value(param, "1")
 
         self.assertEqual(events, ["restart-loader"])
+        self.assertEqual(controller.params.updated, [("klipper_rt", True)])
         self.assertFalse(controller.mod_update_pending)
         reactor.run_until(100.0)
         self.assertEqual(events, ["restart-loader", "change-hook"])

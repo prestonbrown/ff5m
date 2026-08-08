@@ -19,7 +19,47 @@ RESTART_EFFECTS = frozenset(("klipper", "printer"))
 
 def visible_parameters(manager):
     return [param for param in manager.params
-            if not getattr(param, "hidden", False)]
+            if (not getattr(param, "hidden", False)
+                and parameter_is_visible(manager, param))]
+
+
+def parameter_is_visible(manager, param):
+    condition = getattr(param, "ui_visible_if", None)
+    if not condition:
+        return True
+    if condition.get("operator") != "equals":
+        return True
+    parent_key = condition.get("parameter")
+    parent = getattr(manager, "params_map", {}).get(parent_key)
+    if parent is None:
+        parent = next(
+            (candidate for candidate in manager.params
+             if candidate.key == parent_key), None)
+    if parent is None:
+        return True
+    current = manager.variables.get(parent.key, parent.default)
+    expected = condition.get("value")
+    if parameter_kind(parent) == "enum":
+        try:
+            current = parent.type(current).name
+        except (TypeError, ValueError):
+            return False
+    return current == expected
+
+
+def parameter_category(manager, param):
+    category_id = getattr(param, "ui_category", None)
+    category = getattr(manager, "ui_categories_map", {}).get(category_id)
+    return getattr(category, "label", None) or "OTHER"
+
+
+def page_category_label(manager, parameters):
+    labels = []
+    for param in parameters:
+        label = parameter_category(manager, param)
+        if label not in labels:
+            labels.append(label)
+    return " > ".join(labels)
 
 
 def parameter_kind(param):
