@@ -378,6 +378,14 @@
       }
     },
     {
+      "key": "show_feather_promo",
+      "type": "bool",
+      "default": 1,
+      "label": "Show Feather upgrade prompt",
+      "description": "Offer the updated Feather screen after startup.",
+      "hidden": true
+    },
+    {
       "key": "camera",
       "type": "bool",
       "default": 0,
