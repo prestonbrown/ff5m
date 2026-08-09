@@ -27,13 +27,18 @@ from ff5m_ui.z_offset import actions as z_actions
 ARTIFACT_ROOT = "/data/feather-ui-tests"
 ACTIVE_MARKER = os.path.join(ARTIFACT_ROOT, "active.json")
 FRAMEBUFFER = "/dev/fb0"
+FRAMEBUFFER_PAN = "/sys/class/graphics/fb0/pan"
+FRAMEBUFFER_STRIDE = "/sys/class/graphics/fb0/stride"
 PRINTER_LOG = "/data/logFiles/printer.log"
 SCREEN_WIDTH = 800
 SCREEN_HEIGHT = 480
+FRAME_BYTES_PER_PIXEL = 4
 FRAME_BYTES = SCREEN_WIDTH * SCREEN_HEIGHT * 4
+FRAME_PAN_RETRIES = 4
 FRAME_SAMPLE_INTERVAL = 0.05
 FRAME_SETTLE_INTERVAL = 0.25
 FRAME_SETTLE_TIMEOUT = 3.0
+CAPTURE_RECEIPT_TIMEOUT = 6.0
 MAX_RUNS = 10
 MAX_BYTES = 512 * 1024 * 1024
 TAP_OPERATION_TIMEOUT = 1900.0
@@ -114,10 +119,13 @@ class ArtifactWorker:
     """Perform framebuffer and artifact IO away from Klipper's reactor."""
 
     def __init__(self, reactor, run_directory, framebuffer=FRAMEBUFFER,
-                 printer_log=PRINTER_LOG):
+                 printer_log=PRINTER_LOG, framebuffer_pan=FRAMEBUFFER_PAN,
+                 framebuffer_stride=FRAMEBUFFER_STRIDE):
         self.reactor = reactor
         self.run_directory = run_directory
         self.framebuffer = framebuffer
+        self.framebuffer_pan = framebuffer_pan
+        self.framebuffer_stride = framebuffer_stride
         self.printer_log = printer_log
         self.tasks = queue.Queue()
         self.records = []
@@ -203,14 +211,79 @@ class ArtifactWorker:
             stream.write(",".join(str(values.get(field, ""))
                                   for field in fields) + "\n")
 
-    def _read_frame(self):
+    def _read_pan(self):
+        try:
+            with open(self.framebuffer_pan, "r", encoding="ascii") as stream:
+                fields = stream.read(64).strip().split(",")
+        except OSError as exc:
+            if self.framebuffer == FRAMEBUFFER:
+                raise RuntimeError("Framebuffer pan is unavailable") from exc
+            return 0, 0
+        try:
+            if len(fields) != 2:
+                raise ValueError()
+            xoffset, yoffset = (int(field) for field in fields)
+        except ValueError as exc:
+            raise RuntimeError("Framebuffer pan is invalid") from exc
+        if xoffset < 0 or yoffset < 0:
+            raise RuntimeError("Framebuffer pan is invalid")
+        return xoffset, yoffset
+
+    def _read_stride(self):
+        try:
+            with open(self.framebuffer_stride, "r",
+                      encoding="ascii") as stream:
+                stride = int(stream.read(64).strip())
+        except OSError as exc:
+            if self.framebuffer == FRAMEBUFFER:
+                raise RuntimeError(
+                    "Framebuffer stride is unavailable") from exc
+            stride = SCREEN_WIDTH * FRAME_BYTES_PER_PIXEL
+        except ValueError as exc:
+            raise RuntimeError("Framebuffer stride is invalid") from exc
+        if stride < SCREEN_WIDTH * FRAME_BYTES_PER_PIXEL:
+            raise RuntimeError("Framebuffer stride is invalid")
+        return stride
+
+    def _read_frame_at(self, pan, stride):
+        xoffset, yoffset = pan
+        row_bytes = SCREEN_WIDTH * FRAME_BYTES_PER_PIXEL
+        if (xoffset + SCREEN_WIDTH) * FRAME_BYTES_PER_PIXEL > stride:
+            raise RuntimeError("Framebuffer pan exceeds its stride")
+        rows = []
         with open(self.framebuffer, "rb", buffering=0) as stream:
-            data = stream.read(FRAME_BYTES)
-        if len(data) != FRAME_BYTES:
-            raise RuntimeError(
-                "Framebuffer has %d bytes, expected %d" %
-                (len(data), FRAME_BYTES))
-        return data
+            if stride == row_bytes and xoffset == 0:
+                stream.seek(yoffset * stride)
+                data = stream.read(FRAME_BYTES)
+                if len(data) != FRAME_BYTES:
+                    raise RuntimeError(
+                        "Framebuffer has %d bytes, expected %d" %
+                        (len(data), FRAME_BYTES))
+                return data
+            for row in range(SCREEN_HEIGHT):
+                stream.seek(
+                    (yoffset + row) * stride
+                    + xoffset * FRAME_BYTES_PER_PIXEL)
+                data = stream.read(row_bytes)
+                if len(data) != row_bytes:
+                    raise RuntimeError(
+                        "Framebuffer row has %d bytes, expected %d" %
+                        (len(data), row_bytes))
+                rows.append(data)
+        return b"".join(rows)
+
+    def _read_frame(self):
+        stride = self._read_stride()
+        for _attempt in range(FRAME_PAN_RETRIES):
+            before = self._read_pan()
+            data = self._read_frame_at(before, stride)
+            if self._read_pan() == before:
+                self.last_frame_geometry = {
+                    "xoffset": before[0], "yoffset": before[1],
+                    "stride": stride,
+                }
+                return data
+        raise RuntimeError("Framebuffer page changed during capture")
 
     def _stable_frame(self):
         deadline = time.monotonic() + FRAME_SETTLE_TIMEOUT
@@ -258,6 +331,7 @@ class ArtifactWorker:
         record.update({
             "number": number, "label": label, "file": filename,
             "sha256": digest, "frame_bytes": len(data), "passed": True,
+            "framebuffer": getattr(self, "last_frame_geometry", None),
         })
         self.records.append(record)
         _atomic_json(os.path.join(self.run_directory, "manifest.json"),
@@ -365,6 +439,7 @@ class UITestFeature:
         self.test_results = {}
         self.renderer_dropped = 0
         self.ui_filament_target = None
+        self.capture_receipts = {}
 
     @property
     def reactor(self):
@@ -415,6 +490,11 @@ class UITestFeature:
 
     def on_gcode_output(self, message):
         pass
+
+    def on_render_receipt(self, receipt, eventtime):
+        token = str(getattr(receipt, "token", ""))
+        if self.running and token.startswith("ui-test:"):
+            self.capture_receipts[token] = receipt
 
     def on_print_state_changed(self, old_state, new_state, stats_state):
         if self.running and new_state != PrintState.IDLE:
@@ -473,6 +553,7 @@ class UITestFeature:
         self.capture_number = 0
         self.calibration_stages = []
         self.test_results = {}
+        self.capture_receipts = {}
         self.renderer_dropped = self.host.renderer.get_status()[
             "dropped_batches"]
         self._capture_original_state()
@@ -814,19 +895,31 @@ class UITestFeature:
             steps, "component-resume-timer", self._resume_ui_timer)
 
     def _render_component_default(self, page):
-        title = str(getattr(page.page_key, "value", page.page_key))
-        title = title.replace("_", " ").replace(".", " / ")
+        title = self._component_title(page)
         commands = self.host.renderer.begin_page(title, back=False)
         commands += page.draw(self.host.renderer, {})
         self.host.renderer.send(commands)
+        self._render_component_footer()
 
     def _render_component_case(self, case):
         page = case["page"]
-        title = str(getattr(page.page_key, "value", page.page_key))
-        title = title.replace("_", " ").replace(".", " / ")
+        title = self._component_title(page)
         commands = self.host.renderer.begin_page(title, back=False)
         commands += page.draw(self.host.renderer, case["state"])
         self.host.renderer.send(commands)
+        self._render_component_footer()
+
+    @staticmethod
+    def _component_title(page):
+        title = getattr(page, "title", None)
+        if title:
+            return str(title)
+        title = str(getattr(page.page_key, "value", page.page_key))
+        return title.replace("_", " ").replace(".", " / ")
+
+    def _render_component_footer(self):
+        self.host.renderer.footer(
+            25.0, 0.0, 25.0, 0.0, "PREVIEW", "IDLE")
 
     def _decode_component_cases(self, encoded):
         if not encoded:
@@ -1166,6 +1259,8 @@ class UITestFeature:
             self._schedule(delay)
 
     def _capture(self, step):
+        if step.get("capture_pending"):
+            return
         renderer_status = self.host.renderer.get_status()
         target = step.setdefault(
             "render_target", renderer_status["submitted_batches"])
@@ -1181,6 +1276,33 @@ class UITestFeature:
                 raise RuntimeError("Renderer did not settle before capture")
             self._schedule(0.02)
             return
+        token = step.get("capture_receipt")
+        if token is None:
+            token = "ui-test:%s:%d:%d" % (
+                self.run_id or os.getpid(), self.step_index,
+                self.capture_number + 1)
+            command = (
+                "--batch flush --receipt %s --receipt-phase presented" %
+                token)
+            accepted = self.host.renderer.send(
+                (command,), kind="state", key="ui-test-capture-barrier")
+            if not accepted:
+                raise RuntimeError("Unable to queue capture receipt")
+            step["capture_receipt"] = token
+            step["receipt_deadline"] = (
+                self.reactor.monotonic() + CAPTURE_RECEIPT_TIMEOUT)
+            self._schedule(0.02)
+            return
+        receipt = self.capture_receipts.get(token)
+        if receipt is None:
+            if self.reactor.monotonic() >= step["receipt_deadline"]:
+                raise RuntimeError("Typer did not present frame before capture")
+            self._schedule(0.02)
+            return
+        del self.capture_receipts[token]
+        if not bool(getattr(receipt, "success", False)):
+            raise RuntimeError("Typer failed to present frame before capture")
+        step["capture_pending"] = True
         self.renderer_dropped = renderer_status["dropped_batches"]
         self.capture_number += 1
         metadata = self._screen_metadata()

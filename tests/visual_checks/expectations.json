@@ -88,6 +88,29 @@
                 "font rasterization"
             ]
         },
+        "default-render-benchmark":
+        {
+            "description": "Default render benchmark page before benchmark samples have accumulated.",
+            "required":
+            [
+                "RENDER BENCHMARK title and BACK action",
+                "framed glyph stress area with page indicator and switch instruction",
+                "metrics panel with commit FPS, latency, CPU, flush, Python, missed and raster fields",
+                "benchmark mode and warmup progress"
+            ],
+            "forbidden":
+            [
+                "blank frame",
+                "clipped metrics or navigation controls",
+                "unintended overlap outside the deliberate glyph stress area"
+            ],
+            "allowed_variations":
+            [
+                "benchmark glyph pattern and counters",
+                "theme colors",
+                "font rasterization"
+            ]
+        },
         "default-safe-z-briefing":
         {
             "description": "Safe Z calibration briefing before work starts.",
@@ -302,8 +325,8 @@
             "required":
             [
                 "safe Z calibration content",
-                "probe action shown busy",
-                "adjust and save actions remain unavailable"
+                "PROBE BED CENTER action uses amber busy styling",
+                "LOWER, HIGHER and SAVE actions use muted disabled styling"
             ],
             "forbidden":
             [
@@ -362,11 +385,11 @@
         },
         "z-paper-pressure-dialog":
         {
-            "description": "Paper Z-offset pressure confirmation dialog.",
+            "description": "Paper Z-offset high-pressure warning dialog.",
             "required":
             [
                 "modal pressure or paper-drag guidance",
-                "clear confirmation and cancellation actions"
+                "clear OK acknowledgement action"
             ],
             "forbidden":
             [

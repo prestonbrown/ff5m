@@ -13,6 +13,11 @@ no display plugin and does not register the command.
 After deploying a changed Feather Python module, use a hard Klipper process
 restart before testing. A normal Klipper `RESTART` rebuilds printer state in the
 existing interpreter and can retain an already imported module in `sys.modules`.
+On the printer, the explicit process restart is:
+
+```sh
+/opt/config/mod/.shell/restart_klipper.sh --hard
+```
 
 Run the complete unattended trace on an observed, idle printer with an empty
 bed:
@@ -82,9 +87,12 @@ already cleared by Klipper restart and marks the previous trace interrupted.
 Artifacts live under `/data/feather-ui-tests/<timestamp>-<suite>/`: top-down
 32-bit BMP files, `manifest.json`, `environment.json`, `run.log`, a sliced
 `printer.log`, `temperatures.csv`, `positions.csv`, and `summary.json` with
-calibration stages/results. Framebuffer reads, stability hashing, BMP encoding,
-log copying, CSV/JSON updates, and retention execute in the artifact worker
-thread. The reactor only schedules steps and receives completion callbacks.
+calibration stages/results. Before a step capture, the test harness waits for a
+Typer `presented` receipt. Framebuffer reads use the active page reported by
+`/sys/class/graphics/fb0/pan`, honor the reported stride, and retry if a page
+flip occurs during the copy. Stability hashing, BMP encoding, log copying,
+CSV/JSON updates, and retention execute in the artifact worker thread. The
+reactor only schedules steps and receives completion callbacks.
 Retention keeps at most ten completed runs and 512 MiB, never deletes the active
 run, and preserves the newest failure for inspection.
 

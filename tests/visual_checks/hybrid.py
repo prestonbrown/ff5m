@@ -428,6 +428,7 @@ def load_manifest(directory, source="printer"):
             "source": source,
             "path": image,
             "artifact_directory": directory,
+            "_explicit_case_id": bool(item.get("case_id")),
             "case_id": str(item.get("case_id") or (
                 "%s-%s" % (source, _slug(item.get("label") or index)))),
         })
@@ -460,6 +461,8 @@ def merge_hybrid(designer_records, printer_records, parity=False,
         candidates = (
             list(parity_records) if parity_records is not None else replaced)
         for printer in candidates:
+            if printer.get("_explicit_case_id", True) is False:
+                continue
             designer = by_case.get(printer.get("case_id"))
             if designer is None:
                 designer = defaults.get(printer.get("semantic_page_id"))

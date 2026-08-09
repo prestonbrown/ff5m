@@ -62,6 +62,38 @@ class ArtifactWorkerTest(unittest.TestCase):
         self.assertEqual(worker._read_frame.call_count, 6)
         self.assertEqual(sleep.call_count, 5)
 
+    def test_frame_capture_reads_the_active_virtual_page(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = pathlib.Path(temporary)
+            framebuffer = root / "fb0"
+            pan = root / "pan"
+            stride = root / "stride"
+            first = b"\x11\x22\x33\xff" * (
+                UI_TEST.SCREEN_WIDTH * UI_TEST.SCREEN_HEIGHT)
+            second = b"\xaa\xbb\xcc\xff" * (
+                UI_TEST.SCREEN_WIDTH * UI_TEST.SCREEN_HEIGHT)
+            framebuffer.write_bytes(first + second)
+            pan.write_text("0,480\n", encoding="ascii")
+            stride.write_text("3200\n", encoding="ascii")
+            worker = object.__new__(UI_TEST.ArtifactWorker)
+            worker.framebuffer = str(framebuffer)
+            worker.framebuffer_pan = str(pan)
+            worker.framebuffer_stride = str(stride)
+
+            self.assertEqual(worker._read_frame(), second)
+
+    def test_frame_capture_retries_if_page_flips_during_read(self):
+        worker = object.__new__(UI_TEST.ArtifactWorker)
+        first = b"first"
+        second = b"second"
+        worker._read_stride = mock.Mock(return_value=3200)
+        worker._read_pan = mock.Mock(side_effect=(
+            (0, 0), (0, 480), (0, 480), (0, 480)))
+        worker._read_frame_at = mock.Mock(side_effect=(first, second))
+
+        self.assertEqual(worker._read_frame(), second)
+        self.assertEqual(worker._read_frame_at.call_count, 2)
+
     def test_writes_bmp_manifest_telemetry_and_log_slice(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = pathlib.Path(temporary)
@@ -273,6 +305,7 @@ class RunnerContractTest(unittest.TestCase):
         }
         renderer = type("Renderer", (), {
             "get_status": lambda self: dict(status),
+            "send": lambda self, *args, **kwargs: True,
         })()
         reactor = type("Reactor", (), {"monotonic": lambda self: 10.0})()
         feature = UI_TEST.UITestFeature(type("Host", (), {
@@ -294,6 +327,52 @@ class RunnerContractTest(unittest.TestCase):
         status["dropped_batches"] = 1
         with self.assertRaisesRegex(RuntimeError, "batch dropped"):
             feature._capture(step)
+
+    def test_capture_waits_for_presented_receipt_before_reading_frame(self):
+        status = {
+            "submitted_batches": 5, "rendered_batches": 5,
+            "coalesced_batches": 0, "dropped_batches": 0,
+        }
+        submissions = []
+
+        class Renderer:
+            def get_status(self):
+                return dict(status)
+
+            def send(self, commands, **kwargs):
+                submissions.append((commands, kwargs))
+                status["submitted_batches"] += 1
+                status["rendered_batches"] += 1
+                return True
+
+        reactor = type("Reactor", (), {"monotonic": lambda self: 10.0})()
+        feature = UI_TEST.UITestFeature(type("Host", (), {
+            "renderer": Renderer(), "reactor": reactor,
+        })())
+        feature.running = True
+        feature.step_index = 3
+        feature._schedule = mock.Mock()
+        feature._screen_metadata = lambda: {"page": "IDLE_HOME"}
+        captures = []
+        feature.worker = type("Worker", (), {
+            "capture": lambda self, *args: captures.append(args),
+        })()
+        step = {"kind": "capture", "label": "presented"}
+
+        feature._capture(step)
+
+        self.assertEqual(captures, [])
+        self.assertEqual(len(submissions), 1)
+        self.assertIn("--receipt-phase presented", submissions[0][0][0])
+        token = step["capture_receipt"]
+        receipt = type("Receipt", (), {
+            "token": token, "success": True,
+        })()
+        feature.on_render_receipt(receipt, 10.0)
+        feature._capture(step)
+
+        self.assertEqual(len(captures), 1)
+        self.assertNotIn(token, feature.capture_receipts)
 
     def test_full_suite_order_and_z_safety_sequence(self):
         renderer = type("Renderer", (), {
@@ -356,6 +435,24 @@ class RunnerContractTest(unittest.TestCase):
         self.assertTrue(all(
             label == "baseline" or label.startswith("component-default-")
             for label in captures))
+
+    def test_component_render_uses_declared_page_title(self):
+        renderer = mock.Mock()
+        renderer.begin_page.return_value = ["header"]
+        page = mock.Mock()
+        page.title = "FORGE-X // FEATHER"
+        page.page_key.value = "HOME.DASHBOARD"
+        page.draw.return_value = ["body"]
+        feature = UI_TEST.UITestFeature(object())
+        feature.host = mock.Mock(renderer=renderer)
+
+        feature._render_component_default(page)
+
+        renderer.begin_page.assert_called_once_with(
+            "FORGE-X // FEATHER", back=False)
+        renderer.send.assert_called_once_with(["header", "body"])
+        renderer.footer.assert_called_once_with(
+            25.0, 0.0, 25.0, 0.0, "PREVIEW", "IDLE")
 
     def test_component_cases_accept_only_known_mutable_typed_state(self):
         feature = UI_TEST.UITestFeature(object())

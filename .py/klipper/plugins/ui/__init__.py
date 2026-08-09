@@ -2,7 +2,7 @@
 
 __version__ = "2.2.0"
 FRAMEWORK_API_VERSION = 2
-REFLECTION_SCHEMA_VERSION = 2
+REFLECTION_SCHEMA_VERSION = "2.1.0"
 FRAMEWORK_CAPABILITIES = (
     "typed-identities",
     "stable-key-namespaces",
@@ -11,6 +11,7 @@ FRAMEWORK_CAPABILITIES = (
     "on-demand-reflection",
     "on-demand-source-provenance",
     "binding-source-authoring",
+    "source-edit-contracts",
     "structural-editing",
     "package-relative-themes",
     "typed-theme-tokens",
@@ -66,8 +67,10 @@ _EXPORT_GROUPS = (
         "action_metadata", "action_wire_id", "collect_actions",
     )),
     ("bindings", (
-        "Binding", "DerivedBinding", "DirectBinding", "StateSpec",
-        "StateStore", "bind", "derived", "state", "state_spec",
+        "BINDING_EXPRESSION_CONTRACT", "STATE_DECLARATION_CONTRACT",
+        "Binding", "BindingExpressionContract", "DerivedBinding", "DirectBinding",
+        "StateDeclarationContract", "StateSpec", "StateStore", "bind", "derived",
+        "state", "state_spec",
     )),
     ("numeric_input", ("NumericInputSpec",)),
     ("properties", (
@@ -76,11 +79,12 @@ _EXPORT_GROUPS = (
         "property_schema",
     )),
     ("layout", (
-        "EMPTY", "FLEX", "Column", "CreationContract", "DeclarativePage",
+        "EMPTY", "FLEX", "Column", "CreationContract", "CreationSourceContract", "DeclarativePage",
         "Dirty", "Equal", "EqualTracks", "Flex", "Grid", "Insets",
-        "LAYOUT_SCHEMA", "LayoutResult", "List", "Node", "Overlay",
-        "Override", "PageTree", "Rect", "Row", "Spacer", "Span",
-        "StructureContract", "Tree", "When", "WrapPanel", "split",
+        "LAYOUT_SCHEMA", "LayoutModifierSpec", "LayoutResult", "LayoutSourceContract", "List", "Node", "Overlay",
+        "Override", "PAGE_DISCOVERY_CONTRACT", "PageDiscoveryContract",
+        "PageTree", "Rect", "Row", "Spacer", "Span",
+        "StructureContract", "StructureSourceContract", "Tree", "When", "WrapPanel", "split",
         "subdivision_positions",
     )),
     ("components", (
@@ -134,16 +138,19 @@ __all__ = (
     "CoolingHint", "ProbingHint", "ProgressHint", "CompletionHint",
     "CancellationHint", "DispatchResult", "Router", "action_metadata",
     "action_wire_id", "collect_actions",
+    "BindingExpressionContract", "StateDeclarationContract",
+    "BINDING_EXPRESSION_CONTRACT", "STATE_DECLARATION_CONTRACT",
     "Binding", "DirectBinding", "DerivedBinding", "StateSpec", "StateStore",
     "state", "state_spec", "bind", "derived",
     "NumericInputSpec",
     "Invalidation", "RewritePolicy", "EditorSpec", "SourceSpec",
     "ValidationSpec", "CreationFieldSpec", "PropertySpec", "property_names",
     "property_schema",
-    "EMPTY", "FLEX", "Column", "CreationContract", "DeclarativePage", "Dirty", "Equal",
-    "EqualTracks", "Flex", "Grid", "Insets", "LAYOUT_SCHEMA", "LayoutResult", "List",
-    "Node", "Overlay", "Override", "PageTree", "Rect", "Row",
-    "Spacer", "Span", "StructureContract", "Tree", "When", "WrapPanel", "split",
+    "EMPTY", "FLEX", "Column", "CreationContract", "CreationSourceContract", "DeclarativePage", "Dirty", "Equal",
+    "EqualTracks", "Flex", "Grid", "Insets", "LAYOUT_SCHEMA", "LayoutModifierSpec", "LayoutResult", "LayoutSourceContract", "List",
+    "Node", "Overlay", "Override", "PAGE_DISCOVERY_CONTRACT",
+    "PageDiscoveryContract", "PageTree", "Rect", "Row",
+    "Spacer", "Span", "StructureContract", "StructureSourceContract", "Tree", "When", "WrapPanel", "split",
     "subdivision_positions", "Button",
     "ButtonStyle", "CornerMarks", "Crosshair", "Dialog", "DotGrid",
     "Fill", "Hitbox", "JoystickKnob", "Metric", "NumericKeypad", "Panel",

@@ -11,7 +11,10 @@ from .theme import ThemeColor, ThemeRole
 from .actions import Action, action_wire_id
 from .bindings import resolve, resolve_deep
 from .font_metrics import get_font_metrics
-from .layout import CreationContract, Node, Rect, subdivision_positions
+from .layout import (
+    CreationContract, CreationSourceContract, Node, Rect,
+    subdivision_positions,
+)
 from .numeric_input import NumericInputSpec
 from .properties import (
     CreationFieldSpec, EditorSpec, Invalidation, PropertySpec, RewritePolicy, SourceSpec,
@@ -23,7 +26,8 @@ def _property(name, runtime_type=object, default=None, kind="auto",
               label=None, group="Component", choices=(), catalog=None,
               minimum=None, maximum=None, nullable=False, bindings=("direct",),
               invalidation=Invalidation.PAINT, live=True, source=None,
-              storage="attribute", source_index=None, runtime_name=None,
+              storage="attribute", source_position=None, source_index=None,
+              runtime_name=None,
               runtime_index=None, rewrite=True,
               maximum_items=None, **metadata):
     policy = (RewritePolicy.LITERAL_OR_BINDING if rewrite
@@ -38,7 +42,8 @@ def _property(name, runtime_type=object, default=None, kind="auto",
             group=group, choices=choices, catalog=catalog, **metadata),
         bindings=bindings, invalidation=invalidation, live=live,
         source=SourceSpec(
-            name=source or name, index=source_index, storage=storage,
+            name=source or name, position=source_position,
+            index=source_index, storage=storage,
             runtime_name=runtime_name, runtime_index=runtime_index,
             policy=policy),
     )
@@ -222,6 +227,7 @@ class Button(Component):
 
 
 class Hitbox(Component):
+    canvas_selectable = False
     property_schema = property_schema(
         _property(
             "action", Action, None, kind="semantic_action",
@@ -866,6 +872,13 @@ def _creation_field(spec, required=False):
         invalidation=spec.invalidation, live=spec.live, source=spec.source)
 
 
+def _publish_property_source_positions(component, **positions):
+    """Declare the positional constructor grammar owned by the framework."""
+    specs = {item.name: item for item in component.property_schema}
+    for name, position in positions.items():
+        specs[name].source.position = int(position)
+
+
 def _action_creation(name="action", required=True):
     return CreationFieldSpec(
         name, Action, required=required, default=None,
@@ -878,7 +891,38 @@ def _publish_creation(component, names=(), extra=(), category="Components"):
     specs = {item.name: item for item in component.property_schema}
     component.creation_contract = CreationContract(
         category, fields=tuple(extra) + tuple(
-            _creation_field(specs[name]) for name in names))
+            _creation_field(specs[name]) for name in names),
+        source=CreationSourceContract("core.keyword_call"))
+
+
+_publish_property_source_positions(Fill, color=0)
+_publish_property_source_positions(Stroke, color=0, line_width=1)
+_publish_property_source_positions(Panel, border=0, background=1, line_width=2)
+_publish_property_source_positions(Section, title=0, border=1)
+_publish_property_source_positions(Button, action=0, label=1, state=2)
+_publish_property_source_positions(Hitbox, action=0, continuous=1)
+_publish_property_source_positions(
+    Text, value=0, color=1, font=2, horizontal=3, vertical=4, auto_height=6)
+_publish_property_source_positions(Metric, label=0, value=1, unit=2)
+_publish_property_source_positions(
+    NumericKeypad, title=0, value=1, subtitle=3, mode=4, minimum=5,
+    maximum=6, max_length=7, fraction_digits=8, confirm_label=9,
+    border=10, background=11, title_color=12, subtitle_color=13,
+    input_border=14, value_color=15)
+_publish_property_source_positions(DotGrid, columns=0, rows=1, color=2)
+_publish_property_source_positions(CornerMarks, length=0, color=1)
+_publish_property_source_positions(Crosshair, color=0)
+_publish_property_source_positions(
+    JoystickKnob, axis=0, edge_padding=4, size=5, color=6,
+    background=7, dirty_margin=8)
+_publish_property_source_positions(
+    VerticalScale, tick_gap=0, tick_width_small=1, tick_width_medium=1,
+    tick_width_large=1, depth=2, tick_color=3, center_color=4)
+_publish_property_source_positions(
+    VerticalGauge, title=1, unavailable_title=2, unavailable_value=3,
+    danger_above=4)
+_publish_property_source_positions(
+    Dialog, title=0, lines=1, buttons=2, tone=3, modal=4)
 
 
 _publish_creation(Fill, ("color",))

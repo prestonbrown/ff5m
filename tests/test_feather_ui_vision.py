@@ -1053,7 +1053,7 @@ class LMStudioBenchmarkTest(unittest.TestCase):
         self.assertNotIn("stdout", kwargs)
         self.assertNotIn("stderr", kwargs)
 
-    def test_verdict_validator_rejects_extra_fields_and_wrong_severity(self):
+    def test_verdict_validator_rejects_extra_fields_and_normalizes_severity(self):
         extra = verdict("pass")
         extra["extra"] = True
         with self.assertRaisesRegex(ValueError, "only verdict"):
@@ -1061,9 +1061,10 @@ class LMStudioBenchmarkTest(unittest.TestCase):
 
         mismatch = verdict("warn")
         mismatch["verdict"] = "pass"
-        with self.assertRaisesRegex(ValueError, "most severe"):
-            VISION.validate_verdict(
-                mismatch, allow_design_mismatch=True)
+        normalized = VISION.validate_verdict(
+            mismatch, allow_design_mismatch=True)
+
+        self.assertEqual(normalized["verdict"], "warn")
 
 
 class HostPipelineTest(unittest.TestCase):
@@ -1408,6 +1409,41 @@ capture.mapConcurrent([40, 5, 20, 1], 2, async (delay, index) => {
 
         self.assertEqual(
             records[0]["semantic_page_id"], "ui.Pages.COMPONENT")
+
+    def test_parity_excludes_manifest_baseline_without_case_id(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = pathlib.Path(temporary)
+            for name in ("baseline.bmp", "component.bmp"):
+                (directory / name).write_bytes(b"not-decoded")
+            (directory / "manifest.json").write_text(json.dumps([
+                {
+                    "file": "baseline.bmp",
+                    "label": "baseline",
+                    "semantic_page_id": "ui.Pages.HOME",
+                },
+                {
+                    "file": "component.bmp",
+                    "label": "component-default-home",
+                    "case_id": "default-home",
+                    "semantic_page_id": "ui.Pages.HOME",
+                },
+            ]), encoding="utf-8")
+            printer = HYBRID.load_manifest(directory)
+
+            designer = [{
+                "case_id": "default-home",
+                "label": "Home",
+                "semantic_page_id": "ui.Pages.HOME",
+                "source": "designer",
+                "path": pathlib.Path("/tmp/designer-home.png"),
+            }]
+            merged = HYBRID.merge_hybrid(
+                designer, [], parity=True, parity_records=printer)
+
+            self.assertEqual(len(merged["pairs"]), 1)
+            self.assertEqual(
+                merged["pairs"][0]["comparison_path"],
+                (directory / "component.bmp").resolve())
 
     def test_incomplete_printer_suite_is_an_infrastructure_failure(self):
         with self.assertRaisesRegex(

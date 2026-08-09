@@ -302,6 +302,76 @@ class Dirty(IntEnum):
     LAYOUT = 2
 
 
+class LayoutModifierSpec:
+    """Map one fluent source method to framework layout fields."""
+
+    __slots__ = (
+        "method", "fields", "argument_codec", "activation", "selection",
+    )
+
+    def __init__(self, method, fields, argument_codec="positional_fields",
+                 activation="any_non_default", selection="any_changed"):
+        self.method = str(method)
+        self.fields = tuple(
+            (str(name), tuple(int(value) for value in positions))
+            for name, positions in fields)
+        self.argument_codec = str(argument_codec)
+        self.activation = str(activation)
+        self.selection = str(selection)
+
+    def as_dict(self):
+        return {
+            "method": self.method,
+            "fields": dict((name, list(positions))
+                           for name, positions in self.fields),
+            "argument_codec": self.argument_codec,
+            "activation": self.activation,
+            "selection": self.selection,
+        }
+
+
+class LayoutSourceContract:
+    """Framework-owned grammar for fluent layout source editing."""
+
+    __slots__ = ("strategy", "modifiers")
+
+    def __init__(self, strategy, modifiers=()):
+        self.strategy = str(strategy)
+        self.modifiers = tuple(modifiers)
+        if not all(isinstance(value, LayoutModifierSpec)
+                   for value in self.modifiers):
+            raise TypeError(
+                "LayoutSourceContract modifiers must be LayoutModifierSpec values")
+
+    def as_dict(self):
+        return {
+            "strategy": self.strategy,
+            "modifiers": [value.as_dict() for value in self.modifiers],
+        }
+
+
+_FLUENT_LAYOUT_SOURCE = LayoutSourceContract(
+    "core.fluent_layout", (
+        LayoutModifierSpec(
+            "size", (("width", (0,)), ("height", (1,))),
+            activation="all_non_default", selection="all_changed"),
+        LayoutModifierSpec("width", (("width", (0,)),)),
+        LayoutModifierSpec("height", (("height", (0,)),)),
+        LayoutModifierSpec("grow", (("grow", (0,)),)),
+        LayoutModifierSpec(
+            "margin", (("margin", (0,)),), argument_codec="insets"),
+        LayoutModifierSpec(
+            "padding", (("padding", (0,)),), argument_codec="insets"),
+        LayoutModifierSpec(
+            "align", (("horizontal", (0,)), ("vertical", (1,))),
+            argument_codec="compact_fields"),
+        LayoutModifierSpec(
+            "offset", (("offset", (0, 1)),), argument_codec="spread_field"),
+        LayoutModifierSpec(
+            "allow_overflow", (("allow_overflow", (0,)),)),
+    ))
+
+
 class LayoutOptions:
     __slots__ = (
         "width", "height", "grow", "margin", "padding",
@@ -321,17 +391,25 @@ class LayoutOptions:
         self.offset_y = 0
         self.allow_overflow = False
 
+    @property
+    def offset(self):
+        return self.offset_x, self.offset_y
+
+    @offset.setter
+    def offset(self, value):
+        self.offset_x, self.offset_y = (int(value[0]), int(value[1]))
+
 
 def _layout_property(name, runtime_type, default, kind="number", choices=(),
                      minimum=None, maximum=None, nullable=False,
-                     source=None):
+                     source=None, **editor_metadata):
     return PropertySpec(
         name, runtime_type, default=default, nullable=nullable,
         validation=ValidationSpec(
             minimum=minimum, maximum=maximum, choices=choices),
         editor=EditorSpec(
             kind, label=name.replace("_", " ").title(), group="Layout",
-            choices=choices),
+            choices=choices, **editor_metadata),
         bindings=(), invalidation=Invalidation.LAYOUT,
         source=SourceSpec(name=source or name, storage="layout"),
     )
@@ -339,20 +417,38 @@ def _layout_property(name, runtime_type, default, kind="number", choices=(),
 
 LAYOUT_SCHEMA = property_schema(
     _layout_property("width", int, None, minimum=1, maximum=4000,
-                     nullable=True),
+                     nullable=True, wire_codec="integer", auto_label="Auto"),
     _layout_property("height", int, None, minimum=1, maximum=4000,
-                     nullable=True),
-    _layout_property("grow", int, 1, minimum=0, maximum=100),
-    _layout_property("margin", (tuple, list), (0, 0, 0, 0), kind="insets"),
-    _layout_property("padding", (tuple, list), (0, 0, 0, 0), kind="insets"),
+                     nullable=True, wire_codec="integer", auto_label="Auto"),
+    _layout_property("grow", int, 1, minimum=0, maximum=100,
+                     wire_codec="integer"),
+    _layout_property(
+        "margin", (tuple, list), (0, 0, 0, 0), kind="insets",
+        wire_codec="insets", vector_labels=("Left", "Top", "Right", "Bottom"),
+        item_minimum=0, item_maximum=2000),
+    _layout_property(
+        "padding", (tuple, list), (0, 0, 0, 0), kind="insets",
+        wire_codec="insets", vector_labels=("Left", "Top", "Right", "Bottom"),
+        item_minimum=0, item_maximum=2000),
     _layout_property(
         "horizontal", str, "stretch", kind="select",
-        choices=("stretch", "left", "center", "right")),
+        choices=("stretch", "left", "center", "right"),
+        wire_codec="identity"),
     _layout_property(
         "vertical", str, "stretch", kind="select",
-        choices=("stretch", "top", "center", "bottom")),
-    _layout_property("offset", (tuple, list), (0, 0), kind="point"),
-    _layout_property("allow_overflow", bool, False, kind="checkbox"),
+        choices=("stretch", "top", "center", "bottom"),
+        wire_codec="identity"),
+    _layout_property(
+        "offset", (tuple, list), (0, 0), kind="point",
+        wire_codec="point", vector_labels=("X", "Y"),
+        item_minimum=-4000, item_maximum=4000,
+        runtime_guard="overlay_child_axes",
+        help=("For an Auto-sized Overlay child, a positive offset consumes "
+              "space on that axis and the child fills the remainder of its slot.")),
+    _layout_property(
+        "allow_overflow", bool, False, kind="checkbox", wire_codec="boolean",
+        help=("Permits an explicit size or offset to draw beyond the parent "
+              "slot. It does not resize the parent or fit wrapped content.")),
 )
 
 
@@ -398,6 +494,22 @@ class LayoutResult:
         return self._names.keys()
 
 
+class CreationSourceContract:
+    """Framework-owned source generation strategy for a creatable node."""
+
+    __slots__ = ("strategy", "callable")
+
+    def __init__(self, strategy, callable=None):
+        self.strategy = str(strategy)
+        self.callable = None if callable is None else str(callable)
+
+    def as_dict(self):
+        return {
+            "strategy": self.strategy,
+            "callable": self.callable,
+        }
+
+
 class CreationContract:
     """Portable framework-owned construction form for generic tools.
 
@@ -405,9 +517,10 @@ class CreationContract:
     behavior, page placement and domain defaults remain in product source.
     """
 
-    __slots__ = ("category", "kind", "fields", "children")
+    __slots__ = ("category", "kind", "fields", "children", "source")
 
-    def __init__(self, category, kind="component", fields=(), children=False):
+    def __init__(self, category, kind="component", fields=(), children=False,
+                 source=None):
         self.category = str(category)
         self.kind = str(kind)
         self.fields = tuple(fields)
@@ -415,6 +528,10 @@ class CreationContract:
             raise TypeError(
                 "CreationContract v2 fields must be CreationFieldSpec values")
         self.children = bool(children)
+        if source is not None and not isinstance(source, CreationSourceContract):
+            raise TypeError(
+                "CreationContract source must be a CreationSourceContract")
+        self.source = source
 
     def as_dict(self):
         return {
@@ -422,6 +539,23 @@ class CreationContract:
             "kind": self.kind,
             "fields": [value.as_dict() for value in self.fields],
             "children": self.children,
+            "source": None if self.source is None else self.source.as_dict(),
+        }
+
+
+class StructureSourceContract:
+    """Framework-owned source grammar for structural operations."""
+
+    __slots__ = ("strategy", "supported_forms")
+
+    def __init__(self, strategy, supported_forms=()):
+        self.strategy = str(strategy)
+        self.supported_forms = tuple(str(value) for value in supported_forms)
+
+    def as_dict(self):
+        return {
+            "strategy": self.strategy,
+            "supported_forms": list(self.supported_forms),
         }
 
 
@@ -438,7 +572,10 @@ class StructureContract:
                  minimum_children=0, supports_spans=False,
                  placement="flow", reorder=True, canvas=()):
         self.kind = str(kind)
-        self.source = str(source)
+        if not isinstance(source, StructureSourceContract):
+            raise TypeError(
+                "StructureContract source must be a StructureSourceContract")
+        self.source = source
         self.operations = tuple(str(value) for value in operations)
         self.minimum_children = int(minimum_children)
         self.supports_spans = bool(supports_spans)
@@ -449,7 +586,7 @@ class StructureContract:
     def as_dict(self):
         return {
             "kind": self.kind,
-            "source": self.source,
+            "source": self.source.as_dict(),
             "operations": list(self.operations),
             "minimum_children": self.minimum_children,
             "supports_spans": self.supports_spans,
@@ -460,16 +597,28 @@ class StructureContract:
 
 
 _SEQUENCE_STRUCTURE = StructureContract(
-    "sequence", "variadic_children", minimum_children=0, placement="flow",
+    "sequence", StructureSourceContract(
+        "core.variadic_children",
+        ("inline_arguments", "named_local_collection")),
+    minimum_children=0, placement="flow",
     canvas=("flow_reorder", "resize", "multi_select"))
 _GRID_STRUCTURE = StructureContract(
-    "grid", "matrix_argument", minimum_children=0, supports_spans=True,
+    "grid", StructureSourceContract(
+        "core.grid_matrix", ("inline_matrix", "named_local_matrix")),
+    minimum_children=0, supports_spans=True,
     placement="grid", canvas=("grid_drop", "grid_span", "resize", "multi_select"))
 _OVERLAY_STRUCTURE = StructureContract(
-    "sequence", "variadic_children", minimum_children=0,
+    "sequence", StructureSourceContract(
+        "core.variadic_children",
+        ("inline_arguments", "named_local_collection")),
+    minimum_children=0,
     placement="absolute", canvas=(
         "absolute_move", "absolute_resize", "align", "distribute",
         "snapping", "multi_select"))
+
+_KEYWORD_CREATION_SOURCE = CreationSourceContract("core.keyword_call")
+_GRID_CREATION_SOURCE = CreationSourceContract("core.grid_matrix")
+
 
 _SEQUENCE_CREATION_FIELDS = (
     CreationFieldSpec(
@@ -479,11 +628,14 @@ _SEQUENCE_CREATION_FIELDS = (
         bindings=()),
 )
 _ROW_CREATION = CreationContract(
-    "Layout", "sequence", _SEQUENCE_CREATION_FIELDS, children=True)
+    "Layout", "sequence", _SEQUENCE_CREATION_FIELDS, children=True,
+    source=_KEYWORD_CREATION_SOURCE)
 _COLUMN_CREATION = CreationContract(
-    "Layout", "sequence", _SEQUENCE_CREATION_FIELDS, children=True)
+    "Layout", "sequence", _SEQUENCE_CREATION_FIELDS, children=True,
+    source=_KEYWORD_CREATION_SOURCE)
 _OVERLAY_CREATION = CreationContract(
-    "Layout", "absolute", (), children=True)
+    "Layout", "absolute", (), children=True,
+    source=_KEYWORD_CREATION_SOURCE)
 _GRID_CREATION = CreationContract("Layout", "grid", (
     CreationFieldSpec(
         "row_count", int, default=2,
@@ -501,7 +653,7 @@ _GRID_CREATION = CreationContract("Layout", "grid", (
         "row_gap", int, default=0,
         validation=ValidationSpec(minimum=0, maximum=4000),
         editor=EditorSpec("number", label="Row gap"), bindings=()),
-), children=True)
+), children=True, source=_GRID_CREATION_SOURCE)
 _WRAP_CREATION = CreationContract("Layout", "sequence", (
     CreationFieldSpec(
         "orientation", str, default="horizontal",
@@ -525,7 +677,9 @@ _WRAP_CREATION = CreationContract("Layout", "sequence", (
         "vertical_gap", int, default=0,
         validation=ValidationSpec(minimum=0, maximum=4000),
         editor=EditorSpec("number", label="Vertical gap"), bindings=()),
-), children=True)
+), children=True, source=_KEYWORD_CREATION_SOURCE)
+_SPACER_CREATION = CreationContract(
+    "Layout", source=_KEYWORD_CREATION_SOURCE)
 
 
 _UNSET = object()
@@ -535,9 +689,11 @@ class Node:
     """Base object for layout containers and renderable components."""
 
     covers_bounds = False
+    canvas_selectable = True
     property_schema = ()
     structure_contract = None
     creation_contract = None
+    layout_source_contract = _FLUENT_LAYOUT_SOURCE
 
     def __init__(self, key=None):
         self.key = key
@@ -558,18 +714,18 @@ class Node:
 
     def width(self, value):
         _capture_modifier(self, "width", (("width", 0),))
-        self.layout_options.width = int(value)
+        self.layout_options.width = None if value is None else int(value)
         return self
 
     def height(self, value):
         _capture_modifier(self, "height", (("height", 0),))
-        self.layout_options.height = int(value)
+        self.layout_options.height = None if value is None else int(value)
         return self
 
     def size(self, width, height):
         _capture_modifier(self, "size", (("width", 0), ("height", 1)))
-        self.layout_options.width = int(width)
-        self.layout_options.height = int(height)
+        self.layout_options.width = None if width is None else int(width)
+        self.layout_options.height = None if height is None else int(height)
         return self
 
     def grow(self, value=1):
@@ -641,8 +797,18 @@ class Node:
     def _box(self, bounds):
         options = self.layout_options
         available = bounds.inset(options.margin)
-        width = available.width if options.width is None else options.width
-        height = available.height if options.height is None else options.height
+        width = (available.width - options.offset_x
+                 if options.width is None else options.width)
+        height = (available.height - options.offset_y
+                  if options.height is None else options.height)
+        if width < 0 or height < 0:
+            raise ValueError(
+                "%s %r offset (%d, %d) exceeds available slot %r" %
+                (self.__class__.__name__, self.key, options.offset_x,
+                 options.offset_y, available))
+        minimum_height = self.minimum_extent("vertical", width)
+        if minimum_height is not None:
+            height = max(height, int(minimum_height))
         if (not options.allow_overflow and
                 (width > available.width or height > available.height)):
             raise ValueError(
@@ -694,6 +860,16 @@ class Node:
         flow behavior.
         """
         return self.preferred_extent(direction, cross_extent)
+
+    def minimum_extent(self, direction, cross_extent=None):
+        """Return an optional hard content minimum for arranged bounds.
+
+        Unlike :meth:`preferred_extent`, this constraint also applies when a
+        caller supplied an explicit size.  Most nodes have no hard minimum;
+        intrinsic containers opt in when shrinking their tracks would make
+        arranged geometry disagree with what their children actually paint.
+        """
+        return None
 
     def auto_gap_extent(self, direction, cross_extent=None):
         """Return an intrinsic size used only by ``gap=None`` lists.
@@ -809,6 +985,8 @@ class Overlay(Node):
 
 
 class Spacer(Node):
+    creation_contract = _SPACER_CREATION
+
     pass
 
 
@@ -862,6 +1040,9 @@ class List(Node):
                 0, int(preferred_cross) -
                 (margin.vertical if self.direction == "horizontal"
                  else margin.horizontal))
+        minimum = child.minimum_extent(self.direction, preferred_cross)
+        if minimum is not None:
+            size = max(0 if size is None else int(size), int(minimum))
         if size is None:
             preferred = child.preferred_extent(
                 self.direction, preferred_cross)
@@ -904,9 +1085,13 @@ class List(Node):
             else:
                 fixed += extent
                 tracks.append(extent)
-        if fixed > available:
+        if fixed > available and flexible:
+            sizes = [0 if isinstance(track, Flex) else int(track)
+                     for track in tracks]
+            areas = _split_sizes(bounds, self.direction, sizes, gap)
+        elif fixed > available:
             raise ValueError("List children do not fit their container")
-        if flexible:
+        elif flexible:
             areas = split(bounds, self.direction, tracks, gap)
         else:
             areas = []
@@ -992,23 +1177,25 @@ class Grid(Node):
         PropertySpec(
             "columns", (tuple, list), default=(),
             editor=EditorSpec("tracks", label="Column tracks", group="Grid"),
-            bindings=(), invalidation=Invalidation.STRUCTURE),
+            bindings=(), invalidation=Invalidation.STRUCTURE,
+            source=SourceSpec(name="columns", position=1)),
         PropertySpec(
             "rows", (tuple, list), default=(),
             editor=EditorSpec("tracks", label="Row tracks", group="Grid"),
-            bindings=(), invalidation=Invalidation.STRUCTURE),
+            bindings=(), invalidation=Invalidation.STRUCTURE,
+            source=SourceSpec(name="rows", position=2)),
         PropertySpec(
             "column_gap", int, default=0,
             validation=ValidationSpec(minimum=0, maximum=4000),
             editor=EditorSpec("number", label="Column gap", group="Grid"),
             bindings=(), invalidation=Invalidation.LAYOUT,
-            source=SourceSpec(name="gap", index=0)),
+            source=SourceSpec(name="gap", position=3, index=0)),
         PropertySpec(
             "row_gap", int, default=0,
             validation=ValidationSpec(minimum=0, maximum=4000),
             editor=EditorSpec("number", label="Row gap", group="Grid"),
             bindings=(), invalidation=Invalidation.LAYOUT,
-            source=SourceSpec(name="gap", index=1)))
+            source=SourceSpec(name="gap", position=3, index=1)))
     structure_contract = _GRID_STRUCTURE
 
     def __init__(self, matrix, columns=None, rows=None, gap=0, key=None):
@@ -1140,14 +1327,16 @@ class Grid(Node):
         return (sum(sizes) + self.row_gap * max(0, len(sizes) - 1) +
                 self.layout_options.padding.vertical)
 
+    def minimum_extent(self, direction, cross_extent=None):
+        return self.preferred_extent(direction, cross_extent)
+
     def _row_areas(self, bounds):
         # Preserve the legacy flex-track behavior unless this Grid is actually
-        # being content-sized by a vertical flow parent.  Intrinsic measurement
-        # is a sizing hint for Column/List; it must not silently redefine row
-        # tracks of existing fixed/stretch Grid layouts.
+        # being content-sized by a vertical flow parent. Intrinsic measurement
+        # also acts as a minimum for an undersized explicit height so row bounds
+        # continue to describe the pixels their children paint.
         parent = self.parent
-        if (self.layout_options.height is not None or
-                not isinstance(parent, List) or parent.direction != "vertical"):
+        if not isinstance(parent, List) or parent.direction != "vertical":
             return split(bounds, "vertical", self.rows, self.row_gap)
         intrinsic = self._intrinsic_row_sizes(bounds.width)
         if intrinsic is None:
@@ -1354,8 +1543,34 @@ class Tree:
         return self.layout.node(key)
 
 
+class PageDiscoveryContract:
+    """Framework-owned AST prefilter contract for declarative page modules."""
+
+    __slots__ = ("strategy", "factory_names", "module_names")
+
+    def __init__(self, strategy, factory_names, module_names=()):
+        self.strategy = str(strategy)
+        self.factory_names = tuple(str(value) for value in factory_names)
+        self.module_names = tuple(str(value) for value in module_names)
+
+    def as_dict(self):
+        return {
+            "strategy": self.strategy,
+            "factory_names": list(self.factory_names),
+            "module_names": list(self.module_names),
+        }
+
+
+PAGE_DISCOVERY_CONTRACT = PageDiscoveryContract(
+    "core.module_page_instances", ("PageTree", "DeclarativePage"),
+    ("ui", "ui.layout"),
+)
+
+
 class DeclarativePage(Tree):
     """An arranged page that discovers and redraws dirty subtrees."""
+
+    discovery_contract = PAGE_DISCOVERY_CONTRACT
 
     def __init__(self, content, bounds, state=None, page_id=None,
                  state_schema=()):

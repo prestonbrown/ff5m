@@ -11,6 +11,97 @@ from .theme import ThemeColor, ThemeRole
 _UNAVAILABLE = object()
 
 
+class StateDeclarationContract:
+    """Framework-owned source grammar for one ``StateKey`` member."""
+
+    __slots__ = (
+        "strategy", "factory_names", "positional_fields", "editable_fields",
+        "field_codecs", "portable_types", "supported_forms",
+    )
+
+    def __init__(self, strategy, factory_names, positional_fields,
+                 editable_fields, field_codecs, portable_types,
+                 supported_forms=("direct_enum_assignment",)):
+        self.strategy = str(strategy)
+        self.factory_names = tuple(str(value) for value in factory_names)
+        self.positional_fields = tuple(str(value) for value in positional_fields)
+        self.editable_fields = tuple(str(value) for value in editable_fields)
+        self.field_codecs = dict((str(name), str(codec))
+                                 for name, codec in field_codecs.items())
+        self.portable_types = tuple(portable_types)
+        self.supported_forms = tuple(str(value) for value in supported_forms)
+
+    def as_dict(self):
+        return {
+            "strategy": self.strategy,
+            "factory_names": list(self.factory_names),
+            "positional_fields": list(self.positional_fields),
+            "editable_fields": list(self.editable_fields),
+            "field_codecs": dict(self.field_codecs),
+            "portable_types": [_type_name(value)
+                               for value in self.portable_types],
+            "supported_forms": list(self.supported_forms),
+        }
+
+
+class BindingExpressionContract:
+    """Framework-owned grammar for authoring a derived expression."""
+
+    __slots__ = (
+        "strategy", "factory_names", "callable_forms", "allowed_ast_nodes",
+        "allowed_globals", "portable_default_types", "sharing",
+    )
+
+    def __init__(self, strategy, factory_names, callable_forms,
+                 allowed_ast_nodes, allowed_globals=(),
+                 portable_default_types=(), sharing="catalog_uses"):
+        self.strategy = str(strategy)
+        self.factory_names = tuple(str(value) for value in factory_names)
+        self.callable_forms = tuple(str(value) for value in callable_forms)
+        self.allowed_ast_nodes = tuple(str(value) for value in allowed_ast_nodes)
+        self.allowed_globals = tuple(str(value) for value in allowed_globals)
+        self.portable_default_types = tuple(portable_default_types)
+        self.sharing = str(sharing)
+
+    def as_dict(self):
+        return {
+            "strategy": self.strategy,
+            "factory_names": list(self.factory_names),
+            "callable_forms": list(self.callable_forms),
+            "allowed_ast_nodes": list(self.allowed_ast_nodes),
+            "allowed_globals": list(self.allowed_globals),
+            "portable_default_types": [
+                _type_name(value) for value in self.portable_default_types],
+            "sharing": self.sharing,
+        }
+
+
+_STATE_FIELDS = (
+    "value_type", "default", "minimum", "maximum", "choices", "mutable",
+    "unit", "category", "simulation_role", "simulation_home",
+)
+STATE_DECLARATION_CONTRACT = StateDeclarationContract(
+    "core.state_enum_member", ("state",), _STATE_FIELDS, _STATE_FIELDS[1:],
+    dict((name, "python_literal") for name in _STATE_FIELDS),
+    (bool, int, float, str),
+)
+BINDING_EXPRESSION_CONTRACT = BindingExpressionContract(
+    "core.python_expression", ("derived",),
+    ("inline_lambda", "same_module_single_return"),
+    (
+        "Expression", "BoolOp", "BinOp", "UnaryOp", "IfExp", "Compare",
+        "Name", "Load", "Constant", "Attribute", "Tuple", "List", "Dict",
+        "Set", "JoinedStr", "FormattedValue", "And", "Or", "Not", "UAdd",
+        "USub", "Add", "Sub", "Mult", "Div", "FloorDiv", "Mod", "Pow",
+        "Eq", "NotEq", "Lt", "LtE", "Gt", "GtE", "Is", "IsNot", "In",
+        "NotIn",
+    ),
+    allowed_globals=("ThemeColor", "ThemeRole"),
+    portable_default_types=(
+        type(None), str, int, float, bool, tuple, list, dict, Enum),
+)
+
+
 def _capture_binding(binding, names=()):
     return None
 
@@ -50,6 +141,7 @@ class StateSpec:
     __slots__ = (
         "value_type", "default", "minimum", "maximum", "choices",
         "mutable", "unit", "category", "simulation_role", "simulation_home",
+        "declaration_source_contract",
     )
 
     def __init__(self, value_type, default=_UNAVAILABLE, minimum=None,
@@ -70,6 +162,7 @@ class StateSpec:
         if self.simulation_role == "":
             raise ValueError("simulation_role must not be empty")
         self.simulation_home = simulation_home
+        self.declaration_source_contract = None
         if self.simulation_home is not None and self.simulation_role is None:
             raise ValueError("simulation_home requires simulation_role")
         if self.simulation_home is not None:
@@ -120,6 +213,9 @@ class StateSpec:
             "category": self.category,
             "simulation_role": self.simulation_role,
             "simulation_home": _json_value(self.simulation_home),
+            "declaration_source_contract": (
+                None if self.declaration_source_contract is None
+                else self.declaration_source_contract.as_dict()),
         }
 
 
@@ -127,10 +223,12 @@ def state(value_type, default=_UNAVAILABLE, minimum=None, maximum=None,
           choices=None, mutable=True, unit=None, category=None,
           simulation_role=None, simulation_home=None):
     """Declare metadata for a ``StateKey`` enum member."""
-    return StateSpec(
+    spec = StateSpec(
         value_type, default=default, minimum=minimum, maximum=maximum,
         choices=choices, mutable=mutable, unit=unit, category=category,
         simulation_role=simulation_role, simulation_home=simulation_home)
+    spec.declaration_source_contract = STATE_DECLARATION_CONTRACT
+    return spec
 
 
 def state_spec(key):
@@ -292,7 +390,7 @@ class DirectBinding(Binding):
 
 
 class DerivedBinding(Binding):
-    __slots__ = ("function", "inputs", "_source")
+    __slots__ = ("function", "inputs", "_source", "expression_source_contract")
 
     def __init__(self, function, inputs):
         if not callable(function):
@@ -304,6 +402,7 @@ class DerivedBinding(Binding):
         self.function = function
         self.inputs = inputs
         self._source = None
+        self.expression_source_contract = None
 
     @property
     def keys(self):
@@ -361,6 +460,7 @@ def bind(key):
 
 def derived(function, *inputs):
     binding = DerivedBinding(function, inputs)
+    binding.expression_source_contract = BINDING_EXPRESSION_CONTRACT
     binding._source = _capture_binding(binding, names=("derived",))
     return binding
 
@@ -476,6 +576,9 @@ def binding_metadata(binding, store):
             "inputs": inputs,
             "callable": _callable_metadata(binding.function),
             "source": _binding_source_metadata(binding),
+            "expression_source_contract": (
+                None if binding.expression_source_contract is None
+                else binding.expression_source_contract.as_dict()),
         }
         result.update(_binding_resolution(binding, store))
         return result

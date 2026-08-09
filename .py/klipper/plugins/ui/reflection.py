@@ -60,6 +60,11 @@ def _layout(node):
     }
 
 
+def _layout_source_contract(node):
+    contract = getattr(node, "layout_source_contract", None)
+    return None if contract is None else contract.as_dict()
+
+
 def _properties(node, state):
     result = {}
     bindings = {}
@@ -185,6 +190,7 @@ def _node(node, page, state, path, inherited_visible=True):
         "preview_own_visible": preview_own_visible,
         "condition": condition,
         "layout": _layout(node),
+        "layout_source_contract": _layout_source_contract(node),
         "property_schema": [item.as_dict() for item in node.property_schema],
         "layout_schema": [item.as_dict() for item in LAYOUT_SCHEMA],
         "properties": properties,
@@ -205,7 +211,10 @@ def _node(node, page, state, path, inherited_visible=True):
                 [] if parent_contract is None else list(parent_contract.canvas)),
             "placement": (
                 None if parent_contract is None else parent_contract.placement),
-            "selectable": True,
+            "selectable": bool(node.canvas_selectable),
+            # Layout containers do not clip their children. Keep the effective
+            # clip explicit so consumers never infer it from arranged bounds.
+            "clip_bounds": None,
         },
         "structure": _structure(node, children),
         "children": children,
