@@ -1918,7 +1918,7 @@ class MotionHeatSettingsTest(unittest.TestCase):
         self.assertEqual(controller.gcode.commands, [
             "SET_MOD PARAM=backlight VALUE=100",
             "SET_MOD PARAM=sound VALUE=0",
-            "SET_LED LED=chamber_light WHITE=0.5 SYNC=0"])
+            "SET_MOD PARAM=chamber_light VALUE=50"])
         self.assertEqual(backlight, [100])
 
     def test_settings_render_reflects_chamber_light_status(self):

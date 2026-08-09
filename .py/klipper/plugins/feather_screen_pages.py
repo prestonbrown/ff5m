@@ -904,7 +904,7 @@ class FeatherPagesMixin:
             value = max(
                 0, min(100, self._chamber_light_brightness() + delta))
             self._run_script(
-                "SET_LED LED=chamber_light WHITE=%g SYNC=0" % (value / 100.0))
+                "SET_MOD PARAM=chamber_light VALUE=%d" % value)
             self._render_settings()
             return
         if action == "settings.sound":

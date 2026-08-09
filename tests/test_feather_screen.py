@@ -333,7 +333,7 @@ class FeatherUtilitiesTest(unittest.TestCase):
                   "base.cfg").read_text(encoding="utf-8")
 
         self.assertIn(
-            "SET_LED LED=chamber_light WHITE=1 SYNC=0", macros)
+            "SET_LED LED=chamber_light WHITE={S/100|float} SYNC=0", macros)
         self.assertIn(
             "SET_LED LED=chamber_light WHITE=0 SYNC=0", macros)
         self.assertIn(
@@ -344,8 +344,9 @@ class FeatherUtilitiesTest(unittest.TestCase):
         self.assertIn(
             "printer.mod_params.variables.chamber_light|default(50)",
             macros)
-        self.assertIn(
-            'SET_MOD PARAM=chamber_light VALUE="', macros)
+        setter = macros.split("[gcode_macro SET_LED]", 1)[1].split(
+            "[gcode_macro _PRINT_STATUS]", 1)[0]
+        self.assertNotIn("SET_MOD PARAM=chamber_light", setter)
         self.assertIn(
             'changes.key == "chamber_light"', macros)
 
