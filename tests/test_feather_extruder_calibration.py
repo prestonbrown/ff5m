@@ -371,6 +371,19 @@ def calibration_controller(path=None):
     controller.busy_message = None
     controller.toast_until = 0.0
     controller.toast_message = ""
+    controller.operation_context = types.SimpleNamespace(
+        get_status=lambda eventtime: {
+            "context_path": (), "current_state": None, "revision": 0,
+            "cancel_available": False, "cancel_pending": False,
+            "cancel_request_id": None, "cancel_target_name": None,
+            "cancel_target_mode": None, "cancel_blocker_name": None})
+    controller.operation_cancel_return_page = FEATHER.Page.IDLE_HOME
+    controller.operation_cancel_on_accept = None
+    controller.operation_cancel_on_clear = None
+    controller.operation_cancel_request_id = None
+    controller.operation_cancel_target_name = None
+    controller.operation_cancel_target_mode = None
+    controller.cancel_mode = None
     return controller
 
 
@@ -391,7 +404,7 @@ class ExtruderCalibrationControllerTest(unittest.TestCase):
             controller._handle_extruder_calibration_action(
                 "extruder.coldpull")
 
-    def test_cold_pull_page_offers_cancel_only_during_temperature_wait(self):
+    def test_cold_pull_page_offers_cancel_for_the_whole_operation(self):
         controller = calibration_controller()
         batches = []
         controller.renderer.send = batches.append
@@ -409,8 +422,14 @@ class ExtruderCalibrationControllerTest(unittest.TestCase):
 
         controller.temperature_wait.variables.update({
             "active": True,
-            "stage": "HEATING NOZZLE",
         })
+        controller.operation_context = types.SimpleNamespace(
+            get_status=lambda eventtime: {
+                "context_path": ("COLD PULL",),
+                "current_state": "HEATING NOZZLE", "revision": 1,
+                "cancel_available": True, "cancel_pending": False,
+                "cancel_target_name": "Cold Pull",
+                "cancel_target_mode": "cancelable"})
         controller._render_extruder_calibration()
 
         drawing = "\n".join(batches[-1])
@@ -418,7 +437,7 @@ class ExtruderCalibrationControllerTest(unittest.TestCase):
         self.assertIn("CANCEL", drawing)
         self.assertIn("HEATING NOZZLE", drawing)
 
-    def test_cold_pull_cancel_dispatches_m108_once_and_disables_button(self):
+    def test_cold_pull_cancel_uses_shared_operation_dialog(self):
         controller = calibration_controller()
         batches = []
         commands = []
@@ -427,18 +446,29 @@ class ExtruderCalibrationControllerTest(unittest.TestCase):
         session.phase = "cold_pull"
         session.cold_pull_material = "PLA"
         controller.temperature_wait = types.SimpleNamespace(
-            variables={"active": True, "stage": "COOLING NOZZLE"})
-        controller._run_immediate_command = commands.append
+            variables={"active": True})
+        controller.operation_context = types.SimpleNamespace(
+            get_status=lambda eventtime: {
+                "context_path": ("COLD PULL",),
+                "current_state": "COOLING NOZZLE", "revision": 2,
+                "cancel_available": True, "cancel_pending": False,
+                "cancel_target_name": "Cold Pull",
+                "cancel_target_mode": "cancelable"})
+        opened = []
+        controller._open_operation_cancel = (
+            lambda page, callback, clear: opened.append(
+                (page, callback, clear)))
 
-        controller._cancel_cold_pull_temperature_wait()
-        controller._cancel_cold_pull_temperature_wait()
+        controller._open_cold_pull_cancel()
 
-        self.assertEqual(commands, ["M108"])
-        self.assertTrue(
-            controller.extruder_calibration.cold_pull_cancel_requested)
-        self.assertIn("CANCELLING...", "\n".join(batches[-1]))
-        self.assertNotIn(
-            "extruder.coldpull.cancel", controller.renderer._buttons)
+        self.assertEqual(opened[0][0], FEATHER.Page.EXTRUDER_CALIBRATION)
+        opened[0][1]({"accepted": True})
+        self.assertTrue(session.cold_pull_cancel_requested)
+        self.assertTrue(session.cold_pull_cancel_dispatched)
+        opened[0][2]({"cleared": True})
+        self.assertFalse(session.cold_pull_cancel_requested)
+        self.assertFalse(session.cold_pull_cancel_dispatched)
+        self.assertEqual(commands, [])
 
     def test_cold_pull_runs_on_its_feature_page_without_blocking_loader(self):
         controller = calibration_controller()
@@ -502,7 +532,7 @@ class ExtruderCalibrationControllerTest(unittest.TestCase):
         feature = ExtruderCalibrationFeature(host)
         feature.extruder_calibration.phase = "cold_pull"
         calls = []
-        feature._cancel_cold_pull_temperature_wait = (
+        feature._open_cold_pull_cancel = (
             lambda: calls.append("cancel"))
 
         handled = feature.handle_immediate_action(

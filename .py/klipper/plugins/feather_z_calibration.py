@@ -446,27 +446,26 @@ class FeatherZCalibrationMixin:
         if self.calibration_clean_nozzle:
             nozzle, bed = self._limited_preheat(self.calibration_material)
             return "\n".join((
-                '_PRINT_STATUS S="Z OFFSET: PREP"',
+                '_CONTEXT_BEGIN TYPE=z_offset',
                 "CLEAR_NOZZLE EXTRUDER_TEMP=%.0f BED_TEMP=%.0f" %
                 (nozzle, bed),
-                '_PRINT_STATUS S="Z OFFSET: TARE"',
+                '_CONTEXT_STATE NAME=TARING',
                 "MOVE_SAFE Z=%g ABSOLUTE=1 F=600" % preparation_z,
                 "LOAD_CELL_TARE",
-                '_PRINT_STATUS S="Z OFFSET: READY"',
+                '_CONTEXT_END',
             ))
         cooldown = float(self._setting("clear_cooldown_temp", 120))
         return "\n".join((
-            '_PRINT_STATUS S="Z OFFSET: PREP"',
+            '_CONTEXT_BEGIN TYPE=z_offset',
             "M104 S%.0f" % cooldown,
-            '_PRINT_STATUS S="Z OFFSET: HOME"',
+            '_CONTEXT_STATE NAME=HOMING',
             "G28",
-            '_PRINT_STATUS S="Z OFFSET: HEAT"',
             "_WAIT_TEMPERATURE CMD=M104 VALUE=%.0f BELOW=2 ABOVE=3" %
             cooldown,
-            '_PRINT_STATUS S="Z OFFSET: TARE"',
+            '_CONTEXT_STATE NAME=TARING',
             "MOVE_SAFE Z=%g ABSOLUTE=1 F=600" % preparation_z,
             "LOAD_CELL_TARE",
-            '_PRINT_STATUS S="Z OFFSET: READY"',
+            '_CONTEXT_END',
         ))
 
     def _run_z_calibration_preparation(self, eventtime):

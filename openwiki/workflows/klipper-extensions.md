@@ -1,10 +1,8 @@
 # Forge-X Klipper extensions
 
-# Forge-X Klipper extensions
+Forge-X deploys **added Klipper `extras` modules** from [`.py/klipper/plugins/`](../../.py/klipper/plugins/) into stock Klipper’s `extras/` directory at boot. They are extensions—not the replacement stock-module patches described in [Built-in Klipper patching](klipper-patching.md). A plugin runs only when its matching configuration section is included by the active Klipper configuration.
 
-Forge-X deploys six **added Klipper `extras` modules** from [`.py/klipper/plugins/`](../../.py/klipper/plugins/) into stock Klipper’s `extras/` directory at boot. They are extensions—not the replacement stock-module patches described in [Built-in Klipper patching](klipper-patching.md). A plugin runs only when its matching configuration section is included by the active Klipper configuration.
-
-The normal shared configuration, [`macros/base.cfg`](../../macros/base.cfg), loads `load_cell_tare`, `md5_check`, `tone_player`, and `mod_params`. The alternative-display configuration [`macros/headless.cfg`](../../macros/headless.cfg) loads `resurrection`; Feather additionally loads `feather_screen` through [`config/feather.cfg`](../../config/feather.cfg). Its runtime ownership, FIFO protocol, and Typer lifecycle are documented in [Feather runtime, Typer, and Klipper plugin wiring](feather-runtime.md).
+The normal shared configuration, [`macros/base.cfg`](../../macros/base.cfg), includes [`macros/operation_context.cfg`](../../macros/operation_context.cfg) and loads `load_cell_tare`, `md5_check`, `tone_player`, and `mod_params`. The dedicated context file loads `operation_context` and defines its type registry. The alternative-display configuration [`macros/headless.cfg`](../../macros/headless.cfg) loads `resurrection`; Feather additionally loads `feather_screen` through [`config/feather.cfg`](../../config/feather.cfg). Its runtime ownership, FIFO protocol, and Typer lifecycle are documented in [Feather runtime, Typer, and Klipper plugin wiring](feather-runtime.md).
 
 > **Usage boundary:** use the documented top-level macros and settings for normal operation. Some plugin commands are internal plumbing called by Forge-X macros; invoking them directly can bypass preparation or safety checks. Settings are persisted in printer-side `mod_data`, so do not edit that state as a substitute for its G-code interface.
 
@@ -13,11 +11,14 @@ The normal shared configuration, [`macros/base.cfg`](../../macros/base.cfg), loa
 | Extension | Loaded by | Main public interface | Purpose |
 |---|---|---|---|
 | `mod_params` | `base.cfg` | `LIST_MOD_PARAMS`, `GET_MOD`, `SET_MOD` | Validated persistent Forge-X settings and their change hooks. |
+| `operation_context` + type registry | `operation_context.cfg` | Internal `_CONTEXT_*` commands | Tracks nested operations, current states, cancellation domains, and safe-point delivery. |
 | `load_cell_tare` | `base.cfg` | `LOAD_CELL_TARE` | Safely zeroes the AD5M load cell before probing/print operations that depend on it. |
 | `md5_check` | `base.cfg` | `CHECK_MD5` | Checks a slicer-written G-code checksum before a print and cancels corrupt jobs. |
 | `tone_player` | `base.cfg` | `TONE`; macro wrappers `M300`, `BEEP`, `ALARM` | Plays PWM audio sequences through the printer’s audio hardware. |
 | `resurrection` | `headless.cfg` | `RESURRECT`, `RESURRECT_ABORT` | Optional power-loss state capture and assisted print resume. |
-| `feather_screen` | `feather.cfg` | `FEATHER_PRINT_STATUS` (internal) | Drives the minimal Feather display/status UI. |
+| `feather_screen` | `feather.cfg` | `FEATHER_ABORT`; `FEATHER_PRINT_STATUS` compatibility bridge | Drives the minimal Feather display/status UI. |
+
+`operation_context` keeps the context path and current state separate in Klipper status. Metadata and cleanup are registered once per context type. Nested operations suspend and restore their caller automatically; managed waits temporarily replace only the current state. Each type has a `cancel_mode`: ordinary `interruptible` work stops at the next managed boundary, `cancelable` also defines an explicit cleanup domain, and `non_interruptible` work permits only the emergency `M112` path. Command errors, restart, shutdown, and disconnect clear the stack synchronously. Invalid manual operations report `!!` warnings without stopping G-code.
 
 ## `mod_params`: persistent Forge-X settings
 
@@ -108,7 +109,7 @@ Its only registered command is:
 FEATHER_PRINT_STATUS S="PREPARING..."
 ```
 
-Forge-X’s `_PRINT_STATUS` macro calls this command for the Feather workflow. Treat it as an internal UI-status bridge, not a stable slicer macro. Interactive controls use the same normal `SDCARD_PRINT_FILE`, `PAUSE`, `RESUME`, `CANCEL_PRINT`, `G28`, and `MOVE_SAFE` paths exposed elsewhere by Forge-X. The held joystick is the narrow exception: it queues short native toolhead segments so release latency stays bounded, while reusing `MOVE_SAFE` boundaries and half of the configured acceleration. See [Screen modes and Feather](screens-and-feather.md) for the architecture and safety gates.
+`FEATHER_PRINT_STATUS` remains a compatibility bridge for workflows not yet migrated to operation contexts. New managed workflows should publish `_CONTEXT_BEGIN TYPE=...` and `_CONTEXT_STATE` instead of duplicating UI strings. Interactive controls use the normal print and movement paths; generic cancellation requests are resolved by `operation_context`. See [Screen modes and Feather](screens-and-feather.md) for the architecture and safety gates.
 
 ## Change and validation guidance
 

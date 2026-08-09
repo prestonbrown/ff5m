@@ -129,6 +129,42 @@ class UsbReactor:
         self.unregistered.append(handle)
 
 
+class OperationContextStub(StatusObject):
+    def request_cancel(self):
+        if self.status.get("cancel_pending", False):
+            state = "already_pending"
+        elif self.status.get("cancel_available", False):
+            state = "accepted"
+            self.status["cancel_pending"] = True
+            self.status["cancel_request_id"] = (
+                self.status.get("cancel_request_id") or 1)
+            self.status["revision"] = self.status.get("revision", 0) + 1
+        else:
+            return {"status": "not_cancelable", "accepted": False,
+                    "request_id": None, "target_name": None,
+                    "blocker_name": self.status.get("cancel_blocker_name")}
+        return {
+            "status": state, "accepted": True,
+            "request_id": self.status.get("cancel_request_id"),
+            "target_name": self.status.get("cancel_target_name", "Print"),
+            "target_mode": self.status.get("cancel_target_mode"),
+        }
+
+    def clear_cancel(self, request_id=None):
+        active_id = self.status.get("cancel_request_id")
+        if not self.status.get("cancel_pending", False):
+            return {"status": "not_pending", "cleared": False,
+                    "request_id": None}
+        if request_id is not None and request_id != active_id:
+            return {"status": "stale_request", "cleared": False,
+                    "request_id": active_id}
+        self.status["cancel_pending"] = False
+        self.status["cancel_request_id"] = None
+        self.status["revision"] = self.status.get("revision", 0) + 1
+        return {"status": "cleared", "cleared": True,
+                "request_id": active_id}
+
+
 def base_controller(state="idle"):
     controller = ScenarioController.__new__(ScenarioController)
     controller.reactor = Reactor()
@@ -143,13 +179,34 @@ def base_controller(state="idle"):
     controller.cancel_waiting_for_heat = False
     controller.cancel_mode = None
     controller.cancel_phase = None
+    controller.operation_cancel_return_page = FEATHER.Page.IDLE_HOME
+    controller.operation_cancel_on_accept = None
+    controller.operation_cancel_on_clear = None
+    controller.operation_cancel_request_id = None
+    controller.operation_cancel_target_name = None
+    controller.operation_cancel_target_mode = None
+    controller._last_context_cancel_result = None
     controller._filament_request_token = 0
     controller.busy_phase = 0
-    controller.print_flow = type("Flow", (), {"variables": {
-        "active": False, "phase": "IDLE"}})()
     controller.temperature_wait = type("Wait", (), {"variables": {
-        "active": False, "cancel": False,
-        "cancel_pending": False, "context": "", "stage": ""}})()
+        "active": False, "cancel": False}})()
+    printing = state in ("printing", "paused")
+    controller.operation_context = OperationContextStub({
+        "contexts": (),
+        "context_path": ("Print",) if printing else (),
+        "context_types": ("print",) if printing else (),
+        "current_state": "PRINTING" if printing else None,
+        "cancel_available": printing,
+        "cancel_pending": False,
+        "cancel_request_id": None,
+        "cancel_target_type": "print" if printing else None,
+        "cancel_target_name": "Print" if printing else None,
+        "cancel_target_mode": "cancelable" if printing else None,
+        "cancel_blocker_type": None,
+        "cancel_blocker_name": None,
+        "revision": 0,
+    })
+    controller._last_operation_revision = -1
     controller.start_print_macro = type("Start", (), {"variables": {
         "print_started": state in ("printing", "paused")}})()
     controller.page = FEATHER.Page.IDLE_HOME
@@ -767,7 +824,6 @@ class UsbStorageMonitorTest(unittest.TestCase):
 class PrintWorkflowTest(unittest.TestCase):
     def test_filament_is_rejected_during_start_print_preparation(self):
         controller = base_controller("printing")
-        controller.print_flow.variables.update(active=True, phase="HEATING")
         controller.start_print_macro.variables["print_started"] = False
         notices = []
         controller._toast = notices.append
@@ -787,15 +843,16 @@ class PrintWorkflowTest(unittest.TestCase):
         def run(command):
             commands.append(command)
             if command == "PAUSE":
-                controller.page = FEATHER.Page.CANCEL_CONFIRM
-                controller._handle_print_action("print.cancel.confirm")
-            elif command == "CANCEL_PRINT":
+                controller._handle_print_action("print.cancel")
+                controller._handle_operation_cancel_action(
+                    "operation.cancel.confirm")
+            elif command == "_CONTEXT_CANCEL_POINT":
                 controller.print_stats.status["state"] = "cancelled"
 
         controller._run_script = run
         controller._handle_print_action("print.filament")
 
-        self.assertEqual(commands, ["PAUSE", "CANCEL_PRINT"])
+        self.assertEqual(commands, ["PAUSE", "_CONTEXT_CANCEL_POINT"])
         self.assertEqual(opened, [])
 
     def test_pause_resume_and_cancel_are_state_gated(self):
@@ -819,70 +876,88 @@ class PrintWorkflowTest(unittest.TestCase):
         controller._handle_print_action("print.cancel")
         self.assertEqual(pages, [FEATHER.Page.CANCEL_CONFIRM])
         self.assertEqual(controller.gcode.commands, [])
-        controller._handle_print_action("print.cancel.confirm")
-        self.assertEqual(controller.gcode.commands, ["CANCEL_PRINT"])
+        controller._handle_operation_cancel_action(
+            "operation.cancel.confirm")
+        self.assertEqual(
+            controller.gcode.commands, ["_CONTEXT_CANCEL_POINT"])
 
-    def test_started_print_latches_wait_before_queued_cancel(self):
+    def test_started_print_requests_cancel_then_queues_safe_point(self):
         controller = base_controller("printing")
-        controller.print_flow.variables.update(active=True, phase="PRINTING")
         controller.start_print_macro.variables["print_started"] = True
 
-        def immediate(command):
-            controller.gcode.commands.append(command)
-            controller.temperature_wait.variables["cancel_pending"] = True
-
-        controller.gcode.run_script_from_command = immediate
-        controller._handle_print_action("print.cancel.confirm")
+        controller._handle_print_action("print.cancel")
+        controller._handle_operation_cancel_action(
+            "operation.cancel.confirm")
         self.assertEqual(controller.gcode.commands,
-                         ["FEATHER_ABORT", "CANCEL_PRINT"])
-        self.assertEqual(controller.cancel_mode, "cooperative")
+                         ["_CONTEXT_CANCEL_POINT"])
+        self.assertTrue(
+            controller.operation_context.status["cancel_pending"])
+        self.assertEqual(controller.cancel_mode, "pending")
 
-    def test_cancel_during_heat_uses_cooperative_abort_only(self):
+    def test_cancel_during_preparation_wait_dispatches_immediate_m108(self):
         controller = base_controller("printing")
-        controller.print_flow.variables.update(active=True, phase="HEATING")
         controller.start_print_macro.variables["print_started"] = False
         controller.temperature_wait = type("Wait", (), {
-            "variables": {"active": True, "cancel": False,
-                          "cancel_pending": False}})()
+            "variables": {"active": True, "cancel": False}})()
         recorder = GCodeRecorder()
-        def run(command):
-            recorder.commands.append(command)
-            if command == "FEATHER_ABORT":
-                controller.temperature_wait.variables["cancel_pending"] = True
-        controller.gcode.run_script_from_command = run
-        controller._handle_print_action("print.cancel.confirm")
-        self.assertEqual(recorder.commands, ["FEATHER_ABORT", "CANCEL_PRINT"])
+        controller.gcode = recorder
+        controller._handle_print_action("print.cancel")
+        controller._handle_operation_cancel_action(
+            "operation.cancel.confirm")
+        self.assertEqual(recorder.commands, ["M108"])
         self.assertTrue(controller.cancel_requested)
         self.assertTrue(controller.cancel_waiting_for_heat)
-        self.assertTrue(controller.temperature_wait.variables["cancel_pending"])
+        self.assertTrue(
+            controller.operation_context.status["cancel_pending"])
 
-    def test_unaccepted_cooperative_abort_never_dispatches_cancel_print(self):
+    def test_non_cancelable_operation_offers_abort_without_dispatching_it(self):
         controller = base_controller("printing")
-        controller.print_flow.variables.update(active=True, phase="HOMING")
-        controller.start_print_macro.variables["print_started"] = False
-        with self.assertRaisesRegex(RuntimeError, "did not accept"):
-            controller._handle_print_action("print.cancel.confirm")
-        self.assertEqual(controller.gcode.commands, ["FEATHER_ABORT"])
-        self.assertNotIn("CANCEL_PRINT", controller.gcode.commands)
+        controller.operation_context.status.update(
+            cancel_available=False, cancel_target_type=None,
+            cancel_target_name=None)
 
-    def test_cancel_during_homing_bypasses_mutex_runner(self):
+        controller._handle_print_action("print.cancel")
+
+        self.assertEqual(controller.gcode.commands, [])
+        self.assertEqual(controller.cancel_mode, "not_cancelable")
+        self.assertFalse(controller.cancel_requested)
+
+    def test_non_cancelable_dialog_offers_continue_or_confirmed_m112(self):
         controller = base_controller("printing")
-        controller.print_flow.variables.update(active=True, phase="HOMING")
+        controller.page = FEATHER.Page.CANCEL_CONFIRM
+        controller.cancel_mode = "not_cancelable"
+        controller.renderer = FEATHER.FeatherRenderer()
+        batches = []
+        controller.renderer.send = batches.append
+
+        FEATHER.FeatherScreen._render_cancel_confirm(controller)
+
+        drawing = "\n".join(batches[-1])
+        self.assertIn("operation.cancel.back", drawing)
+        self.assertIn("CONTINUE", drawing)
+        self.assertIn("operation.cancel.force", drawing)
+        self.assertIn("ABORT NOW", drawing)
+
+        commands = []
+        controller._run_immediate_command = commands.append
+        controller._handle_touch_action("operation.cancel.force")
+        self.assertEqual(commands, ["M112"])
+
+    def test_cancel_during_atomic_homing_waits_for_next_context_point(self):
+        controller = base_controller("printing")
         controller.start_print_macro.variables["print_started"] = False
         calls = []
-
-        def immediate(command):
-            calls.append(("immediate", command))
-            controller.temperature_wait.variables["cancel_pending"] = True
 
         def serialized(command):
             calls.append(("serialized", command))
 
-        controller.gcode.run_script_from_command = immediate
         controller.gcode.run_script = serialized
-        controller._handle_print_action("print.cancel.confirm")
-        self.assertEqual(calls, [("immediate", "FEATHER_ABORT"),
-                                 ("serialized", "CANCEL_PRINT")])
+        controller._handle_print_action("print.cancel")
+        controller._handle_operation_cancel_action(
+            "operation.cancel.confirm")
+        self.assertEqual(calls, [])
+        self.assertTrue(
+            controller.operation_context.status["cancel_pending"])
         self.assertFalse(controller.cancel_waiting_for_heat)
 
     def test_normal_cancel_is_rejected_by_immediate_dispatch(self):
@@ -899,9 +974,10 @@ class PrintWorkflowTest(unittest.TestCase):
         controller._run_script("G28")
         self.assertEqual(calls, [("serialized", "G28")])
 
-    def test_pending_cancel_page_keeps_only_global_abort_hitbox(self):
+    def test_pending_cancel_page_offers_continue_and_force_abort(self):
         controller = base_controller("paused")
         controller.pending_action = "print.cancel.confirm"
+        controller.cancel_mode = "pending"
         controller.renderer = FEATHER.FeatherRenderer()
         batches = []
         controller.renderer.send = batches.append
@@ -910,25 +986,120 @@ class PrintWorkflowTest(unittest.TestCase):
         drawing = "\n".join(batches[0])
         self.assertNotIn("print.cancel.confirm", drawing)
         self.assertNotIn("nav.back", drawing)
+        self.assertIn("operation.cancel.continue", drawing)
+        self.assertIn("operation.cancel.force", drawing)
         self.assertIn("global.abort", drawing)
+
+    def test_force_abort_is_added_after_any_cancel_is_accepted(self):
+        controller = base_controller("paused")
+        controller.cancel_mode = "confirm"
+        controller.operation_cancel_target_name = "Cold Pull"
+        controller.renderer = FEATHER.FeatherRenderer()
+        batches = []
+        controller.renderer.send = batches.append
+
+        FEATHER.FeatherScreen._render_cancel_confirm(controller)
+        self.assertNotIn("operation.cancel.force", "\n".join(batches[-1]))
+
+        controller.cancel_mode = "pending"
+        FEATHER.FeatherScreen._render_cancel_confirm(controller)
+        drawing = "\n".join(batches[-1])
+        self.assertIn("operation.cancel.continue", drawing)
+        self.assertIn("operation.cancel.force", drawing)
+        self.assertIn("ABORT NOW (M112)", drawing)
+
+    def test_interruptible_target_uses_interrupt_wording(self):
+        controller = base_controller("paused")
+        controller.cancel_mode = "confirm"
+        controller.operation_cancel_target_name = "Nozzle Cleaning"
+        controller.operation_cancel_target_mode = "interruptible"
+        controller.renderer = FEATHER.FeatherRenderer()
+        batches = []
+        controller.renderer.send = batches.append
+
+        FEATHER.FeatherScreen._render_cancel_confirm(controller)
+
+        drawing = "\n".join(batches[-1])
+        self.assertIn("INTERRUPT NOZZLE CLEANING?", drawing)
+        self.assertIn('t "INTERRUPT"', drawing)
+        self.assertNotIn('t "CANCEL"', drawing)
+
+    def test_continue_clears_pending_request_and_print_cancel_latch(self):
+        controller = base_controller("printing")
+        controller.start_print_macro.variables["print_started"] = False
+        controller._show_page = lambda page: setattr(controller, "page", page)
+
+        controller._handle_print_action("print.cancel")
+        controller._handle_operation_cancel_action(
+            "operation.cancel.confirm")
+        request_id = controller.operation_cancel_request_id
+        self.assertTrue(controller.cancel_requested)
+
+        controller._handle_operation_cancel_action(
+            "operation.cancel.continue")
+
+        self.assertIsNotNone(request_id)
+        self.assertFalse(
+            controller.operation_context.status["cancel_pending"])
+        self.assertFalse(controller.cancel_requested)
+        self.assertIsNone(controller.cancel_mode)
+        self.assertEqual(controller.page, FEATHER.Page.PRINTING)
 
     def test_cancel_progress_uses_wait_state_before_contextual_stage(self):
         controller = base_controller("printing")
-        controller.print_flow.variables.update(
-            active=True, phase="LEVELING")
-        controller.print_status_text = "BED MESH: LEVELING"
+        controller.operation_context.status.update(
+            context_path=("Bed Mesh",), current_state="LEVELING",
+            revision=1)
 
         self.assertEqual(controller._cancel_progress_label(),
-                         "WILL STOP AFTER BED MESH: LEVELING")
+                         "WILL STOP AFTER LEVELING")
 
-        controller.temperature_wait.variables.update(
-            active=True, context="BED MESH", stage="HEATING BED")
+        controller.temperature_wait.variables.update(active=True)
+        controller.operation_context.status.update(
+            context_path=("Bed Mesh", "Heating Bed"), current_state=None,
+            revision=2)
         self.assertEqual(controller._cancel_progress_label(),
-                         "INTERRUPTING BED MESH: HEATING BED...")
+                         "INTERRUPTING BED MESH -> HEATING BED...")
 
-        controller.temperature_wait.variables.update(context="", stage="")
+        controller.operation_context.status.update(
+            context_path=(), current_state=None, revision=3)
         self.assertEqual(controller._cancel_progress_label(),
                          "INTERRUPTING TEMPERATURE WAIT...")
+
+    def test_operation_context_status_is_semantic_and_formatted_only_for_ui(self):
+        controller = base_controller("printing")
+        controller.operation_context.status.update(
+            context_path=("CALIBRATION", "NOZZLE CLEANING"),
+            current_state="HEATING NOZZLE", revision=7)
+        controller.renderer = FEATHER.FeatherRenderer()
+
+        status = controller.get_status(10.0)
+
+        self.assertEqual(
+            status["context_path"],
+            ("CALIBRATION", "NOZZLE CLEANING"))
+        self.assertEqual(status["current_state"], "HEATING NOZZLE")
+        self.assertEqual(status["operation_revision"], 7)
+        self.assertEqual(
+            controller._operation_context_text(10.0),
+            "CALIBRATION -> NOZZLE CLEANING -> HEATING NOZZLE")
+
+    def test_operation_revision_redraws_print_status_once(self):
+        controller = base_controller("printing")
+        controller.operation_context.status.update(
+            context_path=("PRINT PREP",), current_state="HOMING",
+            revision=3)
+        drawn = []
+        controller._draw_print_status = drawn.append
+
+        controller._update_operation_context(10.0)
+        controller._update_operation_context(11.0)
+        controller.operation_context.status.update(
+            current_state="HEATING BED", revision=4)
+        controller._update_operation_context(12.0)
+
+        self.assertEqual(drawn, [
+            "PRINT PREP -> HOMING", "PRINT PREP -> HEATING BED"])
 
     def test_print_state_transition_selects_correct_page(self):
         controller = base_controller("idle")
@@ -976,16 +1147,17 @@ class PrintWorkflowTest(unittest.TestCase):
         self.assertEqual(controller.pending_action, "print.cancel.confirm")
         self.assertTrue(controller.cancel_requested)
 
-    def test_start_print_uses_wait_latch_without_flow_checkpoints(self):
+    def test_start_print_uses_context_states_without_print_flow(self):
         root = pathlib.Path(__file__).parents[1]
         macros = (root / "macros" / "base.cfg").read_text(encoding="utf-8")
         start = macros.split("[gcode_macro _START_PRINT]", 1)[1].split(
             "[gcode_macro _WAIT_TEMPERATURE]", 1)[0]
         self.assertIn("G28", start)
-        self.assertIn("_PRINT_FLOW_PHASE PHASE=HEATING", start)
-        self.assertIn("_PRINT_FLOW_PHASE PHASE=PRIMING", start)
-        self.assertNotIn("_PRINT_FLOW_CHECK", macros)
-        self.assertIn("variable_cancel_pending: False", macros)
+        self.assertIn("_CONTEXT_BEGIN TYPE=print", start)
+        self.assertIn("_CONTEXT_STATE NAME=HOMING", start)
+        self.assertIn("_CONTEXT_STATE NAME=PRIMING", start)
+        self.assertIn("_CONTEXT_STATE NAME=PRINTING", start)
+        self.assertNotIn("_PRINT_FLOW", macros)
 
     def test_feather_abort_is_an_immediate_gcode_command(self):
         root = pathlib.Path(__file__).parents[1]
@@ -998,15 +1170,10 @@ class PrintWorkflowTest(unittest.TestCase):
         self.assertNotIn("FEATHER_ABORT", gcode)
         self.assertIn('register_immediate_command("FEATHER_ABORT")', screen)
         self.assertIn("def cmd_FEATHER_ABORT", pages)
-        self.assertIn('wait_cmd.variables["cancel_pending"] = True', pages)
+        self.assertIn("manager.request_cancel()", pages)
 
-    def test_feather_abort_latches_deferred_temperature_wait_flag(self):
+    def test_feather_abort_requests_nearest_context_domain(self):
         controller = base_controller("printing")
-        controller.print_flow.variables.update(active=True)
-        original_flow = dict(controller.print_flow.variables)
-        controller.temperature_wait = type("Wait", (), {"variables": {
-            "active": True, "cancel": False,
-            "cancel_pending": False}})()
         responses = []
         gcmd = type("GCmd", (), {
             "error": RuntimeError,
@@ -1015,10 +1182,24 @@ class PrintWorkflowTest(unittest.TestCase):
 
         controller.cmd_FEATHER_ABORT(gcmd)
 
-        self.assertEqual(controller.print_flow.variables, original_flow)
-        self.assertFalse(controller.temperature_wait.variables["cancel"])
-        self.assertTrue(controller.temperature_wait.variables["cancel_pending"])
-        self.assertEqual(responses, ["Feather cancellation requested"])
+        self.assertTrue(
+            controller.operation_context.status["cancel_pending"])
+        self.assertEqual(
+            responses, ["Feather cancellation requested: Print"])
+
+    def test_feather_abort_interrupts_an_active_managed_wait(self):
+        controller = base_controller("printing")
+        controller.temperature_wait.variables["active"] = True
+        immediate = []
+        controller._run_immediate_command = immediate.append
+        gcmd = type("GCmd", (), {
+            "error": RuntimeError,
+            "respond_raw": lambda self, message: None,
+        })()
+
+        controller.cmd_FEATHER_ABORT(gcmd)
+
+        self.assertEqual(immediate, ["M108"])
 
     def test_screw_tune_cleans_or_uses_cooldown_and_repeat_only_probes(self):
         root = pathlib.Path(__file__).parents[1]
@@ -1054,24 +1235,16 @@ class PrintWorkflowTest(unittest.TestCase):
         self.assertNotIn("TURN_OFF_HEATERS", final)
         self.assertNotIn("M104 S0", final)
 
-    def test_deferred_wait_cancel_is_latched_until_print_cleanup(self):
+    def test_managed_wait_checks_context_cancellation(self):
         root = pathlib.Path(__file__).parents[1]
         macros = (root / "macros" / "base.cfg").read_text(encoding="utf-8")
         wait = macros.split("[gcode_macro _WAIT_TEMPERATURE]", 1)[1].split(
             "[gcode_macro _RAISE_WITH_PRINT_CANCEL]", 1)[0]
-        stop = macros.split("[gcode_macro _STOP]", 1)[1].split(
-            "[gcode_macro ZSHAPER]", 1)[0]
+        self.assertNotIn("cancel_pending", wait)
+        self.assertIn("_CONTEXT_CANCEL_POINT", wait)
+        self.assertIn("variable_temporary_state: False", wait)
 
-        self.assertIn("variable_cancel_pending: False", wait)
-        self.assertGreaterEqual(wait.count(".cancel_pending"), 3)
-        final = wait.split(
-            "[gcode_macro _WAIT_TEMPERATURE_FINAL_CHECK]", 1)[1]
-        self.assertNotIn("VARIABLE=cancel_pending VALUE=False", final)
-        self.assertIn(
-            "MACRO=_WAIT_TEMPERATURE VARIABLE=cancel_pending VALUE=False",
-            stop)
-
-    def test_wait_final_distinguishes_deferred_cancel_from_manual_m108(self):
+    def test_wait_final_routes_manual_m108_through_context_domain(self):
         root = pathlib.Path(__file__).parents[1]
         macros = (root / "macros" / "base.cfg").read_text(
             encoding="utf-8")
@@ -1079,28 +1252,77 @@ class PrintWorkflowTest(unittest.TestCase):
             "[gcode_macro _WAIT_TEMPERATURE_FINAL_CHECK]", 1)[1].split(
                 "[gcode_macro _RAISE_WITH_PRINT_CANCEL]", 1)[0]
 
-        self.assertIn("{% if cancel_pending %}", final)
         self.assertIn(
             '_RAISE_WITH_PRINT_CANCEL MSG="Temperature waiting cancelled."',
             final)
-        pending_branch = final.split("{% if cancel_pending %}", 1)[1].split(
-            "{% else %}", 1)[0]
-        self.assertIn("_RAISE_ERROR", pending_branch)
-        self.assertNotIn("_RAISE_WITH_PRINT_CANCEL", pending_branch)
+        self.assertIn("_CONTEXT_CANCEL", final)
+        self.assertIn("_CONTEXT_CANCEL_POINT", final)
+        self.assertNotIn("ON_CANCEL", final)
+        self.assertNotIn("cancel_pending", final)
 
-    def test_start_print_reports_contextual_preparation_stages(self):
+    def test_macros_use_nested_operation_contexts_without_pass_through(self):
         root = pathlib.Path(__file__).parents[1]
         macros = (root / "macros" / "base.cfg").read_text(encoding="utf-8")
-        for status in (
-                'S="PRINT PREP: HOMING"',
-                'S="PRINT PREP: PARKING"',
-                'CONTEXT="{context}" STAGE="HEATING BED"',
-                'S="BED MESH: LEVELING"',
-                'S="KAMP MESH: LEVELING"',
-                'CONTEXT="MESH VALIDATION"',
-                'S="{context}: CHECKING MESH"',
-                'S="PRINT PREP: PRIMING"'):
-            self.assertIn(status, macros)
+        material = (root / "config" / "material.cfg").read_text(
+            encoding="utf-8")
+        client = (root / "macros" / "client.cfg").read_text(
+            encoding="utf-8")
+
+        for context_type in (
+                "print", "nozzle_clean", "bed_level", "kamp",
+                "mesh_validation"):
+            self.assertIn(
+                "_CONTEXT_BEGIN TYPE=%s" % context_type, macros)
+        self.assertIn("_CONTEXT_BEGIN TYPE=filament", material)
+        self.assertIn("_CONTEXT_BEGIN TYPE=cold_pull", material)
+        self.assertIn("_CONTEXT_BEGIN TYPE=resume", client)
+
+        migrated = "\n".join((macros, material, client))
+        self.assertNotIn("_CONTEXT_STATE_PUSH", migrated)
+        self.assertNotIn("_CONTEXT_STATE_POP", migrated)
+        self.assertNotIn("_CONTEXT_GROUP", migrated)
+        self.assertNotIn("CONTEXT=", migrated)
+        self.assertNotIn("params.CONTEXT", migrated)
+        self.assertNotIn("params.STAGE", migrated)
+
+    def test_operation_context_registry_has_a_dedicated_config(self):
+        root = pathlib.Path(__file__).parents[1]
+        base = (root / "macros" / "base.cfg").read_text(encoding="utf-8")
+        registry = (root / "macros" / "operation_context.cfg").read_text(
+            encoding="utf-8")
+
+        self.assertIn("[include ./operation_context.cfg]", base)
+        self.assertNotIn("[operation_context]", base)
+        self.assertNotIn("[operation_context_type ", base)
+        self.assertIn("[operation_context]", registry)
+        for context_type in (
+                "print", "auto_bed_level", "bed_screws", "bed_level",
+                "kamp", "mesh_validation", "nozzle_clean", "filament",
+                "cold_pull", "resume", "z_offset", "recovery"):
+            self.assertIn(
+                "[operation_context_type %s]" % context_type, registry)
+        self.assertIn("cancel_mode: cancelable", registry)
+        recovery = registry.split(
+            "[operation_context_type recovery]", 1)[1]
+        self.assertIn("cancel_mode: non_interruptible", recovery)
+        self.assertNotIn("cancelable:", registry)
+        self.assertNotIn("suggest_force:", registry)
+
+    def test_wait_temperature_derives_and_releases_thermal_state(self):
+        root = pathlib.Path(__file__).parents[1]
+        macros = (root / "macros" / "base.cfg").read_text(encoding="utf-8")
+        wait = macros.split("[gcode_macro _WAIT_TEMPERATURE]", 1)[1].split(
+            "[gcode_macro _RAISE_WITH_PRINT_CANCEL]", 1)[0]
+
+        self.assertIn('"HEATING " ~ heater_name', wait)
+        self.assertIn('"COOLING " ~ heater_name', wait)
+        self.assertIn('_CONTEXT_STATE NAME="{wait_state}" TEMPORARY=1', wait)
+        self.assertIn("variable_temporary_state: False", wait)
+        self.assertNotIn("_CONTEXT_BEGIN TYPE={wait_type}", wait)
+        final = wait.split(
+            "[gcode_macro _WAIT_TEMPERATURE_FINAL_CHECK]", 1)[1]
+        self.assertIn("{% if temporary_state", final)
+        self.assertIn("_CONTEXT_STATE RESTORE=1", final)
 
     def test_forge_owned_native_temperature_waits_use_managed_macro(self):
         root = pathlib.Path(__file__).parents[1]
@@ -1113,7 +1335,7 @@ class PrintWorkflowTest(unittest.TestCase):
         self.assertNotIn("M109 ", client)
         self.assertIn("MINIMUM={cold_temp-2} MAXIMUM={cold_temp+2}",
                       material)
-        self.assertIn("ON_CANCEL=_COLDPULL_CANCEL", material)
+        self.assertNotIn("ON_CANCEL", material)
 
 class MotionHeatSettingsTest(unittest.TestCase):
     def test_manual_control_pages_cancel_delayed_tasks_on_entry(self):
@@ -2578,11 +2800,11 @@ class TouchEventBridgeTest(unittest.TestCase):
         controller._handle_touch_action("print.cancel")
         self.assertEqual(actions, ["print.cancel"])
         controller.page = FEATHER.Page.CANCEL_CONFIRM
-        controller._handle_touch_action("print.cancel.back")
-        self.assertEqual(actions, ["print.cancel", "print.cancel.back"])
+        controller._handle_touch_action("operation.cancel.back")
+        self.assertEqual(actions, ["print.cancel", "operation.cancel.back"])
         controller._handle_touch_action("nav.back")
         self.assertEqual(actions, [
-            "print.cancel", "print.cancel.back", "nav.back"])
+            "print.cancel", "operation.cancel.back"])
 
     def test_blocking_loader_rejects_current_and_delayed_back(self):
         controller = base_controller()

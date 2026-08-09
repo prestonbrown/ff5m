@@ -622,6 +622,14 @@ class ResurrectorLifecycleTest(unittest.TestCase):
             line for script in resurrector.gcode.commands
             for line in script.splitlines()
         ]
+        self.assertIn('_CONTEXT_BEGIN TYPE=recovery', lines)
+        self.assertIn('_CONTEXT_STATE NAME="LOADING STATE"', lines)
+        self.assertLess(
+            lines.index('_CONTEXT_STATE NAME=POSITIONING'),
+            lines.index('_CONTEXT_STATE NAME="RESTORING STATE"'))
+        self.assertIn("_CONTEXT_END", lines)
+        self.assertIn("_CONTEXT_BEGIN TYPE=print", lines)
+        self.assertIn("_CONTEXT_STATE NAME=PRINTING", lines)
         self.assertNotIn("G10", lines)
         self.assertNotIn("G11", lines)
         self.assertFalse(any(
@@ -674,6 +682,9 @@ class ResurrectorLifecycleTest(unittest.TestCase):
             resurrector.state, RESURRECTION.ResurrectorState.RESURRECTION)
         self.assertTrue(any(
             "TURN_OFF_HEATERS" in script
+            for script in resurrector.gcode.commands))
+        self.assertTrue(any(
+            "_CONTEXT_RESET" in script
             for script in resurrector.gcode.commands))
         self.assertTrue(any(
             "preparation failed" in response

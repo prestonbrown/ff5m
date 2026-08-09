@@ -1170,8 +1170,8 @@ class FeatherControlsMixin:
                 self._start_z_calibration()
             else:
                 self._start_calibration(repeat_probe=False)
-        elif action == "cal.cancel.heat":
-            self._cancel_calibration_heat()
+        elif action == "cal.cancel":
+            self._open_calibration_cancel()
         elif action == "cal.repeat":
             if self.calibration_kind == "screws":
                 self._start_calibration(repeat_probe=True)
@@ -1442,20 +1442,21 @@ class FeatherControlsMixin:
         self.renderer.send(commands)
 
     def _render_calibration_progress(self):
-        label = self.print_status_text or "Calibration running..."
+        label = (self._operation_context_text()
+                 or self.print_status_text or "Calibration running...")
         title = "Recovery" if self.calibration_kind == "recovery" else "Calibration"
         commands = self.renderer.begin_page(title)
         commands.append(self.renderer.text(
             400, 142, label, ThemeColor.SECONDARY, "JetBrainsMono Bold 12pt", "center",
             max_width=704, truncate=True))
         commands += self._calibration_stage_commands(label)
-        cancel_visible = self._calibration_heat_cancel_visible()
+        cancel_visible = self._calibration_cancel_visible()
         if cancel_visible:
             commands += self.renderer.button(
-                "cal.cancel.heat", 235, 335, 330, 72,
+                "cal.cancel", 235, 335, 330, 72,
                 "CANCELLING..." if getattr(
                     self, "calibration_cancel_requested", False)
-                else "CANCEL HEATING",
+                else "CANCEL",
                 state=("busy" if getattr(
                     self, "calibration_cancel_requested", False)
                        else "danger"),
@@ -1465,8 +1466,9 @@ class FeatherControlsMixin:
         self._last_calibration_cancel_visible = cancel_visible
 
     def _update_calibration_progress(self):
-        label = self.print_status_text or "Calibration running..."
-        cancel_visible = self._calibration_heat_cancel_visible()
+        label = (self._operation_context_text()
+                 or self.print_status_text or "Calibration running...")
+        cancel_visible = self._calibration_cancel_visible()
         if (label == self._last_calibration_label
                 and cancel_visible == getattr(
                     self, "_last_calibration_cancel_visible", False)):
@@ -1489,26 +1491,29 @@ class FeatherControlsMixin:
         commands += self._calibration_stage_commands(label)
         self.renderer.send(commands)
 
-    def _calibration_heat_cancel_visible(self):
-        return (
-            self.calibration_kind in ("screws", "mesh", "z")
-            and (self._temperature_wait_active()
-                 or getattr(self, "calibration_cancel_requested", False)))
+    def _calibration_cancel_visible(self):
+        operation = self._operation_context_status()
+        return (self.calibration_kind in ("screws", "mesh", "z")
+                and (operation["cancel_available"]
+                     or getattr(self, "calibration_cancel_requested", False)))
 
-    def _cancel_calibration_heat(self):
+    def _open_calibration_cancel(self):
         if (self.calibration_kind not in ("screws", "mesh", "z")
-                or not self._temperature_wait_active()
                 or getattr(self, "calibration_cancel_requested", False)):
             return
+        self._open_operation_cancel(
+            Page.CALIBRATION_PROGRESS,
+            self._accept_calibration_cancel,
+            self._clear_calibration_cancel)
+
+    def _accept_calibration_cancel(self, result):
         self.calibration_cancel_requested = True
-        self.calibration_cancel_dispatched = True
-        self._render_calibration_progress()
-        try:
-            self._run_immediate_command("M108")
-        except Exception:
-            self.calibration_cancel_requested = False
-            self.calibration_cancel_dispatched = False
-            raise
+        self.calibration_cancel_dispatched = result["accepted"]
+
+    def _clear_calibration_cancel(self, result):
+        del result
+        self.calibration_cancel_requested = False
+        self.calibration_cancel_dispatched = False
 
     def _stop_cancelled_calibration_heating(self):
         command = (
@@ -1928,10 +1933,10 @@ class FeatherControlsMixin:
         elif getattr(self, "calibration_cancelled", False):
             commands += [
                 self.renderer.text(
-                    400, 145, "HEATING CANCELLED", ThemeColor.WARNING,
+                    400, 145, "OPERATION CANCELLED", ThemeColor.WARNING,
                     "JetBrainsMono Bold 16pt", "center", "middle"),
                 self.renderer.text(
-                    400, 195, "Calibration was stopped before probing",
+                    400, 195, "Calibration stopped at a safe point",
                     ThemeColor.TEXT, "JetBrainsMono 8pt", "center", "middle"),
             ]
         elif self.calibration_kind == "mesh" and self.calibration_mesh:

@@ -72,7 +72,9 @@ EXACT_ACTIONS = {
                     "print.cancel", "print.z"),
     Page.PAUSED: ("nav.home", "print.resume", "print.filament",
                   "print.cancel", "print.z"),
-    Page.CANCEL_CONFIRM: ("nav.back", "print.cancel.back", "print.cancel.confirm"),
+    Page.CANCEL_CONFIRM: (
+        "operation.cancel.back", "operation.cancel.confirm",
+        "operation.cancel.continue", "operation.cancel.force"),
     Page.CONTROL_MOVE: ("nav.back",),
     Page.CONTROL_HEAT: ("nav.back",),
     Page.NETWORK_HOME: ("nav.back", "net.scan", "net.ethernet", "net.retry"),
@@ -206,7 +208,15 @@ class FeatherScreen(FeatherPagesMixin, FeatherControlsMixin):
         self.cancel_waiting_for_heat = False
         self.cancel_mode = None
         self.cancel_phase = None
+        self.operation_cancel_return_page = Page.IDLE_HOME
+        self.operation_cancel_on_accept = None
+        self.operation_cancel_on_clear = None
+        self.operation_cancel_request_id = None
+        self.operation_cancel_target_name = None
+        self.operation_cancel_target_mode = None
         self._last_cancel_label = None
+        self.operation_context = None
+        self._last_operation_revision = -1
         self.home_during_print = False
         self.busy_message = None
         self.busy_phase = 0
@@ -483,8 +493,9 @@ class FeatherScreen(FeatherPagesMixin, FeatherControlsMixin):
         self.gcode_move = self.printer.lookup_object("gcode_move")
         self.temperature_wait = self.printer.lookup_object(
             "gcode_macro _WAIT_TEMPERATURE", None)
-        self.print_flow = self.printer.lookup_object(
-            "gcode_macro _PRINT_FLOW", None)
+        self.operation_context = self.printer.lookup_object(
+            "operation_context", None)
+        self._last_operation_revision = -1
         self.start_print_macro = self.printer.lookup_object(
             "gcode_macro _START_PRINT", None)
         self.bed_mesh = self.printer.lookup_object("bed_mesh", None)
@@ -588,6 +599,12 @@ class FeatherScreen(FeatherPagesMixin, FeatherControlsMixin):
         self.pending_action = None
         self.cancel_requested = False
         self.cancel_waiting_for_heat = False
+        self.cancel_mode = None
+        self.operation_cancel_on_accept = None
+        self.operation_cancel_on_clear = None
+        self.operation_cancel_request_id = None
+        self.operation_cancel_target_name = None
+        self.operation_cancel_target_mode = None
         self.touch_feedback_pending = False
         self.busy_message = None
         self.toast_until = 0.0
@@ -605,15 +622,30 @@ class FeatherScreen(FeatherPagesMixin, FeatherControlsMixin):
         status = gcmd.get("S")
         self.print_status_text = status
         if self.page in (Page.PRINTING, Page.PAUSED):
-            self._draw_print_status(status)
+            operation = self._operation_context_text(
+                self.reactor.monotonic())
+            self._draw_print_status(operation or status)
         self._notify_features("on_print_status", status)
 
     def get_status(self, eventtime):
         status = self.renderer.get_status()
+        operation = self._operation_context_status(eventtime)
         status.update({
             "page": getattr(self.page, "name", str(self.page)),
             "generation": self.renderer.generation,
             "output_frozen": self.renderer.output_frozen,
+            "context_path": operation["context_path"],
+            "context_types": operation["context_types"],
+            "current_state": operation["current_state"],
+            "cancel_available": operation["cancel_available"],
+            "cancel_pending": operation["cancel_pending"],
+            "cancel_request_id": operation["cancel_request_id"],
+            "cancel_target_type": operation["cancel_target_type"],
+            "cancel_target_name": operation["cancel_target_name"],
+            "cancel_target_mode": operation["cancel_target_mode"],
+            "cancel_blocker_type": operation["cancel_blocker_type"],
+            "cancel_blocker_name": operation["cancel_blocker_name"],
+            "operation_revision": operation["revision"],
         })
         return status
 
@@ -777,11 +809,8 @@ class FeatherScreen(FeatherPagesMixin, FeatherControlsMixin):
         if action == "global.toast.dismiss":
             self._hide_toast()
             return
-        # Safety actions must not wait for button animation, the normal action
-        # debounce, or an active G-code dispatcher mutex.  In particular, a
-        # calibration redraw during the 80 ms touch animation would change the
-        # hitbox generation and discard M108 before it reached the immediate
-        # G-code handler.
+        # Emergency actions and page-owned cancellation entry points must not
+        # wait for an active G-code dispatcher mutex.
         if action == "global.abort":
             if not self._safety_decision().visible:
                 logging.info(
@@ -792,6 +821,20 @@ class FeatherScreen(FeatherPagesMixin, FeatherControlsMixin):
                 self.page.name)
             self._run_immediate_command("M112")
             return
+        if (action == "operation.cancel.force"
+                and self.page == Page.CANCEL_CONFIRM
+                and (getattr(self, "cancel_mode", None) == "not_cancelable"
+                     or getattr(self, "cancel_mode", None) == "pending")):
+            logging.warning(
+                "[feather_screen] confirmed immediate abort from operation "
+                "cancellation dialog")
+            self._run_immediate_command("M112")
+            return
+        if (action == "operation.cancel.continue"
+                and self.page == Page.CANCEL_CONFIRM
+                and getattr(self, "cancel_mode", None) == "pending"):
+            self._handle_operation_cancel_action(action)
+            return
         manager = getattr(self, "feature_manager", None)
         if (manager is not None and
                 manager.handle_immediate_action(self.page, action)):
@@ -799,11 +842,11 @@ class FeatherScreen(FeatherPagesMixin, FeatherControlsMixin):
                 "[feather_screen] immediate feature action=%s page=%s",
                 action, self.page.name)
             return
-        if (manager is None and action == "cal.cancel.heat"
+        if (manager is None and action == "cal.cancel"
                 and self.page == Page.CALIBRATION_PROGRESS
                 and getattr(self, "calibration_kind", None) in (
                     "screws", "mesh", "z")):
-            self._cancel_calibration_heat()
+            self._open_calibration_cancel()
             return
         if self._blocking_operation_active():
             logging.info(
@@ -822,9 +865,12 @@ class FeatherScreen(FeatherPagesMixin, FeatherControlsMixin):
             logging.info("[feather_screen] touch ignored while mod update is active: %s",
                          action)
             return
-        busy_allowed = action in ("print.cancel", "print.cancel.confirm")
+        busy_allowed = action in (
+            "print.cancel", "operation.cancel.confirm",
+            "operation.cancel.back", "operation.cancel.continue",
+            "operation.cancel.force")
         if (self.page == Page.CANCEL_CONFIRM and
-                action in ("nav.back", "print.cancel.back")):
+                action == "operation.cancel.back"):
             busy_allowed = True
         if getattr(self, "command_depth", 0) > 0 and not busy_allowed:
             logging.info("[feather_screen] touch ignored while command is active: %s",
@@ -918,7 +964,7 @@ class FeatherScreen(FeatherPagesMixin, FeatherControlsMixin):
             logging.info("[feather_screen] debounced action=%s", action)
             return
         if self.pending_action is not None and action in (
-                "print.pause", "print.resume", "print.cancel.confirm"):
+                "print.pause", "print.resume", "operation.cancel.confirm"):
             logging.info("[feather_screen] action already in progress=%s", action)
             return
         allowed = (owner.allows_action(self.page, action)
@@ -995,6 +1041,8 @@ class FeatherScreen(FeatherPagesMixin, FeatherControlsMixin):
                         (owner.name, action))
             elif action.startswith("file."):
                 self._handle_file_action(action)
+            elif action.startswith("operation.cancel."):
+                self._handle_operation_cancel_action(action)
             elif action.startswith("print."):
                 self._handle_print_action(action)
             elif action.startswith("heat."):
@@ -1130,7 +1178,7 @@ class FeatherScreen(FeatherPagesMixin, FeatherControlsMixin):
             self._show_page(Page.NETWORK_HOME if self.page == Page.WIFI_SCAN
                             else Page.WIFI_SCAN)
         elif self.page == Page.CANCEL_CONFIRM:
-            self._show_page(self.page_for_print_state())
+            self._close_operation_cancel()
         else:
             self._show_page(Page.IDLE_HOME)
 
@@ -1196,18 +1244,48 @@ class FeatherScreen(FeatherPagesMixin, FeatherControlsMixin):
         return bool(wait is not None and
                     getattr(wait, "variables", {}).get("active", False))
 
-    def _temperature_wait_cancelled(self):
-        wait = getattr(self, "temperature_wait", None)
-        return bool(wait is not None and
-                    (getattr(wait, "variables", {}).get("cancel", False) or
-                     getattr(wait, "variables", {}).get(
-                         "cancel_pending", False)))
+    def _operation_context_status(self, eventtime=None):
+        manager = getattr(self, "operation_context", None)
+        if manager is None:
+            return {
+                "contexts": (), "context_path": (), "context_types": (),
+                "current_state": None, "cancel_available": False,
+                "cancel_pending": False, "cancel_request_id": None,
+                "cancel_target_type": None, "cancel_target_name": None,
+                "cancel_target_mode": None, "cancel_blocker_type": None,
+                "cancel_blocker_name": None, "revision": 0,
+            }
+        if eventtime is None:
+            eventtime = self.reactor.monotonic()
+        status = manager.get_status(eventtime)
+        return {
+            "contexts": tuple(status.get("contexts", ())),
+            "context_path": tuple(status.get("context_path", ())),
+            "context_types": tuple(status.get("context_types", ())),
+            "current_state": status.get("current_state"),
+            "cancel_available": bool(status.get("cancel_available", False)),
+            "cancel_pending": bool(status.get("cancel_pending", False)),
+            "cancel_request_id": status.get("cancel_request_id"),
+            "cancel_target_type": status.get("cancel_target_type"),
+            "cancel_target_name": status.get("cancel_target_name"),
+            "cancel_target_mode": status.get("cancel_target_mode"),
+            "cancel_blocker_type": status.get("cancel_blocker_type"),
+            "cancel_blocker_name": status.get("cancel_blocker_name"),
+            "revision": int(status.get("revision", 0)),
+        }
 
-    def _temperature_wait_pending(self):
-        wait = getattr(self, "temperature_wait", None)
-        return bool(wait is not None and
-                    getattr(wait, "variables", {}).get(
-                        "cancel_pending", False))
+    def _operation_context_text(self, eventtime=None):
+        status = self._operation_context_status(eventtime)
+        parts = [str(name).strip().upper()
+                 for name in status["context_path"] if str(name).strip()]
+        state = status["current_state"]
+        if state is not None and str(state).strip():
+            parts.append(str(state).strip().upper())
+        return " -> ".join(parts)
+
+    def _display_status_text(self, eventtime=None):
+        return (self._operation_context_text(eventtime)
+                or str(getattr(self, "print_status_text", "")))
 
     def _build_safety_registry(self):
         registry = SafetyRegistry(excluded_routes=(Page.IDLE_HOME,))
@@ -1406,10 +1484,10 @@ class FeatherScreen(FeatherPagesMixin, FeatherControlsMixin):
     def _run_immediate_command(self, command):
         """Dispatch a patched immediate command without entering the G-code mutex.
 
-        M108 is specifically designed to interrupt a yielding temperature macro.
-        Passing it through run_script() used to wait for that macro to unwind;
-        by then _WAIT_TEMPERATURE had reset its flag and already called
-        CANCEL_PRINT, making Feather issue a second cancellation.
+        M108 interrupts a yielding temperature macro, M112 is the emergency
+        stop, and FEATHER_ABORT is the external immediate bridge to the
+        operation context manager. Normal UI cancellation calls the manager
+        directly from the reactor and queues only a safe point when needed.
         """
         if command not in ("M108", "M112", "FEATHER_ABORT"):
             raise ValueError("Unsupported immediate Feather command")
@@ -1688,8 +1766,10 @@ class FeatherScreen(FeatherPagesMixin, FeatherControlsMixin):
             self.busy_phase = (self.busy_phase + 1) % 5
             self.renderer.loader(self.busy_message, self.busy_phase)
         elif self.page in (Page.PRINTING, Page.PAUSED):
+            self._update_operation_context(eventtime)
             self._update_print_progress(eventtime)
-        elif self.page == Page.CANCEL_CONFIRM and self.cancel_requested:
+        elif (self.page == Page.CANCEL_CONFIRM
+              and getattr(self, "cancel_mode", None) == "pending"):
             self._update_cancel_progress()
         elif self.page == Page.IDLE_HOME:
             self._update_dashboard(eventtime)

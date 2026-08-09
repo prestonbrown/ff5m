@@ -4,6 +4,14 @@
 
 This document provides a concise overview of the G-code macros defined in the `base.cfg`, `headless.cfg`, and `stock.cfg` configuration files for a 3D printer running Klipper based Forge-X firmware modification. These macros enhance printer functionality, including bed leveling, filament management, system control, user interface interactions, and stock screen integration. Each macro is described with its parameters and default values where applicable.
 
+## Operation Contexts
+
+Forge-X exposes nested operation contexts for UI status and cooperative cancellation. Context types and cancellation cleanup are registered once in `macros/operation_context.cfg`. Macros use `_CONTEXT_BEGIN TYPE=...`, replace meaningful phases with `_CONTEXT_STATE NAME="..."`, and finish with `_CONTEXT_END`. Ending a nested operation automatically restores its caller and state. Invalid commands warn in the G-code console without stopping G-code.
+
+Each registered type uses `cancel_mode: interruptible | cancelable | non_interruptible`. `_CONTEXT_CANCEL` selects the nearest `cancelable` cleanup domain or interrupts the current operation tree; `_CONTEXT_CANCEL_POINT` delivers it after the current atomic command. `_WAIT_TEMPERATURE` uses `_CONTEXT_STATE ... TEMPORARY=1` and `RESTORE=1` internally for heating/cooling overlays and is interrupted immediately through `M108`. Macro callers do not pass display text or cleanup handlers through their signatures.
+
+Managed operations such as `START_PRINT`, `CLEAR_NOZZLE`, bed-mesh validation, filament handling, and Cold Pull own their contexts. They do not require a `CONTEXT` argument from callers.
+
 ## Macros Overview
 
 ### Bed Leveling and Calibration
@@ -143,15 +151,16 @@ validation, and persistent override examples.
 ### Temperature Control
 
 - **_WAIT_TEMPERATURE**
-  - **Description**: Waits for the extruder or bed to reach a target temperature within tolerances.
+  - **Description**: Waits for the extruder or bed to reach a target temperature within tolerances or an explicit range. Forge-X uses this managed wait wherever heating/cooling must support `M108` and deferred print cancellation.
   - **Parameters**:
     - `CMD` (string, required): `M104` (extruder) or `M140` (bed).
     - `VALUE` (int, required): Target temperature (°C).
-    - `TIMEOUT` (int, default: 300): Timeout duration (seconds).
-    - `DELAY` (int, default: 1000): Polling interval (ms).
+    - `TIMEOUT` (int, default: 900): Timeout duration (seconds).
+    - `DELAY` (int, default: 3000): Polling interval (ms).
     - `ABOVE` (float, default: 1): Upper tolerance (°C).
     - `BELOW` (float, default: 1): Lower tolerance (°C).
-  - **Defaults**: Cancels if timed out or interrupted.
+    - `MINIMUM` / `MAXIMUM` (float, optional): Explicit one-sided or bounded acceptable range, replacing `ABOVE` / `BELOW` when either is supplied.
+  - **Defaults**: Raises if timed out or interrupted. When an operation context is active, the wait temporarily reports a heating or cooling state for the selected heater and restores the previous operation state afterward. Cancellation cleanup comes from the selected context type, not from a wait parameter.
 
 - **PID_TUNE_BED**
   - **Description**: Calibrates PID for the bed heater at a specified temperature.

@@ -39,7 +39,7 @@ class ExtruderCalibrationFeature(FeatherExtruderCalibrationMixin,
         if (action == "extruder.coldpull.cancel"
                 and page == Page.EXTRUDER_CALIBRATION
                 and self.extruder_calibration.phase == "cold_pull"):
-            self._cancel_cold_pull_temperature_wait()
+            self._open_cold_pull_cancel()
             return True
         return False
 

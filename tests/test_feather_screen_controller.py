@@ -937,7 +937,7 @@ class ControllerSafetyTest(unittest.TestCase):
         for stage in ("CLEAN", "PROBE", "DONE"):
             self.assertEqual(colors[stage], UI.ThemeColor.MUTED)
 
-    def test_calibration_heating_offers_m108_cancel_and_global_abort(self):
+    def test_cancelable_calibration_offers_context_cancel_and_global_abort(self):
         for kind in ("screws", "mesh", "z"):
             with self.subTest(kind=kind):
                 controller = ScenarioController.__new__(ScenarioController)
@@ -946,9 +946,16 @@ class ControllerSafetyTest(unittest.TestCase):
                 controller.calibration_repeat_probe = False
                 controller.calibration_clean_nozzle = True
                 controller.calibration_cancel_requested = False
-                controller.temperature_wait = type(
-                    "Wait", (), {"variables": {
-                        "active": True, "cancel": False}})()
+                controller.operation_context = type("Contexts", (), {
+                    "get_status": lambda self, eventtime: {
+                        "context_path": ("Calibration",),
+                        "current_state": "HEATING NOZZLE",
+                        "cancel_available": True,
+                        "cancel_pending": False,
+                        "cancel_target_name": "Calibration",
+                        "revision": 1,
+                    }})()
+                controller.reactor = Reactor()
                 controller.print_status_text = "HEATING..."
                 controller.renderer.send = lambda commands: None
                 controller.renderer.set_emergency_stop_visible(True)
@@ -956,9 +963,9 @@ class ControllerSafetyTest(unittest.TestCase):
                 controller._render_calibration_progress()
 
                 self.assertIn(
-                    "cal.cancel.heat", controller.renderer._buttons)
+                    "cal.cancel", controller.renderer._buttons)
                 self.assertEqual(
-                    controller.renderer._buttons["cal.cancel.heat"][5],
+                    controller.renderer._buttons["cal.cancel"][5],
                     "danger")
                 self.assertIn("global.abort", controller.renderer._buttons)
 
@@ -973,10 +980,12 @@ class ControllerSafetyTest(unittest.TestCase):
         clean = controller._z_preparation_command()
         self.assertIn(
             "CLEAR_NOZZLE EXTRUDER_TEMP=270 BED_TEMP=105", clean)
-        self.assertIn('S="Z OFFSET: TARE"', clean)
+        self.assertIn("_CONTEXT_BEGIN TYPE=z_offset", clean)
+        self.assertIn("_CONTEXT_STATE NAME=TARING", clean)
+        self.assertIn("_CONTEXT_END", clean)
         self.assertIn("MOVE_SAFE Z=20 ABSOLUTE=1 F=600", clean)
         self.assertIn("LOAD_CELL_TARE", clean)
-        self.assertIn('S="Z OFFSET: READY"', clean)
+        self.assertNotIn("_PRINT_STATUS", clean)
 
         controller.calibration_clean_nozzle = False
         no_clean = controller._z_preparation_command()
@@ -984,6 +993,7 @@ class ControllerSafetyTest(unittest.TestCase):
         self.assertIn("G28", no_clean)
         self.assertIn(
             "_WAIT_TEMPERATURE CMD=M104 VALUE=120", no_clean)
+        self.assertNotIn("_CONTEXT_STATE NAME=HEATING", no_clean)
         self.assertNotIn("M140", no_clean)
         self.assertNotIn("CLEAR_NOZZLE", no_clean)
         self.assertIn("MOVE_SAFE Z=20 ABSOLUTE=1 F=600", no_clean)
@@ -1217,26 +1227,50 @@ class ControllerSafetyTest(unittest.TestCase):
         self.assertEqual(controller.page, FEATHER.Page.ERROR)
         self.assertEqual(pages, [])
 
-    def test_calibration_heat_cancel_dispatches_immediate_m108_once(self):
+    def test_calibration_cancel_requests_context_domain_once(self):
         controller = ScenarioController.__new__(ScenarioController)
         controller.calibration_kind = "mesh"
         controller.calibration_cancel_requested = False
         controller.calibration_cancel_dispatched = False
-        controller.temperature_wait = type(
-            "Wait", (), {"variables": {
-                "active": True, "cancel": False}})()
-        controller._render_calibration_progress = lambda: None
-        immediate = []
-        controller._run_immediate_command = immediate.append
+        controller.reactor = Reactor()
+        controller.operation_cancel_return_page = FEATHER.Page.IDLE_HOME
+        controller.operation_cancel_on_accept = None
+        controller.operation_cancel_on_clear = None
+        controller.operation_cancel_request_id = None
+        controller.operation_cancel_target_name = None
+        controller.operation_cancel_target_mode = None
+        controller.cancel_mode = None
+        controller._show_page = lambda page: setattr(controller, "page", page)
+        controller._render_cancel_confirm = lambda: None
+        requests = []
+        controller.operation_context = type("Contexts", (), {
+            "get_status": lambda self, eventtime: {
+                "context_path": ("Bed Level",),
+                "current_state": "LEVELING",
+                "cancel_available": True,
+                "cancel_pending": False,
+                "cancel_request_id": None,
+                "cancel_target_name": "Bed Level",
+                "cancel_target_mode": "cancelable",
+                "revision": 1,
+            },
+            "request_cancel": lambda self: (
+                requests.append("cancel") or {
+                    "accepted": True, "status": "accepted",
+                    "request_id": 1, "target_name": "Bed Level",
+                    "target_mode": "cancelable"})})()
 
-        controller._handle_calibration_action("cal.cancel.heat")
-        controller._handle_calibration_action("cal.cancel.heat")
+        controller._handle_calibration_action("cal.cancel")
+        controller._handle_operation_cancel_action(
+            "operation.cancel.confirm")
+        controller._handle_operation_cancel_action(
+            "operation.cancel.confirm")
 
-        self.assertEqual(immediate, ["M108"])
+        self.assertEqual(requests, ["cancel"])
         self.assertTrue(controller.calibration_cancel_requested)
         self.assertTrue(controller.calibration_cancel_dispatched)
 
-    def test_calibration_heat_cancel_is_not_blocked_by_active_macro(self):
+    def test_calibration_cancel_dialog_is_not_blocked_by_active_macro(self):
         controller = ScenarioController.__new__(ScenarioController)
         controller.page = FEATHER.Page.CALIBRATION_PROGRESS
         controller.calibration_kind = "mesh"
@@ -1248,9 +1282,9 @@ class ControllerSafetyTest(unittest.TestCase):
             "generation": 1,
         })()
         cancelled = []
-        controller._cancel_calibration_heat = lambda: cancelled.append(True)
+        controller._open_calibration_cancel = lambda: cancelled.append(True)
 
-        controller._handle_touch_action("cal.cancel.heat")
+        controller._handle_touch_action("cal.cancel")
 
         self.assertEqual(cancelled, [True])
         self.assertFalse(controller.touch_feedback_pending)

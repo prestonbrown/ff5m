@@ -380,8 +380,9 @@ class FeatherUtilitiesTest(unittest.TestCase):
         self.assertTrue(allowed(FEATHER.Page.FILE_CONFIRM, "file.start"))
         self.assertFalse(allowed(FEATHER.Page.IDLE_HOME, "file.start"))
         self.assertTrue(allowed(FEATHER.Page.CANCEL_CONFIRM,
-                                "print.cancel.confirm"))
-        self.assertTrue(allowed(FEATHER.Page.CANCEL_CONFIRM, "nav.back"))
+                                "operation.cancel.confirm"))
+        self.assertTrue(allowed(FEATHER.Page.CANCEL_CONFIRM,
+                                "operation.cancel.back"))
         self.assertFalse(allowed(FEATHER.Page.PRINTING,
                                  "print.cancel.confirm"))
 

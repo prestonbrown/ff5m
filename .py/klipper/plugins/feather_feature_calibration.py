@@ -51,7 +51,7 @@ class CalibrationFeature(FeatherControlsMixin, FeatureHostProxy):
             Page.CALIBRATION_GUIDE: ("nav.back",),
             Page.CALIBRATION_CONFIRM: (
                 "nav.back", "cal.confirm", "cal.clean.skip"),
-            Page.CALIBRATION_PROGRESS: ("cal.cancel.heat",),
+            Page.CALIBRATION_PROGRESS: ("cal.cancel",),
             Page.CALIBRATION_RESULT: (
                 "cal.repeat", "cal.done", "cal.mesh.discard",
                 "cal.mesh.save", "cal.tuning.discard", "cal.tuning.save"),
@@ -105,10 +105,10 @@ class CalibrationFeature(FeatherControlsMixin, FeatureHostProxy):
                 self.calibration_results.append(result)
 
     def handle_immediate_action(self, page, action):
-        if (action == "cal.cancel.heat" and
+        if (action == "cal.cancel" and
                 page == Page.CALIBRATION_PROGRESS and
                 self.calibration_kind in ("screws", "mesh", "z")):
-            self._cancel_calibration_heat()
+            self._open_calibration_cancel()
             return True
         return False
 

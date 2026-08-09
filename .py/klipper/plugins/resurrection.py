@@ -436,7 +436,6 @@ class Resurrector:
         return state
 
     def _load_state(self, stats):
-        self.gcode.run_script_from_command("_PRINT_STATUS S='LOADING STATE...'")
         cancel_event = threading.Event()
         results = queue.Queue(maxsize=1)
         parser = GCodeStateParser(
@@ -489,6 +488,7 @@ class Resurrector:
         if self.state != ResurrectorState.DESTROYED:
             try:
                 self.gcode.run_script_from_command(
+                    "_CONTEXT_RESET\n"
                     "TURN_OFF_HEATERS\n"
                     "M106 P1 S0\n"
                     "_PRINT_STATUS S='RECOVERY FAILED'")
@@ -540,6 +540,10 @@ class Resurrector:
         self._change_state(ResurrectorState.LOADING)
         file_loaded = False
         try:
+            self.gcode.run_script_from_command("\n".join([
+                '_CONTEXT_BEGIN TYPE=recovery',
+                '_CONTEXT_STATE NAME="LOADING STATE"',
+            ]))
             parsed_state = self._load_state(state)
             if self.state == ResurrectorState.DESTROYED:
                 return
@@ -553,24 +557,23 @@ class Resurrector:
             extruder_temp = float(state["extruder_temp"])
             z_offset = float(state["z_offset"])
             self.gcode.run_script_from_command("\n".join([
-                "_PRINT_STATUS S='PREPARING...'",
+                "_CONTEXT_STATE NAME=PREPARING",
                 "_START_PRINT_PREPARE",
                 f"BED_MESH_PROFILE LOAD={mesh_name}",
                 f"M26 S{state['file_position']}",
-                "_PRINT_STATUS S='HEATING...'",
                 "_WAIT_TEMPERATURE CMD=M140 VALUE=%s BELOW=2 ABOVE=3"
                 % (_format_number(bed_temp),),
                 "M106 P1 S255",
                 "_WAIT_TEMPERATURE CMD=M104 VALUE=%s"
                 % (_format_number(extruder_temp),),
-                "_PRINT_STATUS S='HOMING...'",
+                "_CONTEXT_STATE NAME=HOMING",
                 "G28",
                 "M400",
                 "LOAD_CELL_TARE",
                 "G92 E0",
                 "G90",
                 "M83",
-                "_PRINT_STATUS S='POSITIONING...'",
+                "_CONTEXT_STATE NAME=POSITIONING",
                 "_SET_GCODE_OFFSET Z=%s" % (_format_number(z_offset),),
             ]))
 
@@ -581,7 +584,7 @@ class Resurrector:
             self._restore_physical_position(toolhead_pos)
             self.gcode.run_script_from_command("\n".join([
                 "M106 P1 S0",
-                "_PRINT_STATUS S='RESTORING STATE...'",
+                '_CONTEXT_STATE NAME="RESTORING STATE"',
             ]))
 
             self.gcode.run_script_from_command("\n".join(
@@ -597,7 +600,15 @@ class Resurrector:
                 firmware_retraction.is_retracted = parsed_state.retracted
 
             final_commands = parsed_state.final_commands()
-            final_commands.append("_PRINT_STATUS S='PRINTING...'")
+            final_commands.extend([
+                "_CONTEXT_END",
+                "SET_GCODE_VARIABLE MACRO=_START_PRINT "
+                "VARIABLE=print_active VALUE=True",
+                "SET_GCODE_VARIABLE MACRO=_START_PRINT "
+                "VARIABLE=print_started VALUE=True",
+                "_CONTEXT_BEGIN TYPE=print",
+                "_CONTEXT_STATE NAME=PRINTING",
+            ])
             self.gcode.run_script_from_command("\n".join(final_commands))
 
             self.virtual_sdcard.do_resume()
@@ -613,23 +624,24 @@ class Resurrector:
             gcmd.respond_raw(f"!! The printer isn’t in a resurrection state!")
             return
 
-        self.gcode.run_script_from_command("_PRINT_STATUS S='ABORTING...'")
-
         gcmd.respond_raw("// action:prompt_end")
         state = self._load_resurrection_state(gcmd)
         if state is None:
             return
 
         self.gcode.run_script_from_command("\n".join([
-            f"_PRINT_STATUS S='HEATING...'",
+            '_CONTEXT_BEGIN TYPE=recovery',
+            '_CONTEXT_STATE NAME=PREPARING',
             f"_WAIT_TEMPERATURE CMD=M140 VALUE={state['bed_temp']} BELOW=2 ABOVE=3",
             f"_WAIT_TEMPERATURE CMD=M104 VALUE={state['extruder_temp']}",
 
-            f"_PRINT_STATUS S='HOMING...'",
+            "_CONTEXT_STATE NAME=HOMING",
             f"G28",
             f"M400",
 
+            "_CONTEXT_STATE NAME=FINISHING",
             f"TURN_OFF_HEATERS",
+            f"_CONTEXT_END",
         ]))
 
         self._clear(self.reactor.monotonic())
