@@ -114,6 +114,10 @@ process:
 Feather enables vsync-driven deferred page publication by default. The
 3 ms guard is based on the measured printer timing margin; `auto` preserves the
 synchronous fallback when page flipping or a usable vsync source is absent.
+Typer enters its resident FIFO loop before vsync calibration completes and
+publishes frames synchronously during calibration. Once the timing model has
+enough valid samples, later frames switch to deferred publication without a
+renderer restart or an unpublished startup frame.
 
 The worker hands the event FIFO to Klipper's reactor through
 `register_async_callback`; touch remains a direct reactor FD for low-latency
