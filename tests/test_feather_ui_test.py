@@ -15,6 +15,7 @@ import sys
 sys.path.insert(0, str(PLUGINS))
 
 import feather_feature_ui_test as UI_TEST  # noqa: E402
+import feather_operation_context_fixtures as CONTEXT_FIXTURES  # noqa: E402
 import feather_screen as FEATHER  # noqa: E402
 from feather_feature_manager import LazyFeatureManager  # noqa: E402
 from tests.visual_checks import hybrid as HYBRID  # noqa: E402
@@ -127,7 +128,12 @@ class ArtifactWorkerTest(unittest.TestCase):
             finished_event = threading.Event()
             with mock.patch.object(UI_TEST, "ACTIVE_MARKER", str(active)):
                 worker.finish(
-                    {"outcome": "passed"},
+                    {"outcome": "passed",
+                     "operation_context": {
+                         "passed": True, "scenario_count": 0,
+                         "scenarios": []},
+                     "_operation_context_artifact": {
+                         "passed": True, "scenarios": []}},
                     lambda value: (finished.append(value),
                                    finished_event.set()))
                 self.assertTrue(finished_event.wait(3.0))
@@ -142,6 +148,12 @@ class ArtifactWorkerTest(unittest.TestCase):
             self.assertIn("time,x,y,z", (run / "positions.csv").read_text())
             self.assertIn("finished phase", (run / "run.log").read_text())
             self.assertEqual((run / "printer.log").read_text(), "after\n")
+            operation = json.loads(
+                (run / "operation_context.json").read_text())
+            self.assertTrue(operation["passed"])
+            summary = json.loads((run / "summary.json").read_text())
+            self.assertNotIn("_operation_context_artifact", summary)
+            self.assertTrue(summary["operation_context"]["passed"])
             self.assertFalse(active.exists())
 
     def test_retention_preserves_newest_failure(self):
@@ -293,10 +305,12 @@ class RunnerContractTest(unittest.TestCase):
         labels = [step["label"] for step in steps]
 
         self.assertEqual(labels, [
-            "baseline", "render-pause-timer", "render-restart-signal",
-            "render-recovered", "render-recovered", "render-resume-timer"])
-        steps[2]["callback"]()
-        self.assertTrue(steps[3]["predicate"]())
+            "baseline", "render-context-start", "render-pause-timer",
+            "render-restart-signal", "render-recovered",
+            "render-recovered", "render-resume-timer",
+            "render-context-verify"])
+        steps[3]["callback"]()
+        self.assertTrue(steps[4]["predicate"]())
 
     def test_capture_waits_for_worker_and_fails_on_dropped_batch(self):
         status = {
@@ -426,8 +440,10 @@ class RunnerContractTest(unittest.TestCase):
             if step["kind"] == "capture"]
 
         self.assertEqual(labels[0], "baseline")
-        self.assertEqual(labels[1], "component-pause-timer")
-        self.assertEqual(labels[-1], "component-resume-timer")
+        self.assertEqual(labels[1], "component-context-start")
+        self.assertEqual(labels[2], "component-pause-timer")
+        self.assertEqual(labels[-2], "component-resume-timer")
+        self.assertEqual(labels[-1], "component-context-verify")
         self.assertEqual(len(captures), 10)
         self.assertEqual(len(set(captures)), 10)
         self.assertIn("component-default-home", captures)
@@ -716,6 +732,374 @@ class RunnerContractTest(unittest.TestCase):
 
             self.assertEqual(commands, [])
             self.assertFalse(active.exists())
+
+    def test_extended_context_suites_are_separate_and_ordered(self):
+        host = type("Host", (), {
+            "cold_pull_materials": ("PLA",),
+            "renderer": type("Renderer", (), {
+                "get_status": lambda self: {"typer_restarts": 0},
+            })(),
+        })()
+        feature = UI_TEST.UITestFeature(host)
+        feature.material = "PLA"
+        material = feature._build_steps("CONTEXT_MATERIAL")
+        material_labels = [step["label"] for step in material]
+        self.assertLess(material_labels.index("filament-context-start"),
+                        material_labels.index("prompt-PLA"))
+        self.assertLess(material_labels.index("prompt-Load"),
+                        material_labels.index("prompt-Purge"))
+        self.assertLess(material_labels.index("prompt-Purge"),
+                        material_labels.index("prompt-Unload"))
+        self.assertLess(material_labels.index("prompt-Unload"),
+                        material_labels.index("prompt-Done"))
+        self.assertLess(material_labels.index("filament-context-verify"),
+                        material_labels.index("cold_pull-context-start"))
+
+        printing = feature._build_steps("CONTEXT_PRINT")
+        print_labels = [step["label"] for step in printing]
+        expected = (
+            "print_kamp-context-start", "print_kamp-file-open",
+            "print_kamp-complete", "print_kamp-context-verify",
+            "print_mesh-context-start", "print_mesh-idle-timeout",
+            "print_mesh-checkpoint", "print_mesh-activate-recovery",
+            "print_mesh-context-verify", "recovery-context-start",
+            "recovery-printing", "recovery-complete",
+            "recovery-context-verify",
+        )
+        positions = [print_labels.index(label) for label in expected]
+        self.assertEqual(positions, sorted(positions))
+
+        full_labels = [
+            step["label"] for step in feature._build_steps("FULL")]
+        self.assertFalse(any(label.startswith("context_print-")
+                             for label in full_labels))
+        self.assertFalse(any(label.startswith("context_material-")
+                             for label in full_labels))
+
+    def test_action_prompt_selection_uses_exact_visible_label(self):
+        host = type("Host", (), {})()
+        host.action_prompt = {"buttons": {
+            "prompt.button.0": {"label": "Load"},
+            "prompt.button.1": {"label": "Unload"},
+        }}
+        feature = UI_TEST.UITestFeature(host)
+
+        self.assertEqual(feature._prompt_action_for_label("load"),
+                         "prompt.button.0")
+        with self.assertRaisesRegex(RuntimeError, "found 0"):
+            feature._prompt_action_for_label("Purge")
+
+    def test_context_file_is_published_through_real_browser_entry(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            path = pathlib.Path(temporary) / "runner.gcode"
+            path.write_text("G4 P1\n", encoding="utf-8")
+            host = type("Host", (), {})()
+            host.virtual_sdcard = type("SD", (), {
+                "sdcard_dirname": temporary,
+            })()
+            host.reactor = type("Reactor", (), {
+                "monotonic": lambda self: 12.0,
+            })()
+            host.file_entry_cache = {"internal": ["original"]}
+            host.file_entry_loaded_at = {"internal": 4.0}
+            host.file_entries = ["original"]
+            host.file_source = "internal"
+            host.file_page = 2
+            host.file_scan_token = 3
+            host.page = FEATHER.Page.IDLE_HOME
+            host._show_page = lambda page: setattr(host, "page", page)
+            feature = UI_TEST.UITestFeature(host)
+
+            feature._open_context_file(str(path))
+
+            entry = host.file_entry_cache["internal"][0]
+            self.assertEqual(entry["path"], str(path.resolve()))
+            self.assertEqual(host.file_entries, [entry])
+            self.assertEqual(host.page, FEATHER.Page.FILE_BROWSER)
+            self.assertEqual(host.file_scan_token, 4)
+            self.assertEqual(
+                feature.context_runtime["file_browser"]["cache"],
+                ["original"])
+
+    def test_extended_suites_require_confirm_two(self):
+        feature = UI_TEST.UITestFeature(object())
+        gcmd = GCmd()
+        for suite in ("CONTEXT_PRINT", "CONTEXT_MATERIAL"):
+            with self.subTest(suite=suite), self.assertRaisesRegex(
+                    RuntimeError, "requires CONFIRM=2"):
+                feature.run(gcmd, suite, "PLA", 1)
+
+    def test_context_print_preflight_rejects_foreign_checkpoint(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            checkpoint = pathlib.Path(temporary) / "resurrection.json"
+            checkpoint.write_text("{}", encoding="utf-8")
+            empty_context = type("Context", (), {
+                "get_status": lambda self, eventtime: {"contexts": ()},
+            })()
+            host = type("Host", (), {})()
+            host.reactor = type("Reactor", (), {
+                "monotonic": lambda self: 1.0,
+            })()
+            host.print_state = FEATHER.PrintState.IDLE
+            host.print_stats = type("Stats", (), {
+                "get_status": lambda self, eventtime: {"state": "standby"},
+            })()
+            host.virtual_sdcard = type("SD", (), {
+                "is_active": lambda self: False,
+            })()
+            host.command_depth = 0
+            host.renderer = type("Renderer", (), {"active": True})()
+            host.toolhead = type("Toolhead", (), {
+                "get_status": lambda self, eventtime: {"velocity": 0.0},
+            })()
+            host.operation_context = empty_context
+            host.bed_mesh = type("Mesh", (), {
+                "get_status": lambda self, eventtime: {
+                    "profiles": ("auto",)},
+            })()
+            host.probe = object()
+            heater = type("Heater", (), {
+                "get_status": lambda self, eventtime: {"target": 0.0},
+            })()
+            host.extruder = heater
+            host.heater_bed = heater
+            host.heating_materials = ("PLA",)
+            host.resurrection = type("Resurrection", (), {
+                "enabled": True, "file_path": str(checkpoint),
+            })()
+            feature = UI_TEST.UITestFeature(host)
+
+            with self.assertRaisesRegex(
+                    RuntimeError, "foreign recovery checkpoint"):
+                feature._preflight("CONTEXT_PRINT", hardware_targets=True)
+
+    def test_context_runtime_cleanup_restores_memory_and_owned_files(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = pathlib.Path(temporary)
+            gcode = root / "runner.gcode"
+            checkpoint = root / "checkpoint.json"
+            unrelated = root / "keep.gcode"
+            for path in (gcode, checkpoint, unrelated):
+                path.write_text("test", encoding="utf-8")
+
+            class Params:
+                def __init__(self):
+                    self.variables = {
+                        "check_md5": 0, "current_material": "PLA"}
+
+                def _store_value(self, param, value):
+                    return "product"
+
+            params = Params()
+            original_store = params._store_value
+            params._store_value = lambda param, value: "guard"
+            client = type("Client", (), {
+                "variables": {"idle_timeout": 2},
+            })()
+            commands = []
+            host = type("Host", (), {})()
+            host.reactor = type("Reactor", (), {
+                "monotonic": lambda self: 1.0,
+            })()
+            host.virtual_sdcard = type("SD", (), {
+                "is_active": lambda self: False,
+            })()
+            host.operation_context = type("Context", (), {
+                "get_status": lambda self, eventtime: {"contexts": ()},
+            })()
+            host.params = params
+            host.idle_timeout = object()
+            host.resurrection = type("Resurrection", (), {
+                "file_path": str(checkpoint),
+            })()
+            host._run_script = lambda command: commands.append(command)
+            feature = UI_TEST.UITestFeature(host)
+            feature.suite = "CONTEXT_PRINT"
+            feature.context_files = [str(gcode)]
+            feature.context_checkpoint = str(checkpoint)
+            feature.context_runtime = {
+                "mod_params": {"check_md5": 1},
+                "current_material": "PETG",
+                "params_store": (params, True, original_store),
+                "client_macro": client,
+                "client_idle_timeout": 3600,
+                "idle_timeout": 600.0,
+            }
+
+            feature._restore_context_runtime()
+
+            self.assertEqual(params.variables["check_md5"], 1)
+            self.assertEqual(params.variables["current_material"], "PETG")
+            self.assertIs(params._store_value, original_store)
+            self.assertEqual(client.variables["idle_timeout"], 3600)
+            self.assertIn("SET_IDLE_TIMEOUT TIMEOUT=600", commands)
+            self.assertFalse(gcode.exists())
+            self.assertFalse(checkpoint.exists())
+            self.assertTrue(unrelated.exists())
+
+
+class ContextManagerFixture:
+    def __init__(self):
+        self.status = self._raw({
+            "contexts": [], "context_path": [], "current_state": None,
+            "cancel_available": False, "cancel_pending": False,
+            "cancel_target": {"type": None, "name": None, "mode": None},
+            "cancel_blocker": {"type": None, "name": None},
+        })
+        self.original_calls = 0
+
+    def _changed(self):
+        self.original_calls += 1
+
+    def get_status(self, eventtime):
+        return dict(self.status)
+
+    @staticmethod
+    def _raw(snapshot):
+        contexts = []
+        for index, frame in enumerate(snapshot["contexts"], 100):
+            value = dict(frame)
+            value["id"] = index
+            contexts.append(value)
+        target = snapshot["cancel_target"]
+        blocker = snapshot["cancel_blocker"]
+        return {
+            "contexts": contexts,
+            "context_path": tuple(snapshot["context_path"]),
+            "current_state": snapshot["current_state"],
+            "cancel_available": snapshot["cancel_available"],
+            "cancel_pending": snapshot["cancel_pending"],
+            "cancel_request_id": 700,
+            "cancel_target_id": 101 if target["type"] else None,
+            "cancel_target_type": target["type"],
+            "cancel_target_name": target["name"],
+            "cancel_target_mode": target["mode"],
+            "cancel_blocker_id": 102 if blocker["type"] else None,
+            "cancel_blocker_type": blocker["type"],
+            "cancel_blocker_name": blocker["name"],
+            "revision": 999,
+        }
+
+    def emit(self, snapshot):
+        self.status = self._raw(snapshot)
+        self._changed()
+
+
+class OperationContextRecorderTest(unittest.TestCase):
+    def _record(self, fixture, variants):
+        manager = ContextManagerFixture()
+        recorder = CONTEXT_FIXTURES.OperationContextRecorder(manager)
+        recorder.attach()
+        recorder.start_scenario("fixture", (fixture,))
+        expected = CONTEXT_FIXTURES.expand_events(
+            CONTEXT_FIXTURES.FIXTURES[fixture], variants)
+        for snapshot in expected:
+            manager.emit(snapshot)
+        result = recorder.finish_scenario()
+        recorder.detach()
+        return manager, recorder, result
+
+    def test_records_nested_stack_and_ignores_dynamic_fields(self):
+        manager, recorder, result = self._record(
+            "mesh_clean", ("NONE", "HEATING", "COOLING"))
+
+        self.assertTrue(result["passed"])
+        self.assertEqual(result["temperature_variants"],
+                         ["NONE", "HEATING", "COOLING"])
+        nested = next(snapshot for snapshot in result["actual"]
+                      if len(snapshot["contexts"]) == 3)
+        self.assertEqual([frame["type"] for frame in nested["contexts"]],
+                         ["auto_bed_level", "bed_level", "nozzle_clean"])
+        self.assertEqual(manager.original_calls, len(result["actual"]))
+        self.assertNotIn("_changed", manager.__dict__)
+        self.assertTrue(recorder.report()["passed"])
+
+    def test_all_temperature_boundary_variants_are_exact(self):
+        self.assertEqual(
+            CONTEXT_FIXTURES.temperature_variant(199.9, 200, 205),
+            "HEATING")
+        self.assertEqual(
+            CONTEXT_FIXTURES.temperature_variant(205.1, 200, 205),
+            "COOLING")
+        self.assertEqual(
+            CONTEXT_FIXTURES.temperature_variant(200, 200, 205), "NONE")
+        self.assertEqual(
+            CONTEXT_FIXTURES.temperature_variant(205, 200, 205), "NONE")
+        for variant in CONTEXT_FIXTURES.WAIT_VARIANTS:
+            with self.subTest(variant=variant):
+                _manager, _recorder, result = self._record(
+                    "screws", (variant,))
+                self.assertEqual(result["temperature_variants"], [variant])
+
+    def test_mismatch_reports_first_exact_difference_and_final_stack(self):
+        manager = ContextManagerFixture()
+        recorder = CONTEXT_FIXTURES.OperationContextRecorder(manager)
+        recorder.attach()
+        recorder.start_scenario("screws", ("screws",))
+        events = CONTEXT_FIXTURES.expand_events(
+            CONTEXT_FIXTURES.SCREWS, ("NONE",))
+        for snapshot in events[:-1]:
+            manager.emit(snapshot)
+
+        with self.assertRaisesRegex(
+                CONTEXT_FIXTURES.FixtureMismatch,
+                "final operation stack is not empty"):
+            recorder.finish_scenario()
+        self.assertFalse(recorder.report()["passed"])
+        recorder.detach()
+
+    def test_wrapper_restores_external_instance_state_on_exception_and_abort(self):
+        manager = ContextManagerFixture()
+        calls = []
+
+        def external_changed():
+            calls.append("external")
+            raise RuntimeError("original failed")
+
+        manager._changed = external_changed
+        recorder = CONTEXT_FIXTURES.OperationContextRecorder(manager)
+        recorder.attach()
+        recorder.start_scenario("none", ("none",))
+        with self.assertRaisesRegex(RuntimeError, "original failed"):
+            manager._changed()
+        self.assertEqual(len(recorder._trace), 1)
+        recorder.abort_active("aborted")
+        recorder.detach()
+
+        self.assertIs(manager._changed, external_changed)
+        self.assertEqual(calls, ["external"])
+        self.assertEqual(recorder.results[0]["diagnostic"], "aborted")
+
+    def test_transition_between_scenarios_is_a_fail_closed_leak(self):
+        manager = ContextManagerFixture()
+        recorder = CONTEXT_FIXTURES.OperationContextRecorder(manager)
+        recorder.attach()
+        manager.emit(CONTEXT_FIXTURES.expand_events(
+            CONTEXT_FIXTURES.SCREWS, ("NONE",))[-1])
+
+        with self.assertRaisesRegex(
+                CONTEXT_FIXTURES.FixtureMismatch,
+                "transitions occurred between scenarios"):
+            recorder.start_scenario("next", ("none",))
+
+        self.assertFalse(recorder.results[0]["passed"])
+        recorder.detach()
+
+    def test_feature_deactivation_restores_changed_wrapper(self):
+        manager = ContextManagerFixture()
+        feature = UI_TEST.UITestFeature(type("Host", (), {})())
+        feature.context_recorder = CONTEXT_FIXTURES.OperationContextRecorder(
+            manager)
+        feature.context_recorder.attach()
+        feature.context_recorder.start_scenario("none", ("none",))
+
+        feature.deactivate()
+
+        self.assertFalse(feature.context_recorder.attached)
+        self.assertNotIn("_changed", manager.__dict__)
+        self.assertEqual(
+            feature.context_recorder.results[0]["diagnostic"],
+            "feature deactivated")
 
 
 if __name__ == "__main__":

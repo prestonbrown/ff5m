@@ -43,6 +43,47 @@ _FEATHER_UI_TEST ACTION=STATUS
 _FEATHER_UI_TEST ACTION=ABORT
 ```
 
+Every normal runner phase is also enclosed by an operation-context fixture.
+The fixture records every `_changed` transition from the live
+`operation_context` instance, removes only dynamic IDs/revisions, and compares
+the complete ordered semantic trace. `SCREWS`, `MESH`, and `Z` validate their
+expected contexts; the remaining phases validate that they create no context
+and that no stack leaks into the next phase. Temperature waits have finite
+`HEATING`, `COOLING`, and already-in-range variants, each of which is still an
+exact full-trace comparison. A mismatch stops later physical steps but does not
+skip cleanup.
+
+Two deliberately separate, attended physical groups exercise workflows that
+are too intrusive for `FULL`:
+
+```gcode
+_FEATHER_UI_TEST ACTION=RUN SUITE=CONTEXT_PRINT MATERIAL=PLA CONFIRM=2
+_FEATHER_UI_TEST ACTION=RUN SUITE=CONTEXT_MATERIAL MATERIAL=PLA CONFIRM=2
+```
+
+`CONTEXT_PRINT` creates two uniquely named temporary virtual-SD files. The
+first starts through the real file browser/confirmation hitboxes and forces
+KAMP with nested nozzle cleaning. The second uses a loaded `auto` mesh, runs
+mesh validation, pauses through the print control, reaches a shortened
+in-memory idle timeout, resumes, creates a normal resurrection checkpoint, and
+then exercises Restore through the recovery pages without restarting Klipper.
+It covers `print`, `kamp`, `mesh_validation`, `nozzle_clean`, `resume`, and
+`recovery`.
+
+`CONTEXT_MATERIAL` drives the normal action-prompt protocol: it selects the
+requested material, performs Load, Purge, Unload, and Done, then selects the
+same active cold-pull profile and completes a cold pull. It covers `filament`
+and `cold_pull`. The final absence of filament after the cold pull is expected
+physical state and is not reversed automatically.
+
+Both extended groups require an observed standby printer, zero heater targets,
+inactive virtual SD, empty operation stack, the required probe/mesh/material
+profiles, no pre-existing recovery checkpoint, a prepared empty bed, and
+prepared filament. `CONFIRM=2` is an explicit acknowledgement of those physical
+preconditions; it is intentionally different from the normal suites'
+`CONFIRM=1`. Do not run either extended group unattended. No manual G-code is
+needed after starting it.
+
 `SUITE=RENDER` is non-physical: on an observed idle printer it requests a
 worker-owned Typer restart, waits for the touch FIFO handoff and surface redraw,
 then captures the recovered screen. It does not home, move, or heat the printer.
@@ -93,8 +134,20 @@ Typer `presented` receipt. Framebuffer reads use the active page reported by
 flip occurs during the copy. Stability hashing, BMP encoding, log copying,
 CSV/JSON updates, and retention execute in the artifact worker thread. The
 reactor only schedules steps and receives completion callbacks.
+calibration stages/results. Context-enabled runs also write
+`operation_context.json` with each selected fixture variant, exact expected and
+actual traces, and scenario result; `summary.json` contains the compact context
+result.
 Retention keeps at most ten completed runs and 512 MiB, never deletes the active
 run, and preserves the newest failure for inspection.
+
+The extended groups temporarily change only runner-owned in-memory branch
+fixtures and restore them during cleanup. They do not save configuration. The
+runner restores heater targets, part fan, selected material, mesh/runtime Z,
+idle timeout, and the patched material persistence hook; it removes only its
+own temporary G-code files and checkpoint. Before and after any live group,
+independently verify standby, zero heater targets, and inactive virtual SD, and
+retain the artifact directory plus deployed UI fingerprint.
 
 ## Development-only semantic screenshot checks
 

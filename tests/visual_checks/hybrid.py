@@ -22,6 +22,7 @@ CASE_ID = re.compile(r"^[a-z0-9][a-z0-9-]{0,95}$")
 UI_FINGERPRINT_FILES = (
     "feather_screen.py",
     "feather_feature_ui_test.py",
+    "feather_operation_context_fixtures.py",
 )
 UI_SUITE_LABELS = frozenset((
     "baseline",

@@ -6,6 +6,7 @@
 
 import importlib.util
 import pathlib
+import sys
 import unittest
 
 
@@ -14,6 +15,8 @@ MODULE_PATH = (pathlib.Path(__file__).parents[1] / ".py" / "klipper" /
 SPEC = importlib.util.spec_from_file_location("operation_context", MODULE_PATH)
 CONTEXT = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(CONTEXT)
+sys.path.insert(0, str(MODULE_PATH.parent))
+import feather_operation_context_fixtures as FIXTURES  # noqa: E402
 
 
 class FakeGCode:
@@ -122,6 +125,8 @@ class OperationContextManagerTest(unittest.TestCase):
         self.register_type(
             "protected", name="Protected task",
             cancel_mode="non_interruptible")
+        self.register_type(
+            "bed_screws", name="Bed Screws", cancel_mode="cancelable")
 
     def register_type(self, type_id, name=None,
                       cancel_mode="interruptible", on_cancel=None):
@@ -147,6 +152,22 @@ class OperationContextManagerTest(unittest.TestCase):
         })
         self.assertEqual(
             self.printer.gcode.immediate_commands, ["_CONTEXT_CANCEL"])
+
+    def test_fixture_snapshots_match_real_manager_semantics(self):
+        actual = []
+        commands = (
+            ("_CONTEXT_BEGIN", {"TYPE": "bed_screws"}),
+            ("_CONTEXT_STATE", {"NAME": "HOMING"}),
+            ("_CONTEXT_STATE", {"NAME": "PROBING"}),
+            ("_CONTEXT_END", {}),
+        )
+        for name, params in commands:
+            self.run_command(name, **params)
+            actual.append(FIXTURES.normalize_status(self.status()))
+
+        expected = FIXTURES.expand_events(
+            FIXTURES.SCREWS, ("NONE",))
+        self.assertEqual(actual, expected)
 
     def test_registry_normalizes_type_and_keeps_metadata_separate(self):
         definition = self.register_type(

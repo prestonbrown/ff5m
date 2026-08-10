@@ -2,6 +2,10 @@
 ##
 ## This module is deliberately absent from Feather's normal import graph.  It
 ## is loaded only by the hidden _FEATHER_UI_TEST command.
+##
+## Copyright (C) 2026, Alexander K <https://github.com/drA1ex>
+##
+## This file may be distributed under the terms of the GNU GPLv3 license
 
 import base64
 import binascii
@@ -22,6 +26,7 @@ from datetime import datetime
 from ui import Page, PrintState
 from ff5m_ui.move import actions as move_actions
 from ff5m_ui.z_offset import actions as z_actions
+from feather_operation_context_fixtures import OperationContextRecorder
 
 
 ARTIFACT_ROOT = "/data/feather-ui-tests"
@@ -52,12 +57,14 @@ PERSISTENT_ACTIONS = frozenset((
 ))
 VALID_SUITES = frozenset((
     "FULL", "UI", "COMPONENT", "RENDER", "MOTION", "HEAT", "SCREWS",
-    "MESH", "Z",
+    "MESH", "Z", "CONTEXT_PRINT", "CONTEXT_MATERIAL",
 ))
 NONPHYSICAL_SUITES = frozenset(("UI", "COMPONENT", "RENDER"))
+EXTENDED_CONTEXT_SUITES = frozenset(("CONTEXT_PRINT", "CONTEXT_MATERIAL"))
 UI_FINGERPRINT_FILES = (
     "feather_screen.py",
     "feather_feature_ui_test.py",
+    "feather_operation_context_fixtures.py",
 )
 COMPONENT_CASE_ID = re.compile(r"^[a-z0-9][a-z0-9-]{0,95}$")
 MAX_COMPONENT_CASE_BYTES = 32 * 1024
@@ -352,6 +359,11 @@ class ArtifactWorker:
 
     def _finish(self, summary):
         summary = dict(summary)
+        operation_context = summary.pop("_operation_context_artifact", None)
+        if operation_context is not None:
+            _atomic_json(os.path.join(
+                self.run_directory, "operation_context.json"),
+                operation_context)
         summary["screenshots"] = len(self.records)
         summary["printer_log"] = self._copy_printer_log()
         _atomic_json(os.path.join(self.run_directory, "summary.json"), summary)
@@ -374,7 +386,7 @@ class ArtifactWorker:
             if path == self.run_directory or not os.path.isdir(path):
                 continue
             if re.match(
-                    r"^\d{8}-\d{6}-\d{6}-(full|ui|component|render|motion|heat|screws|mesh|z)$",
+                    r"^\d{8}-\d{6}-\d{6}-(full|ui|component|render|motion|heat|screws|mesh|z|context_print|context_material)$",
                     name) is None:
                 continue
             summary_path = os.path.join(path, "summary.json")
@@ -440,6 +452,10 @@ class UITestFeature:
         self.renderer_dropped = 0
         self.ui_filament_target = None
         self.capture_receipts = {}
+        self.context_recorder = None
+        self.context_files = []
+        self.context_runtime = {}
+        self.context_checkpoint = None
 
     @property
     def reactor(self):
@@ -497,7 +513,8 @@ class UITestFeature:
             self.capture_receipts[token] = receipt
 
     def on_print_state_changed(self, old_state, new_state, stats_state):
-        if self.running and new_state != PrintState.IDLE:
+        if (self.running and self.suite != "CONTEXT_PRINT"
+                and new_state != PrintState.IDLE):
             self.abort_requested = True
 
     def safety_active_reasons(self, eventtime):
@@ -535,8 +552,11 @@ class UITestFeature:
             raise gcmd.error("Feather UI test is already running")
         if suite not in VALID_SUITES:
             raise gcmd.error("Unknown Feather UI test SUITE=%s" % suite)
-        if confirm != 1:
-            raise gcmd.error("Feather UI test requires CONFIRM=1")
+        required_confirm = 2 if suite in EXTENDED_CONTEXT_SUITES else 1
+        if confirm != required_confirm:
+            raise gcmd.error(
+                "Feather UI test SUITE=%s requires CONFIRM=%d" % (
+                    suite, required_confirm))
         if encoded_cases and suite != "COMPONENT":
             raise gcmd.error("CASES is supported only by SUITE=COMPONENT")
         self._preflight(suite, hardware_targets=False)
@@ -575,15 +595,24 @@ class UITestFeature:
                      self._environment())
         self.worker = ArtifactWorker(self.reactor, self.run_directory)
         self.steps = self._build_steps(suite)
-        self.running = True
-        self.finalizing = False
-        self._last_stage_status = None
-        self._event("run started suite=%s material=%s" %
-                    (suite, self.material or "n/a"))
-        gcmd.respond_info(
-            "Feather UI test started: suite=%s artifacts=%s" %
-            (suite, self.run_directory))
-        self._schedule(0.0)
+        try:
+            self._attach_context_recorder()
+            self.running = True
+            self.finalizing = False
+            self._last_stage_status = None
+            self._event("run started suite=%s material=%s" %
+                        (suite, self.material or "n/a"))
+            gcmd.respond_info(
+                "Feather UI test started: suite=%s artifacts=%s" %
+                (suite, self.run_directory))
+            self._schedule(0.0)
+        except Exception:
+            self.running = False
+            self._detach_context_recorder()
+            if self.worker is not None:
+                self.worker.stop()
+                self.worker = None
+            raise
 
     def _preflight(self, suite, hardware_targets=True):
         if self.host.print_state != PrintState.IDLE:
@@ -602,10 +631,18 @@ class UITestFeature:
         if abs(float(status.get("velocity", 0.0) or 0.0)) > 0.0001:
             raise RuntimeError("Toolhead is moving")
         if hardware_targets and suite not in NONPHYSICAL_SUITES:
-            if suite in ("FULL", "MESH") and getattr(
+            operation_context = getattr(self.host, "operation_context", None)
+            if operation_context is None:
+                raise RuntimeError("Operation context is not configured")
+            if operation_context.get_status(
+                    self.reactor.monotonic()).get("contexts"):
+                raise RuntimeError("Operation context stack is not empty")
+            if suite in ("FULL", "MESH", "CONTEXT_PRINT",
+                         "CONTEXT_MATERIAL") and getattr(
                     self.host, "bed_mesh", None) is None:
                 raise RuntimeError("Bed mesh is not configured")
-            if suite in ("FULL", "SCREWS", "MESH", "Z") and getattr(
+            if suite in ("FULL", "SCREWS", "MESH", "Z",
+                         "CONTEXT_PRINT", "CONTEXT_MATERIAL") and getattr(
                     self.host, "probe", None) is None:
                 raise RuntimeError("Probe is not configured")
             extruder = self.host.extruder.get_status(self.reactor.monotonic())
@@ -613,9 +650,31 @@ class UITestFeature:
             if float(extruder.get("target", 0.0)) > 0.0 or float(
                     bed.get("target", 0.0)) > 0.0:
                 raise RuntimeError("Turn heaters off before hardware tests")
+            if suite in EXTENDED_CONTEXT_SUITES:
+                if not getattr(self.host, "heating_materials", ()):
+                    raise RuntimeError("No heating material profiles are available")
+                if suite == "CONTEXT_MATERIAL" and not getattr(
+                        self.host, "cold_pull_materials", ()):
+                    raise RuntimeError("No cold-pull material profiles are available")
+                resurrection = getattr(self.host, "resurrection", None)
+                if (resurrection is not None
+                        and os.path.isfile(getattr(
+                            resurrection, "file_path", ""))):
+                    raise RuntimeError(
+                        "A foreign recovery checkpoint already exists")
+                if suite == "CONTEXT_PRINT":
+                    profiles = self.host.bed_mesh.get_status(
+                        self.reactor.monotonic()).get("profiles", ())
+                    if "auto" not in profiles:
+                        raise RuntimeError(
+                            "Bed mesh profile 'auto' is required")
+                    if resurrection is None or not getattr(
+                            resurrection, "enabled", False):
+                        raise RuntimeError("Print recovery is not enabled")
 
     def _resolve_material(self, requested, suite):
-        needs_material = suite in ("FULL", "HEAT", "MESH")
+        needs_material = suite in (
+            "FULL", "HEAT", "MESH", "CONTEXT_PRINT", "CONTEXT_MATERIAL")
         if not needs_material:
             return requested or None
         materials = tuple(self.host.heating_materials)
@@ -626,12 +685,27 @@ class UITestFeature:
             material = materials[0] if not requested else material
         if material not in materials:
             raise RuntimeError("Unknown or inactive heating material: %s" % material)
+        if suite == "CONTEXT_MATERIAL":
+            cold_pull = tuple(self.host.cold_pull_materials)
+            if requested and material not in cold_pull:
+                raise RuntimeError(
+                    "Material has no active cold-pull profile: %s" % material)
+            if material not in cold_pull:
+                shared = [name for name in materials if name in cold_pull]
+                if not shared:
+                    raise RuntimeError(
+                        "Heating and cold-pull profiles have no common material")
+                material = shared[0]
         return material
 
     def _capture_original_state(self):
         now = self.reactor.monotonic()
         mesh = getattr(self.host, "bed_mesh", None)
         mesh_status = mesh.get_status(now) if mesh is not None else {}
+        extruder = self.host.extruder.get_status(now)
+        heater_bed = self.host.heater_bed.get_status(now)
+        fan = getattr(self.host, "fan", None)
+        fan_status = fan.get_status(now) if fan is not None else {}
         self.original = {
             "page": self.host.page,
             "previous_page": self.host.previous_page,
@@ -640,6 +714,9 @@ class UITestFeature:
                 "homing_origin"][2]),
             "mesh_object": getattr(mesh, "z_mesh", None),
             "mesh_profile": str(mesh_status.get("profile_name", "") or ""),
+            "extruder_target": float(extruder.get("target", 0.0)),
+            "bed_target": float(heater_bed.get("target", 0.0)),
+            "fan_speed": float(fan_status.get("speed", 0.0) or 0.0),
         }
 
     def _marker(self, phase):
@@ -739,8 +816,43 @@ class UITestFeature:
         phases = (["ui", "render", "motion", "heat", "screws", "mesh", "z"]
                   if suite == "FULL" else [suite.lower()])
         for phase in phases:
+            if phase in ("context_print", "context_material"):
+                getattr(self, "_steps_%s" % phase)(steps)
+                continue
+            fixtures = {
+                "screws": ("screws",),
+                "mesh": ("mesh_clean", "mesh_skip_clean"),
+                "z": ("z_offset_skip_clean",),
+            }.get(phase, ("none",))
+            self._add_call(
+                steps, "%s-context-start" % phase,
+                lambda name=phase, choices=fixtures:
+                self._start_context_scenario(name, choices), delay=0.0)
             getattr(self, "_steps_%s" % phase)(steps)
+            self._add_call(
+                steps, "%s-context-verify" % phase,
+                self._finish_context_scenario, delay=0.0)
         return steps
+
+    def _attach_context_recorder(self):
+        manager = getattr(self.host, "operation_context", None)
+        if manager is None:
+            return
+        self.context_recorder = OperationContextRecorder(manager)
+        self.context_recorder.attach()
+
+    def _detach_context_recorder(self):
+        recorder = self.context_recorder
+        if recorder is not None:
+            recorder.detach()
+
+    def _start_context_scenario(self, name, fixtures):
+        if self.context_recorder is not None:
+            self.context_recorder.start_scenario(name, fixtures)
+
+    def _finish_context_scenario(self):
+        if self.context_recorder is not None:
+            self.context_recorder.finish_scenario()
 
     @staticmethod
     def _add_call(steps, label, callback, delay=0.15):
@@ -1163,6 +1275,116 @@ class UITestFeature:
         self._add_call(steps, "z-cleanup-verify", self._verify_z_cleanup)
         self._add_call(steps, "z-hardware-cleanup", self._hardware_cleanup)
 
+    def _steps_context_material(self, steps):
+        self._add_call(
+            steps, "context_material-prepare",
+            self._prepare_context_material)
+        self._add_call(
+            steps, "filament-context-start",
+            lambda: self._start_context_scenario(
+                "filament", ("filament",)), delay=0.0)
+        self._add_call(
+            steps, "filament-open",
+            lambda: self.host._run_script("LOAD_MATERIAL"))
+        self._add_prompt_tap(steps, self.material, Page.ACTION_PROMPT)
+        for label in ("Load", "Purge", "Unload"):
+            self._add_prompt_tap(steps, label, Page.ACTION_PROMPT)
+        self._add_prompt_tap(steps, "Done")
+        self._add_call(
+            steps, "filament-context-verify",
+            self._finish_context_scenario, delay=0.0)
+        self._add_call(
+            steps, "cold_pull-context-start",
+            lambda: self._start_context_scenario(
+                "cold_pull", ("cold_pull",)), delay=0.0)
+        self._add_call(
+            steps, "cold_pull-open",
+            lambda: self.host._run_script("COLDPULL"))
+        self._add_prompt_tap(
+            steps, self._context_cold_pull_material(), None)
+        self._add_call(
+            steps, "cold_pull-context-verify",
+            self._finish_context_scenario, delay=0.0)
+        self._add_call(
+            steps, "context_material-cleanup", self._hardware_cleanup)
+
+    def _steps_context_print(self, steps):
+        self._add_call(
+            steps, "context_print-prepare", self._prepare_context_print)
+
+        self._add_call(
+            steps, "print_kamp-context-start",
+            lambda: self._start_context_scenario(
+                "print_kamp", ("print_kamp",)), delay=0.0)
+        self._add_call(
+            steps, "print_kamp-file-open",
+            lambda: self._open_context_file(self.context_files[0]))
+        self._add_tap(steps, "file.item0", Page.FILE_CONFIRM)
+        self._add_tap(steps, "file.start")
+        self._add_wait(
+            steps, "print_kamp-started", self._context_printing,
+            1900.0, 0.5)
+        self._add_wait(
+            steps, "print_kamp-complete", self._context_print_complete,
+            1900.0, 0.5)
+        self._add_call(
+            steps, "print_kamp-context-verify",
+            self._finish_context_scenario, delay=0.0)
+
+        self._add_call(
+            steps, "print_mesh-context-start",
+            lambda: self._start_context_scenario(
+                "print_mesh_resume", ("print_mesh_resume",)), delay=0.0)
+        self._add_call(
+            steps, "print_mesh-file-open",
+            lambda: self._open_context_file(self.context_files[1]))
+        self._add_tap(steps, "file.item0", Page.FILE_CONFIRM)
+        self._add_tap(steps, "file.start")
+        self._add_wait(
+            steps, "print_mesh-started", self._context_printing,
+            1900.0, 0.5)
+        self._add_tap(steps, "print.pause", Page.PAUSED)
+        self._add_wait(
+            steps, "print_mesh-idle-timeout", self._context_idle_timeout,
+            30.0, 0.25)
+        self._add_tap(steps, "print.resume", Page.PRINTING)
+        self._add_wait(
+            steps, "print_mesh-checkpoint", self._context_checkpoint_ready,
+            15.0, 0.25)
+        self._add_call(
+            steps, "print_mesh-activate-recovery",
+            self._activate_context_recovery)
+        self._add_call(
+            steps, "print_mesh-context-verify",
+            self._finish_context_scenario, delay=0.0)
+
+        self._add_call(
+            steps, "recovery-context-start",
+            lambda: self._start_context_scenario(
+                "recovery", ("recovery",)), delay=0.0)
+        self._add_tap(
+            steps, "recovery.restore", Page.RECOVERY_CONFIRM)
+        self._add_tap(
+            steps, "recovery.confirm", Page.CALIBRATION_PROGRESS)
+        self._add_wait(
+            steps, "recovery-printing", self._context_printing,
+            1900.0, 0.5)
+        self._add_wait(
+            steps, "recovery-complete", self._context_print_complete,
+            1900.0, 0.5)
+        self._add_call(
+            steps, "recovery-context-verify",
+            self._finish_context_scenario, delay=0.0)
+        self._add_call(
+            steps, "context_print-cleanup", self._hardware_cleanup)
+
+    @staticmethod
+    def _add_prompt_tap(steps, button_label, page=None):
+        steps.append({
+            "kind": "prompt_tap", "button_label": button_label,
+            "page": page, "label": "prompt-%s" % button_label,
+        })
+
     def _schedule(self, delay):
         self.reactor.register_callback(
             self._advance, self.reactor.monotonic() + max(0.0, delay))
@@ -1185,9 +1407,14 @@ class UITestFeature:
             if kind == "call":
                 step["callback"]()
                 self._step_passed(step, step.get("delay", 0.15))
-            elif kind in ("tap", "tap_label"):
-                action = (step.get("action") if kind == "tap"
-                          else self._action_for_label(step["button_label"]))
+            elif kind in ("tap", "tap_label", "prompt_tap"):
+                if kind == "tap":
+                    action = step.get("action")
+                elif kind == "tap_label":
+                    action = self._action_for_label(step["button_label"])
+                else:
+                    action = self._prompt_action_for_label(
+                        step["button_label"])
                 self._tap(action)
                 self.reactor.register_callback(
                     lambda now, expected=step.get("page"), item=step:
@@ -1385,6 +1612,218 @@ class UITestFeature:
                 "Expected one button labelled %s, found %d" %
                 (label, len(matches)))
         return matches[0]
+
+    def _prompt_action_for_label(self, label):
+        prompt = getattr(self.host, "action_prompt", None) or {}
+        matches = [
+            action for action, button in prompt.get("buttons", {}).items()
+            if str(button.get("label", "")).casefold()
+            == str(label).casefold()
+        ]
+        if len(matches) != 1:
+            raise RuntimeError(
+                "Expected one action-prompt button labelled %s, found %d" % (
+                    label, len(matches)))
+        return matches[0]
+
+    def _context_cold_pull_material(self):
+        materials = tuple(getattr(self.host, "cold_pull_materials", ()))
+        if self.material in materials:
+            return self.material
+        if not materials:
+            raise RuntimeError("No cold-pull material profiles are available")
+        return materials[0]
+
+    def _install_nonpersistent_material_guard(self):
+        params = getattr(self.host, "params", None)
+        if params is None or "params_store" in self.context_runtime:
+            return
+        namespace = getattr(params, "__dict__", {})
+        had_instance = "_store_value" in namespace
+        instance_value = namespace.get("_store_value")
+        original = params._store_value
+
+        def store_value(param, value):
+            if getattr(param, "key", None) != "current_material":
+                return original(param, value)
+            previous = params.variables[param.key]
+            params.variables[param.key] = value
+            return previous != value
+
+        params._store_value = store_value
+        self.context_runtime["params_store"] = (
+            params, had_instance, instance_value)
+
+    def _prepare_context_material(self):
+        self._install_nonpersistent_material_guard()
+        params = getattr(self.host, "params", None)
+        if params is not None:
+            self.context_runtime.setdefault(
+                "current_material", params.variables.get("current_material"))
+        self._context_cold_pull_material()
+
+    def _prepare_context_print(self):
+        self._install_nonpersistent_material_guard()
+        params = getattr(self.host, "params", None)
+        controlled = {
+            "check_md5": 0,
+            "disable_cleaning": False,
+            "use_kamp": False,
+            "print_leveling": False,
+            "bed_mesh_validation": True,
+            "bed_mesh_validation_clear": False,
+            "disable_priming": True,
+        }
+        if params is not None:
+            saved = {}
+            for key, value in controlled.items():
+                if key in params.variables:
+                    saved[key] = params.variables[key]
+                    params.variables[key] = value
+            self.context_runtime["mod_params"] = saved
+            self.context_runtime.setdefault(
+                "current_material", params.variables.get("current_material"))
+
+        client = self.host.printer.lookup_object(
+            "gcode_macro _CLIENT_VARIABLE", None)
+        if client is not None:
+            variables = getattr(client, "variables", {})
+            self.context_runtime["client_macro"] = client
+            self.context_runtime["client_idle_timeout"] = variables.get(
+                "idle_timeout")
+            variables["idle_timeout"] = 2
+
+        idle_timeout = getattr(self.host, "idle_timeout", None)
+        self.context_runtime["idle_timeout"] = getattr(
+            idle_timeout, "timeout", None)
+        self._create_context_print_files()
+
+    def _create_context_print_files(self):
+        root = os.path.realpath(self.host.virtual_sdcard.sdcard_dirname)
+        nozzle, bed = self.host._limited_preheat(self.material)
+        safe_run = re.sub(r"[^a-zA-Z0-9_.-]", "-", self.run_id)
+        paths = [
+            os.path.join(root, "feather-context-%s-kamp.gcode" % safe_run),
+            os.path.join(root, "feather-context-%s-recovery.gcode" % safe_run),
+        ]
+        common = (
+            "; Feather operation-context runner fixture\n"
+            "; Copyright (C) 2026, Alexander K <https://github.com/drA1ex>\n"
+            "START_PRINT EXTRUDER_TEMP=%.0f BED_TEMP=%.0f %s\n"
+            "G90\nG1 X0 Y0 Z5 F6000\n")
+        payloads = [
+            common % (nozzle, bed, "FORCE_KAMP=1")
+            + "G4 P500\nEND_PRINT\n",
+            common % (nozzle, bed, "")
+            + ("G4 P250\n" * 80) + "END_PRINT\n",
+        ]
+        self.context_files = []
+        for path, payload in zip(paths, payloads):
+            if os.path.exists(path):
+                raise RuntimeError("Runner G-code path already exists: %s" % (
+                    os.path.basename(path),))
+            self.context_files.append(path)
+            with open(path, "w", encoding="utf-8") as stream:
+                stream.write(payload)
+                stream.flush()
+                os.fsync(stream.fileno())
+
+    def _open_context_file(self, path):
+        path = os.path.realpath(path)
+        root = os.path.realpath(self.host.virtual_sdcard.sdcard_dirname)
+        if not os.path.isfile(path) or not path.startswith(root + os.sep):
+            raise RuntimeError("Runner G-code file is unavailable")
+        stat = os.stat(path)
+        cache = getattr(self.host, "file_entry_cache", None)
+        loaded_at = getattr(self.host, "file_entry_loaded_at", None)
+        if (cache is not None and loaded_at is not None
+                and "file_browser" not in self.context_runtime):
+            self.context_runtime["file_browser"] = {
+                "cache_present": "internal" in cache,
+                "cache": cache.get("internal"),
+                "loaded_present": "internal" in loaded_at,
+                "loaded": loaded_at.get("internal"),
+                "entries": getattr(self.host, "file_entries", None),
+                "source": getattr(self.host, "file_source", "internal"),
+                "page": getattr(self.host, "file_page", 0),
+            }
+        entry = {
+            "name": os.path.basename(path), "path": path,
+            "directory": False, "size": stat.st_size,
+            "mtime": stat.st_mtime,
+        }
+        if cache is not None and loaded_at is not None:
+            # Invalidate an older asynchronous scan and publish a runner-only
+            # one-entry fixture through the normal browser rendering path.
+            self.host.file_scan_token = getattr(
+                self.host, "file_scan_token", 0) + 1
+            self.host.file_scan_loading = False
+            self.host.file_scan_source = None
+            cache["internal"] = [entry]
+            loaded_at["internal"] = self.reactor.monotonic()
+        self.host.file_page = 0
+        self.host.file_source = "internal"
+        self.host.selected_file = None
+        self.host.file_entries = [entry]
+        self._show(Page.FILE_BROWSER)
+
+    def _context_printing(self):
+        state = str(self.host.print_stats.get_status(
+            self.reactor.monotonic()).get("state", "")).lower()
+        return state == "printing" and self.host.page == Page.PRINTING
+
+    def _context_print_complete(self):
+        state = str(self.host.print_stats.get_status(
+            self.reactor.monotonic()).get("state", "")).lower()
+        return (state not in ("printing", "paused")
+                and not self.host.virtual_sdcard.is_active())
+
+    def _context_idle_timeout(self):
+        status = self.host.idle_timeout.get_status(
+            self.reactor.monotonic())
+        return str(status.get("state", "")).strip().lower() == "idle"
+
+    def _context_checkpoint_ready(self):
+        resurrection = getattr(self.host, "resurrection", None)
+        path = getattr(resurrection, "file_path", None)
+        if not path or not os.path.isfile(path):
+            return False
+        try:
+            with open(path, "r", encoding="utf-8") as stream:
+                checkpoint = json.load(stream)
+        except (OSError, ValueError):
+            return False
+        source = os.path.realpath(str(checkpoint.get("file_path", "")))
+        expected = set(os.path.realpath(path) for path in self.context_files)
+        if source not in expected:
+            raise RuntimeError("Recovery checkpoint belongs to another file")
+        self.context_checkpoint = path
+        return True
+
+    def _activate_context_recovery(self):
+        if not self._context_checkpoint_ready():
+            raise RuntimeError("Runner recovery checkpoint is unavailable")
+        resurrection = self.host.resurrection
+        self.host.virtual_sdcard.do_cancel()
+        self.host._run_script("_CONTEXT_RESET")
+        # A real restart presents recovery from an idle controller. Recreate
+        # only that volatile controller fact so the subsequent restored print
+        # gets the normal IDLE -> PRINTING page transition.
+        self.host.print_state = PrintState.IDLE
+        resurrection._pause_checkpoint_active = False
+        resurrection._resume_pending = False
+        state_type = type(resurrection.state)
+        resurrection._change_state(state_type.RESURRECTION)
+        for line in (
+                "// action:prompt_begin Resurrection",
+                "// action:prompt_text Resurrection is available! Would you like to restore the print?",
+                "// action:prompt_footer_button Restore|RESURRECT",
+                "// action:prompt_footer_button Cleanup|RESURRECT_ABORT",
+                "// action:prompt_footer_button Later|RESPOND TYPE=command MSG=action:prompt_end",
+                "// action:prompt_show"):
+            resurrection.gcode.respond_raw(line)
+        if self.host.page != Page.RECOVERY_PROMPT:
+            raise RuntimeError("Recovery action prompt did not open")
 
     def _show(self, page):
         self.host._show_page(page)
@@ -1714,8 +2153,134 @@ class UITestFeature:
     def _hardware_cleanup(self):
         self.host._run_script("TURN_OFF_HEATERS")
 
+    def _restore_context_runtime(self):
+        first_error = None
+        if self.suite == "CONTEXT_PRINT":
+            try:
+                if self.host.virtual_sdcard.is_active():
+                    self.host.virtual_sdcard.do_cancel()
+            except Exception as exc:
+                first_error = exc
+                logging.exception(
+                    "[feather_ui_test] unable to cancel runner print")
+        try:
+            manager = getattr(self.host, "operation_context", None)
+            if (manager is not None
+                    and manager.get_status(
+                        self.reactor.monotonic()).get("contexts")):
+                self.host._run_script("_CONTEXT_RESET")
+        except Exception as exc:
+            if first_error is None:
+                first_error = exc
+            logging.exception(
+                "[feather_ui_test] unable to reset operation contexts")
+
+        params = getattr(self.host, "params", None)
+        if params is not None:
+            for key, value in self.context_runtime.get(
+                    "mod_params", {}).items():
+                params.variables[key] = value
+            if "current_material" in self.context_runtime:
+                params.variables["current_material"] = self.context_runtime[
+                    "current_material"]
+        guard = self.context_runtime.get("params_store")
+        if guard is not None:
+            guarded, had_instance, instance_value = guard
+            if had_instance:
+                guarded._store_value = instance_value
+            else:
+                try:
+                    del guarded.__dict__["_store_value"]
+                except (AttributeError, KeyError):
+                    pass
+
+        client = self.context_runtime.get("client_macro")
+        if client is not None:
+            client.variables["idle_timeout"] = self.context_runtime.get(
+                "client_idle_timeout")
+        timeout = self.context_runtime.get("idle_timeout")
+        if timeout is not None:
+            try:
+                self.host._run_script(
+                    "SET_IDLE_TIMEOUT TIMEOUT=%g" % float(timeout))
+            except Exception as exc:
+                if first_error is None:
+                    first_error = exc
+                logging.exception(
+                    "[feather_ui_test] unable to restore idle timeout")
+
+        browser = self.context_runtime.get("file_browser")
+        if browser is not None:
+            cache = self.host.file_entry_cache
+            loaded_at = self.host.file_entry_loaded_at
+            if browser["cache_present"]:
+                cache["internal"] = browser["cache"]
+            else:
+                cache.pop("internal", None)
+            if browser["loaded_present"]:
+                loaded_at["internal"] = browser["loaded"]
+            else:
+                loaded_at.pop("internal", None)
+            self.host.file_entries = browser["entries"]
+            self.host.file_source = browser["source"]
+            self.host.file_page = browser["page"]
+
+        owned_files = tuple(os.path.realpath(path)
+                            for path in self.context_files)
+        for path in tuple(self.context_files):
+            try:
+                os.unlink(path)
+            except FileNotFoundError:
+                pass
+            except OSError as exc:
+                if first_error is None:
+                    first_error = exc
+                logging.exception(
+                    "[feather_ui_test] unable to remove runner G-code")
+        self.context_files = []
+        resurrection = getattr(self.host, "resurrection", None)
+        checkpoint = self.context_checkpoint
+        candidate = getattr(resurrection, "file_path", None)
+        if checkpoint is None and candidate and os.path.isfile(candidate):
+            try:
+                with open(candidate, "r", encoding="utf-8") as stream:
+                    saved = json.load(stream)
+                source = os.path.realpath(str(saved.get("file_path", "")))
+                if source in owned_files:
+                    checkpoint = candidate
+            except (OSError, ValueError):
+                pass
+        if (checkpoint and resurrection is not None
+                and checkpoint == getattr(resurrection, "file_path", None)):
+            try:
+                os.unlink(checkpoint)
+            except FileNotFoundError:
+                pass
+            except OSError as exc:
+                if first_error is None:
+                    first_error = exc
+                logging.exception(
+                    "[feather_ui_test] unable to remove runner checkpoint")
+            resurrection._checkpoint_cache = None
+            resurrection._checkpoint_cache_loaded = False
+            resurrection._pause_checkpoint_active = False
+            resurrection._resume_pending = False
+            state = getattr(resurrection, "state", None)
+            state_type = type(state)
+            if (hasattr(state_type, "IDLE")
+                    and hasattr(resurrection, "_change_state")):
+                resurrection._change_state(state_type.IDLE)
+        self.context_checkpoint = None
+        self.context_runtime = {}
+        if first_error is not None:
+            raise first_error
+
     def _restore_state(self):
         first_error = None
+        try:
+            self._restore_context_runtime()
+        except Exception as exc:
+            first_error = exc
         if self.suite not in NONPHYSICAL_SUITES:
             try:
                 z = self.host.feature_manager.peek("z")
@@ -1727,6 +2292,14 @@ class UITestFeature:
                     "[feather_ui_test] unable to cancel Z session")
             try:
                 self.host._run_script("TURN_OFF_HEATERS")
+                self.host._run_script(
+                    "M104 S%.1f\nM140 S%.1f" % (
+                        self.original.get("extruder_target", 0.0),
+                        self.original.get("bed_target", 0.0)))
+                if getattr(self.host, "fan", None) is not None:
+                    self.host._run_script(
+                        "SET_FAN_SPEED FAN=fanM106 SPEED=%.4f" %
+                        self.original.get("fan_speed", 0.0))
                 self.host._run_script("_SET_GCODE_OFFSET Z=%+.6f MOVE=0" %
                                       self.original["runtime_z"])
                 feature = self.host.feature_manager.get("z")
@@ -1763,12 +2336,32 @@ class UITestFeature:
             self.failures.append({"step": "cleanup", "error": str(exc)})
             outcome = "failed"
             reason = reason or ("cleanup failed: %s" % exc)
+        recorder = self.context_recorder
+        if recorder is not None:
+            recorder.abort_active(reason or outcome)
+            operation_context = recorder.report()
+            recorder.detach()
+        else:
+            operation_context = {"passed": True, "scenarios": []}
+        context_summary = {
+            "passed": operation_context["passed"],
+            "scenario_count": len(operation_context["scenarios"]),
+            "scenarios": [{
+                "scenario": item.get("scenario"),
+                "passed": item.get("passed", False),
+                "fixture": item.get("fixture"),
+                "variant": item.get("variant"),
+                "diagnostic": item.get("diagnostic"),
+            } for item in operation_context["scenarios"]],
+        }
         summary = {
             "run_id": self.run_id, "suite": self.suite,
             "material": self.material, "outcome": outcome,
             "reason": reason, "failures": self.failures,
             "calibration_stages": self.calibration_stages,
             "test_results": self.test_results,
+            "operation_context": context_summary,
+            "_operation_context_artifact": operation_context,
             "started_at": self.started_at, "finished_at": time.time(),
             "duration": time.time() - self.started_at,
         }
@@ -1776,6 +2369,7 @@ class UITestFeature:
         self.worker.finish(summary, self._finished)
 
     def _finished(self, result):
+        self._detach_context_recorder()
         outcome = "failed"
         if isinstance(result, Exception):
             message = "artifact finalization failed: %s" % result
@@ -1805,6 +2399,9 @@ class UITestFeature:
 
     def deactivate(self):
         self.abort_requested = True
+        if self.context_recorder is not None:
+            self.context_recorder.abort_active("feature deactivated")
+            self.context_recorder.detach()
         if self.worker is not None:
             self.worker.stop()
             self.worker = None
