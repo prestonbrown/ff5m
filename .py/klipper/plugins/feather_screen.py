@@ -835,6 +835,13 @@ class FeatherScreen(FeatherPagesMixin, FeatherControlsMixin):
                 and getattr(self, "cancel_mode", None) == "pending"):
             self._handle_operation_cancel_action(action)
             return
+        if (action == "coldpull.cancel"
+                and self.page == Page.ACTION_PROMPT
+                and self._action_prompt_is_cold_pull()
+                and "cold_pull" in self._operation_context_status().get(
+                    "context_types", ())):
+            self._open_operation_cancel(Page.ACTION_PROMPT)
+            return
         manager = getattr(self, "feature_manager", None)
         if (manager is not None and
                 manager.handle_immediate_action(self.page, action)):
@@ -1789,6 +1796,9 @@ class FeatherScreen(FeatherPagesMixin, FeatherControlsMixin):
             self._update_move_status(eventtime)
         elif self.page == Page.CONTROL_HEAT:
             self._update_heat_status(eventtime)
+        elif (self.page == Page.ACTION_PROMPT
+              and self._action_prompt_is_cold_pull()):
+            self._render_action_prompt()
         if self.filament_sensor is not None:
             sensor = self.filament_sensor.get_status(eventtime)
             present = sensor.get("filament_detected")

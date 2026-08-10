@@ -436,6 +436,8 @@ class ExtruderCalibrationControllerTest(unittest.TestCase):
         self.assertIn("extruder.coldpull.cancel", drawing)
         self.assertIn("CANCEL", drawing)
         self.assertIn("HEATING NOZZLE", drawing)
+        self.assertIn("HEATING THE NOZZLE", drawing)
+        self.assertNotIn("POSITIONING, EXTRUDING, OR FINISHING", drawing)
 
     def test_cold_pull_cancel_uses_shared_operation_dialog(self):
         controller = calibration_controller()
@@ -469,6 +471,28 @@ class ExtruderCalibrationControllerTest(unittest.TestCase):
         self.assertFalse(session.cold_pull_cancel_requested)
         self.assertFalse(session.cold_pull_cancel_dispatched)
         self.assertEqual(commands, [])
+
+    def test_cold_pull_poll_does_not_overwrite_cancel_dialog(self):
+        controller = calibration_controller()
+        batches = []
+        controller.renderer.send = batches.append
+        session = controller.extruder_calibration
+        session.phase = "cold_pull"
+        session.cold_pull_material = "PLA"
+        controller.page = FEATHER.Page.CANCEL_CONFIRM
+        controller.operation_context = types.SimpleNamespace(
+            get_status=lambda eventtime: {
+                "context_path": ("Cold Pull",),
+                "context_types": ("cold_pull",),
+                "current_state": "HEATING NOZZLE", "revision": 2,
+                "cancel_available": True, "cancel_pending": True,
+                "cancel_target_name": "Cold Pull",
+                "cancel_target_mode": "cancelable"})
+
+        controller._poll_cold_pull_progress(10.0, force=True)
+
+        self.assertEqual(batches, [])
+        self.assertEqual(controller.page, FEATHER.Page.CANCEL_CONFIRM)
 
     def test_cold_pull_runs_on_its_feature_page_without_blocking_loader(self):
         controller = calibration_controller()
@@ -504,6 +528,8 @@ class ExtruderCalibrationControllerTest(unittest.TestCase):
     def test_cancelled_cold_pull_returns_to_material_selection(self):
         controller = calibration_controller()
         controller.cold_pull_profiles = {"PLA": (220, 100)}
+        controller.cancel_mode = "pending"
+        controller.operation_cancel_request_id = 7
         pages = []
 
         def cancel_during_wait(material, hot, cold):
@@ -523,6 +549,8 @@ class ExtruderCalibrationControllerTest(unittest.TestCase):
         self.assertEqual(session.phase, "material")
         self.assertFalse(session.cold_pull_cancel_requested)
         self.assertFalse(session.cold_pull_cancel_dispatched)
+        self.assertIsNone(controller.cancel_mode)
+        self.assertIsNone(controller.operation_cancel_request_id)
         self.assertEqual(pages, [FEATHER.Page.EXTRUDER_CALIBRATION])
 
     def test_extruder_feature_routes_page_cancel_as_immediate_action(self):

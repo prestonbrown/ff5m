@@ -1831,6 +1831,10 @@ class FeatherControlsMixin:
         prompt = self.action_prompt or {}
         return prompt.get("title", "").strip().casefold() == "resurrection"
 
+    def _action_prompt_is_cold_pull(self):
+        prompt = self.action_prompt or {}
+        return prompt.get("title", "").strip().casefold() == "cold pull"
+
     def _show_action_prompt(self):
         if self.action_prompt is None:
             return
@@ -1861,15 +1865,25 @@ class FeatherControlsMixin:
         current_page = self.page
         mirrored_recovery = (
             current_page in (Page.RECOVERY_PROMPT, Page.RECOVERY_CONFIRM))
-        displayed = (
-            getattr(self, "action_prompt_visible", False)
-            and current_page == Page.ACTION_PROMPT)
+        prompt_cancel = (
+            current_page == Page.CANCEL_CONFIRM
+            and getattr(
+                self, "operation_cancel_return_page", None) == Page.ACTION_PROMPT)
+        prompt_error = (
+            current_page == Page.MESSAGE
+            and getattr(self, "message_return", None) == Page.ACTION_PROMPT)
+        displayed = (getattr(self, "action_prompt_visible", False)
+                     and current_page == Page.ACTION_PROMPT)
+        overlaid = (getattr(self, "action_prompt_visible", False)
+                    and (prompt_cancel or prompt_error))
         return_page = getattr(
             self, "action_prompt_return_page", Page.IDLE_HOME)
         self.action_prompt = None
         self.action_prompt_visible = False
         self.action_prompt_page = 0
-        if mirrored_recovery or displayed:
+        if prompt_cancel:
+            self._reset_operation_cancel()
+        if mirrored_recovery or displayed or overlaid:
             self.recovery_action = None
             self._show_page(
                 self.page_for_print_state()
@@ -1923,6 +1937,77 @@ class FeatherControlsMixin:
             button = prompt["buttons"].get(action)
             if button is not None and button["command"]:
                 self._run_script(button["command"])
+
+    def _render_operation_cold_pull(self, title, cancel_action):
+        operation = self._operation_context_status(
+            self.reactor.monotonic())
+        stage = str(operation.get("current_state") or "").strip().upper()
+        status = self.extruder.get_status(self.reactor.monotonic())
+        temperature = float(status.get("temperature", 0.0))
+        target = float(status.get("target", 0.0))
+        hint = {
+            "HOMING": "HOMING AND POSITIONING THE TOOLHEAD",
+            "HEATING NOZZLE": "HEATING THE NOZZLE",
+            "EXTRUDING": "EXTRUDING FILAMENT",
+            "COOLING NOZZLE": "COOLING THE NOZZLE",
+            "PULLING": "PULLING FILAMENT BACK",
+        }.get(stage, "STARTING COLD PULL")
+        commands = self.renderer.begin_page(title, back=False)
+        commands += self.renderer.panel(
+            24, 72, 752, 276, border=ThemeColor.WARNING,
+            background=ThemeColor.PANEL)
+        commands += [
+            self.renderer.text(
+                400, 120, stage or "COLD PULL", ThemeColor.WARNING,
+                "JetBrainsMono Bold 12pt", "center", "middle",
+                max_width=690, truncate=True),
+            self.renderer.text(
+                400, 205, "%s\n\nNOZZLE %.1f / %.0f C" % (
+                    hint, temperature, target),
+                ThemeColor.TEXT, "JetBrainsMono 8pt", "center", "middle",
+                max_width=680, max_height=150, wrap=True, truncate=True),
+        ]
+        if operation.get("cancel_available"):
+            commands += self.renderer.button(
+                cancel_action, 235, 372, 330, 56,
+                "CANCELLING..." if operation.get("cancel_pending") else "CANCEL",
+                state=("busy" if operation.get("cancel_pending") else "danger"),
+                font="JetBrainsMono Bold 8pt")
+        self.renderer.send(commands)
+
+    def _render_cold_pull_prompt(self):
+        operation = self._operation_context_status(
+            self.reactor.monotonic())
+        if "cold_pull" in operation.get("context_types", ()):
+            self._render_operation_cold_pull("Cold Pull", "coldpull.cancel")
+            return
+        prompt = self.action_prompt or {
+            "text": [], "rows": [], "footer": []}
+        buttons = [button for row in prompt["rows"] for button in row]
+        columns = adaptive_grid_columns(len(buttons)) if buttons else 1
+        gap = 20
+        width = min(295, (690 - gap * (columns - 1)) // columns)
+        commands = self.renderer.begin_page("Cold Pull")
+        commands.append(self.renderer.text(
+            400, 90, "\n".join(prompt["text"]), ThemeColor.TEXT,
+            "JetBrainsMono 8pt", "center", "middle", max_width=690,
+            max_height=70, wrap=True, truncate=True))
+        for row_start in range(0, len(buttons), columns):
+            row = buttons[row_start:row_start + columns]
+            row_width = len(row) * width + max(0, len(row) - 1) * gap
+            x = 55 + (690 - row_width) // 2
+            for column, button in enumerate(row):
+                commands += self.renderer.button(
+                    button["action"], x + column * (width + gap),
+                    145 + (row_start // columns) * 100, width, 72,
+                    button["label"], state=button["state"],
+                    font="JetBrainsMono Bold 12pt")
+        if prompt["footer"]:
+            button = prompt["footer"][0]
+            commands += self.renderer.button(
+                button["action"], 235, 372, 330, 56, button["label"],
+                state=button["state"], font="JetBrainsMono Bold 8pt")
+        self.renderer.send(commands)
 
     def _render_calibration_result(self):
         commands = self.renderer.begin_page("Calibration result")

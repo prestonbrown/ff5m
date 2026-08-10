@@ -72,9 +72,12 @@ pause, resume, cancel, and terminal-dialog controls.
 
 `CONTEXT_MATERIAL` drives the normal action-prompt protocol: it selects the
 requested material, performs Load, Purge, Unload, and Done, then selects the
-same active cold-pull profile and completes a cold pull. It covers `filament`
-and `cold_pull`. The final absence of filament after the cold pull is expected
-physical state and is not reversed automatically.
+same active cold-pull profile and completes a cold pull. The cold-pull macro
+keeps one generic action-prompt visible while its existing operation-context
+states run; its cancel button requests `_CONTEXT_CANCEL`, so the common
+context cancellation path is used by Feather and Fluidd alike. It covers
+`filament` and `cold_pull`. The final absence of filament after the cold pull
+is expected physical state and is not reversed automatically.
 
 Both extended groups require an observed standby printer, zero heater targets,
 inactive virtual SD, empty operation stack, the required probe/mesh/material

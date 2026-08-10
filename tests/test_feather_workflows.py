@@ -1056,13 +1056,19 @@ class PrintWorkflowTest(unittest.TestCase):
 
         controller.temperature_wait.variables.update(active=True)
         controller.operation_context.status.update(
-            context_path=("Bed Mesh", "Heating Bed"), current_state=None,
-            revision=2)
+            context_path=("Calibration", "Cold Pull"),
+            current_state="HEATING NOZZLE", revision=2)
         self.assertEqual(controller._cancel_progress_label(),
-                         "INTERRUPTING BED MESH -> HEATING BED...")
+                         "INTERRUPTING HEATING NOZZLE...")
 
         controller.operation_context.status.update(
-            context_path=(), current_state=None, revision=3)
+            context_path=("Bed Mesh", "Heating Bed"), current_state=None,
+            revision=3)
+        self.assertEqual(controller._cancel_progress_label(),
+                         "INTERRUPTING HEATING BED...")
+
+        controller.operation_context.status.update(
+            context_path=(), current_state=None, revision=4)
         self.assertEqual(controller._cancel_progress_label(),
                          "INTERRUPTING TEMPERATURE WAIT...")
 
@@ -1235,14 +1241,24 @@ class PrintWorkflowTest(unittest.TestCase):
         self.assertNotIn("TURN_OFF_HEATERS", final)
         self.assertNotIn("M104 S0", final)
 
-    def test_managed_wait_checks_context_cancellation(self):
+    def test_managed_wait_clears_latches_before_context_cancellation(self):
         root = pathlib.Path(__file__).parents[1]
         macros = (root / "macros" / "base.cfg").read_text(encoding="utf-8")
-        wait = macros.split("[gcode_macro _WAIT_TEMPERATURE]", 1)[1].split(
-            "[gcode_macro _RAISE_WITH_PRINT_CANCEL]", 1)[0]
-        self.assertNotIn("cancel_pending", wait)
-        self.assertIn("_CONTEXT_CANCEL_POINT", wait)
-        self.assertIn("variable_temporary_state: False", wait)
+        reset = macros.split(
+            "[gcode_macro _WAIT_TEMPERATURE_RESET_STATE]", 1)[1].split(
+                "[gcode_macro _WAIT_TEMPERATURE_CHECK_LOOP]", 1)[0]
+        check = macros.split(
+            "[gcode_macro _WAIT_TEMPERATURE_CHECK]", 1)[1].split(
+                "[gcode_macro _WAIT_TEMPERATURE_FINAL_CHECK]", 1)[0]
+        self.assertIn("context.cancel_pending", check)
+        self.assertLess(check.index("_WAIT_TEMPERATURE_RESET_STATE"),
+                        check.index("_CONTEXT_CANCEL_POINT"))
+        for variable in (
+                "active", "cancel", "temperature_reached",
+                "temporary_state"):
+            self.assertIn(
+                "SET_GCODE_VARIABLE MACRO=_WAIT_TEMPERATURE "
+                "VARIABLE=%s VALUE=False" % variable, reset)
 
     def test_wait_final_routes_manual_m108_through_context_domain(self):
         root = pathlib.Path(__file__).parents[1]
@@ -2309,6 +2325,25 @@ class FilamentAndCalibrationWorkflowTest(unittest.TestCase):
         self.assertIn("for slot in config.heating_slots", macros)
         self.assertIn("_LOAD_MATERIAL_HEATUP MATERIAL={name}", macros)
 
+    def test_cold_pull_macro_publishes_progress_prompt(self):
+        root = pathlib.Path(__file__).parents[1]
+        macros = (root / "config" / "material.cfg").read_text(
+            encoding="utf-8")
+        cold_pull = macros.split(
+            "[gcode_macro _COLDPULL_LOAD_MATERIAL]", 1)[1].split(
+                "[gcode_macro COLDPULL]", 1)[0]
+        self.assertIn("PROMPT=1", macros)
+        self.assertIn("variable_prompt_active: False", cold_pull)
+        self.assertIn('action:prompt_begin Cold Pull', cold_pull)
+        self.assertIn("Cancel|_CONTEXT_CANCEL|secondary", cold_pull)
+        self.assertIn("_CONTEXT_BEGIN TYPE=cold_pull", cold_pull)
+        self.assertIn("_CONTEXT_STATE NAME=HOMING", cold_pull)
+        self.assertIn("_CONTEXT_STATE NAME=EXTRUDING", cold_pull)
+        self.assertIn("_CONTEXT_STATE NAME=PULLING", cold_pull)
+        self.assertIn("_CONTEXT_END", cold_pull)
+        self.assertIn("RESPOND TYPE=command MSG=action:prompt_end", cold_pull)
+        self.assertNotIn("FEATHER_ABORT", cold_pull)
+
     def test_saved_z_adjust_uses_homing_origin_not_base_position(self):
         root = pathlib.Path(__file__).parents[1]
         macros = (root / "macros" / "base.cfg").read_text(encoding="utf-8")
@@ -3076,6 +3111,153 @@ class ActionPromptProtocolTest(unittest.TestCase):
             controller.action_prompt_return_page, FEATHER.Page.IDLE_HOME)
         self.assertEqual(shown, [
             FEATHER.Page.ACTION_PROMPT, FEATHER.Page.ACTION_PROMPT])
+
+    def test_cold_pull_prompt_uses_its_commands_and_shared_context(self):
+        controller, shown = self.controller()
+        controller.renderer = FEATHER.FeatherRenderer()
+        batches = []
+        controller.renderer.send = batches.append
+        controller.extruder = StatusObject({
+            "temperature": 87.5, "target": 100.0})
+        commands = []
+        controller._run_script = commands.append
+
+        controller._handle_gcode_output("\n".join([
+            "// action:prompt_begin Cold Pull",
+            "// action:prompt_text Choose the material to clean the nozzle.",
+            "// action:prompt_button PLA|_COLDPULL_LOAD_MATERIAL "
+            "MATERIAL=PLA TEMP=220 COLD=100 PROMPT=1|primary",
+            "// action:prompt_footer_button Cancel|"
+            "_COLDPULL_LOAD_MATERIAL_END|secondary",
+            "// action:prompt_show",
+        ]))
+        controller._render_action_prompt()
+
+        self.assertEqual(shown, [FEATHER.Page.ACTION_PROMPT])
+        self.assertTrue(controller.action_prompt_visible)
+        self.assertIn("prompt.button.0", "\n".join(batches[-1]))
+        self.assertNotIn("KLIPPER PROMPT", "\n".join(batches[-1]))
+
+        controller._handle_action_prompt_action("prompt.button.0")
+        self.assertEqual(commands, [
+            "_COLDPULL_LOAD_MATERIAL MATERIAL=PLA TEMP=220 COLD=100 "
+            "PROMPT=1"])
+
+        controller.operation_context.status.update(
+            context_path=("Cold Pull",), context_types=("cold_pull",),
+            current_state="COOLING NOZZLE", cancel_available=True,
+            cancel_target_type="cold_pull", cancel_target_name="Cold Pull",
+            cancel_target_mode="cancelable", revision=1)
+        controller._handle_gcode_output("\n".join([
+            "// action:prompt_begin Cold Pull",
+            "// action:prompt_text Cold pull for PLA is in progress.",
+            "// action:prompt_footer_button Cancel|_CONTEXT_CANCEL|secondary",
+            "// action:prompt_show",
+        ]))
+
+        drawing = "\n".join(batches[-1])
+        self.assertTrue(controller.action_prompt_visible)
+        self.assertEqual(
+            controller.action_prompt_return_page, FEATHER.Page.IDLE_HOME)
+        self.assertIn("COOLING NOZZLE", drawing)
+        self.assertIn("COOLING THE NOZZLE", drawing)
+        self.assertIn("NOZZLE 87.5 / 100 C", drawing)
+        self.assertIn("coldpull.cancel", drawing)
+        self.assertEqual(len(commands), 1)
+
+    def test_cold_pull_prompt_end_closes_native_cancel_overlay(self):
+        controller, shown = self.controller()
+        controller._handle_gcode_output("\n".join([
+            "// action:prompt_begin Cold Pull",
+            "// action:prompt_text Cold pull for PLA is in progress.",
+            "// action:prompt_footer_button Cancel|_CONTEXT_CANCEL|secondary",
+            "// action:prompt_show",
+        ]))
+        controller.operation_context.status.update(
+            context_path=("Cold Pull",), context_types=("cold_pull",),
+            current_state="HEATING NOZZLE", cancel_available=True,
+            cancel_target_type="cold_pull", cancel_target_name="Cold Pull",
+            cancel_target_mode="cancelable", revision=1)
+
+        controller._handle_touch_action("coldpull.cancel")
+        self.assertEqual(controller.page, FEATHER.Page.CANCEL_CONFIRM)
+        self.assertEqual(controller.gcode.commands, [])
+
+        controller._handle_operation_cancel_action(
+            "operation.cancel.confirm")
+        self.assertTrue(controller.operation_context.status["cancel_pending"])
+
+        controller._handle_gcode_output("// action:prompt_end")
+        self.assertEqual(shown[-1], FEATHER.Page.IDLE_HOME)
+        self.assertFalse(controller.action_prompt_visible)
+        self.assertIsNone(controller.action_prompt)
+        self.assertIsNone(controller.cancel_mode)
+
+    def test_cold_pull_prompt_end_during_m108_does_not_redraw_cancel(self):
+        controller, shown = self.controller()
+        controller._handle_gcode_output("\n".join([
+            "// action:prompt_begin Cold Pull",
+            "// action:prompt_text Cold pull for PLA is in progress.",
+            "// action:prompt_show",
+        ]))
+        controller.operation_context.status.update(
+            context_path=("Cold Pull",), context_types=("cold_pull",),
+            current_state="HEATING NOZZLE", cancel_available=True,
+            cancel_target_type="cold_pull", cancel_target_name="Cold Pull",
+            cancel_target_mode="cancelable", revision=1)
+        controller.temperature_wait.variables["active"] = True
+        renders = []
+        controller._render_cancel_confirm = lambda: renders.append("cancel")
+        controller._run_immediate_command = lambda command: (
+            controller._handle_gcode_output("// action:prompt_end"))
+
+        controller._handle_touch_action("coldpull.cancel")
+        controller._handle_operation_cancel_action(
+            "operation.cancel.confirm")
+
+        self.assertEqual(shown[-1], FEATHER.Page.IDLE_HOME)
+        self.assertEqual(renders, [])
+        self.assertIsNone(controller.cancel_mode)
+
+    def test_fluidd_cold_pull_cancel_waits_for_prompt_end(self):
+        controller, shown = self.controller()
+        controller._handle_gcode_output("\n".join([
+            "// action:prompt_begin Cold Pull",
+            "// action:prompt_text Cold pull for PLA is in progress.",
+            "// action:prompt_footer_button Cancel|_CONTEXT_CANCEL|secondary",
+            "// action:prompt_show",
+        ]))
+        controller.operation_context.status.update(
+            context_path=("Cold Pull",), context_types=("cold_pull",),
+            current_state="PULLING", cancel_available=True,
+            cancel_target_type="cold_pull", cancel_target_name="Cold Pull",
+            cancel_target_mode="cancelable", revision=1)
+
+        result = controller.operation_context.request_cancel()
+
+        self.assertTrue(result["accepted"])
+        self.assertTrue(controller.action_prompt_visible)
+        self.assertEqual(controller.page, FEATHER.Page.ACTION_PROMPT)
+        self.assertEqual(shown, [FEATHER.Page.ACTION_PROMPT])
+
+        controller._handle_gcode_output("// action:prompt_end")
+        self.assertEqual(shown[-1], FEATHER.Page.IDLE_HOME)
+        self.assertFalse(controller.action_prompt_visible)
+
+    def test_cold_pull_error_overlay_also_waits_for_prompt_end(self):
+        controller, shown = self.controller()
+        controller._handle_gcode_output("\n".join([
+            "// action:prompt_begin Cold Pull",
+            "// action:prompt_text Cold pull for PLA is in progress.",
+            "// action:prompt_show",
+        ]))
+        controller.page = FEATHER.Page.MESSAGE
+        controller.message_return = FEATHER.Page.ACTION_PROMPT
+
+        controller._handle_gcode_output("// action:prompt_end")
+
+        self.assertEqual(shown[-1], FEATHER.Page.IDLE_HOME)
+        self.assertFalse(controller.action_prompt_visible)
 
     def test_prompt_end_closes_recovery_page_without_prompt_buffer(self):
         controller, shown = self.controller()

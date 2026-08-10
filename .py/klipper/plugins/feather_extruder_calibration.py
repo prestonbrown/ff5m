@@ -595,52 +595,9 @@ class FeatherExtruderCalibrationMixin:
 
     def _render_cold_pull_progress(self):
         session = self.extruder_calibration
-        wait = getattr(self, "temperature_wait", None)
-        variables = ({} if wait is None
-                     else getattr(wait, "variables", {}))
-        waiting = bool(variables.get("active", False))
-        operation = self._operation_context_status(
-            self.reactor.monotonic())
-        stage = str(operation.get("current_state") or "").strip().upper()
-        status = self.extruder.get_status(self.reactor.monotonic())
-        temperature = float(status.get("temperature", 0.0))
-        target = float(status.get("target", 0.0))
         material = session.cold_pull_material or "MATERIAL"
-        heading = stage or "COLD PULL IN PROGRESS"
-        if waiting:
-            body = (
-                "NOZZLE %.1f / %.0f C\n\n"
-                "Cold pull can be cancelled safely."
-                % (temperature, target))
-        else:
-            body = (
-                "POSITIONING, EXTRUDING, OR FINISHING THE COLD PULL.\n\n"
-                "Cancellation will be delivered at the next safe point.")
-        commands = self.renderer.begin_page(
-            "Cold pull: %s" % material, back=False)
-        commands += self.renderer.panel(
-            24, 72, 752, 276, border=ThemeColor.WARNING,
-            background=ThemeColor.PANEL)
-        commands += [
-            self.renderer.text(
-                400, 120, heading, ThemeColor.WARNING,
-                "JetBrainsMono Bold 12pt", "center", "middle",
-                max_width=690, truncate=True),
-            self.renderer.text(
-                400, 220, body, ThemeColor.TEXT, "JetBrainsMono 8pt",
-                "center", "middle", max_width=680, max_height=150,
-                wrap=True, truncate=True),
-        ]
-        if (operation.get("cancel_available")
-                or session.cold_pull_cancel_requested):
-            commands += self.renderer.button(
-                "extruder.coldpull.cancel", 235, 372, 330, 56,
-                ("CANCELLING..." if session.cold_pull_cancel_requested
-                 else "CANCEL"),
-                state=("busy" if session.cold_pull_cancel_requested
-                       else "danger"),
-                font="JetBrainsMono Bold 8pt")
-        self.renderer.send(commands)
+        getattr(self, "_host", self)._render_operation_cold_pull(
+            "Cold pull: %s" % material, "extruder.coldpull.cancel")
 
     def _refresh_extruder_file_snapshot(self):
         session = self.extruder_calibration
@@ -822,22 +779,20 @@ class FeatherExtruderCalibrationMixin:
 
     def _poll_cold_pull_progress(self, eventtime, force=False):
         session = self.extruder_calibration
-        wait = getattr(self, "temperature_wait", None)
-        variables = ({} if wait is None
-                     else getattr(wait, "variables", {}))
         status = self.extruder.get_status(eventtime)
         operation = self._operation_context_status(eventtime)
         signature = (
-            bool(variables.get("active", False)),
             operation.get("revision", 0),
             operation.get("current_state"),
-            session.cold_pull_cancel_requested,
+            operation.get("cancel_available"),
+            operation.get("cancel_pending"),
             int(float(status.get("temperature", 0.0))),
             int(float(status.get("target", 0.0))),
         )
         if force or signature != session.cold_pull_progress_signature:
             session.cold_pull_progress_signature = signature
-            self._render_extruder_calibration()
+            if self.page == Page.EXTRUDER_CALIBRATION:
+                self._render_extruder_calibration()
 
     def _run_cold_pull_material(self, material, hot, cold):
         session = self.extruder_calibration
@@ -979,6 +934,7 @@ class FeatherExtruderCalibrationMixin:
                 session.cold_pull_progress_signature = None
                 session.phase = "material"
                 if cancelled:
+                    getattr(self, "_host", self)._reset_operation_cancel()
                     logging.info(
                         "[feather_screen] cold pull temperature wait cancelled")
                     self._show_page(Page.EXTRUDER_CALIBRATION)

@@ -658,13 +658,16 @@ class FeatherPagesMixin:
             return
         return_page = getattr(
             self, "operation_cancel_return_page", Page.IDLE_HOME)
+        self._reset_operation_cancel()
+        self._show_page(return_page)
+
+    def _reset_operation_cancel(self):
         self.cancel_mode = None
         self.operation_cancel_on_accept = None
         self.operation_cancel_on_clear = None
         self.operation_cancel_request_id = None
         self.operation_cancel_target_name = None
         self.operation_cancel_target_mode = None
-        self._show_page(return_page)
 
     def _handle_operation_cancel_action(self, action):
         if action == "operation.cancel.back":
@@ -701,7 +704,9 @@ class FeatherPagesMixin:
             callback(result)
         if self._temperature_wait_active():
             self._run_immediate_command("M108")
-        self._render_cancel_confirm()
+        if (self.page == Page.CANCEL_CONFIRM
+                and self.cancel_mode == "pending"):
+            self._render_cancel_confirm()
 
     def _accept_print_operation_cancel(self, result):
         self._filament_request_token = getattr(
@@ -792,15 +797,18 @@ class FeatherPagesMixin:
         self.renderer.send(commands)
 
     def _cancel_progress_label(self):
+        operation = self._operation_context_status()
+        state = str(operation.get("current_state") or "").strip().upper()
         if (self._temperature_wait_active() or
                 getattr(self, "cancel_waiting_for_heat", False)):
-            operation = self._operation_context_text()
-            if operation:
-                return "INTERRUPTING %s..." % (operation,)
+            if state:
+                return "INTERRUPTING %s..." % (state,)
+            path = operation.get("context_path") or ()
+            if path:
+                return "INTERRUPTING %s..." % str(path[-1]).strip().upper()
             return "INTERRUPTING TEMPERATURE WAIT..."
-        state = self._operation_context_status().get("current_state")
-        if state is not None and str(state).strip():
-            return "WILL STOP AFTER %s" % str(state).strip().upper()
+        if state:
+            return "WILL STOP AFTER %s" % (state,)
         return "WILL STOP AT THE NEXT STEP"
 
     def _update_cancel_progress(self):
@@ -1758,6 +1766,9 @@ class FeatherPagesMixin:
         self.renderer.send(commands)
 
     def _render_action_prompt(self):
+        if self._action_prompt_is_cold_pull():
+            self._render_cold_pull_prompt()
+            return
         prompt = self.action_prompt or {
             "title": "Prompt", "text": [], "rows": [], "footer": []}
         rows = prompt["rows"]
