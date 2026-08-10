@@ -294,6 +294,7 @@ class FeatherScreen(FeatherPagesMixin, FeatherControlsMixin):
         self._last_progress = None
         self._progress_floor = 0.0
         self._progress_source = None
+        self._progress_start = (0.0, 0.0)
         self._m73_start_expiry = 0.0
         self._m73_active = False
         self._last_time = None
@@ -1865,6 +1866,7 @@ class FeatherScreen(FeatherPagesMixin, FeatherControlsMixin):
                 self.cancel_requested = False
                 self._progress_floor = 0.0
                 self._progress_source = None
+                self._progress_start = None
                 self._m73_active = False
             if (self.page not in (
                     Page.PRINTING, Page.CANCEL_CONFIRM, Page.LIVE_Z_OFFSET)

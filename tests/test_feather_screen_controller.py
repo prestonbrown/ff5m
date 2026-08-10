@@ -2140,6 +2140,50 @@ class ControllerSafetyTest(unittest.TestCase):
         self.assertEqual(controller._print_progress(20.0), 0.25)
         self.assertEqual(controller._progress_source, "TIME")
 
+    def test_print_progress_excludes_start_print_time(self):
+        controller = ScenarioController.__new__(ScenarioController)
+        controller.print_state = FEATHER.PrintState.PRINTING
+        controller._progress_floor = 0.52
+        controller._progress_start = None
+        controller._m73_start_expiry = 0.0
+        controller._m73_active = False
+        controller.display_status = type("Display", (), {
+            "progress": None, "expire_progress": 0.0})()
+        controller.start_print_macro = type("Start", (), {"variables": {
+            "print_started": False}})()
+        controller.print_stats = StatusObject({"print_duration": 52.0})
+        controller.virtual_sdcard = StatusObject({
+            "progress": 0.40, "estimate_print_time": 100.0})
+        controller.virtual_sdcard.estimate_print_time = 100.0
+
+        self.assertEqual(controller._print_progress(1.0), 0.0)
+        self.assertEqual(controller._progress_floor, 0.0)
+        controller.start_print_macro.variables["print_started"] = True
+        self.assertEqual(controller._print_progress(2.0), 0.0)
+        controller.print_stats.status["print_duration"] = 77.0
+        self.assertEqual(controller._print_progress(3.0), 0.25)
+
+    def test_print_progress_rebases_sd_after_start_print(self):
+        controller = ScenarioController.__new__(ScenarioController)
+        controller.print_state = FEATHER.PrintState.PRINTING
+        controller._progress_floor = 0.0
+        controller._progress_start = None
+        controller._m73_start_expiry = 0.0
+        controller._m73_active = False
+        controller.display_status = type("Display", (), {
+            "progress": None, "expire_progress": 0.0})()
+        controller.start_print_macro = type("Start", (), {"variables": {
+            "print_started": False}})()
+        controller.print_stats = StatusObject({"print_duration": 10.0})
+        controller.virtual_sdcard = StatusObject({"progress": 0.52})
+        controller.virtual_sdcard.estimate_print_time = None
+
+        self.assertEqual(controller._print_progress(1.0), 0.0)
+        controller.start_print_macro.variables["print_started"] = True
+        self.assertEqual(controller._print_progress(2.0), 0.0)
+        controller.virtual_sdcard.status["progress"] = 0.76
+        self.assertAlmostEqual(controller._print_progress(3.0), 0.5)
+
     def test_filament_continue_is_next_to_action_buttons(self):
         controller = ScenarioController.__new__(ScenarioController)
         controller.renderer = FEATHER.FeatherRenderer()

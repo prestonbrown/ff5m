@@ -474,11 +474,22 @@ class FeatherPagesMixin:
     def _print_progress(self, eventtime, stats=None):
         stats = stats or self.print_stats.get_status(eventtime)
         status = self.virtual_sdcard.get_status(eventtime)
-        try:
-            sd_progress = float(status.get("progress", 0.0) or 0.0)
-        except (TypeError, ValueError):
-            sd_progress = 0.0
-        sd_progress = max(0.0, min(1.0, sd_progress))
+        duration = stats.get("print_duration") or 0.0
+        sd_progress = status.get("progress") or 0.0
+
+        if not self._print_controls_ready():
+            self._progress_start = (duration, sd_progress)
+            self._progress_floor = 0.0
+            self._progress_source = None
+            return 0.0
+
+        progress_start = getattr(self, "_progress_start", (0.0, 0.0))
+        if progress_start is None:
+            progress_start = self._progress_start = (duration, sd_progress)
+        duration_start, sd_start = progress_start
+        print_duration = max(0.0, duration - duration_start)
+        sd_progress = ((sd_progress - sd_start) / (1.0 - sd_start)
+                       if sd_start < 1.0 else 0.0)
 
         display_status = getattr(self, "display_status", None)
         m73_expiry = float(
@@ -486,31 +497,15 @@ class FeatherPagesMixin:
         if m73_expiry > getattr(self, "_m73_start_expiry", 0.0):
             self._m73_active = True
         m73_progress = getattr(display_status, "progress", None)
-
-        progress = None
-        source = None
-        if getattr(self, "_m73_active", False) and m73_progress is not None:
-            try:
-                progress = float(m73_progress)
-                source = "M73"
-            except (TypeError, ValueError):
-                progress = None
-
         estimate = (getattr(self.virtual_sdcard, "estimate_print_time", None)
                     or status.get("estimate_print_time"))
-        if progress is None and estimate:
-            try:
-                duration = float(stats.get("print_duration", 0.0) or 0.0)
-                estimate = float(estimate)
-                if estimate > 0:
-                    progress = min(0.99, duration / estimate)
-                    source = "TIME"
-            except (TypeError, ValueError):
-                progress = None
 
-        if progress is None:
-            progress = sd_progress
-            source = "SD"
+        if getattr(self, "_m73_active", False) and m73_progress is not None:
+            progress, source = m73_progress, "M73"
+        elif estimate:
+            progress, source = min(0.99, print_duration / estimate), "TIME"
+        else:
+            progress, source = sd_progress, "SD"
 
         progress = max(0.0, min(1.0, progress))
         progress = max(getattr(self, "_progress_floor", 0.0), progress)
