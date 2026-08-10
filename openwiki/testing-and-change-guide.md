@@ -62,13 +62,13 @@ _FEATHER_UI_TEST ACTION=RUN SUITE=CONTEXT_MATERIAL MATERIAL=PLA CONFIRM=2
 ```
 
 `CONTEXT_PRINT` creates two uniquely named temporary virtual-SD files. The
-first starts through the real file browser/confirmation hitboxes and forces
-KAMP with nested nozzle cleaning. The second uses a loaded `auto` mesh, runs
-mesh validation, pauses through the print control, reaches a shortened
-in-memory idle timeout, resumes, creates a normal resurrection checkpoint, and
-then exercises Restore through the recovery pages without restarting Klipper.
-It covers `print`, `kamp`, `mesh_validation`, `nozzle_clean`, `resume`, and
-`recovery`.
+first uses a loaded `auto` mesh, runs mesh validation, exercises pause/resume,
+pauses again, reaches a shortened in-memory idle timeout, creates a normal
+resurrection checkpoint, cancels the print, dismisses the cancellation dialog,
+and exercises Restore without restarting Klipper. The second runs last and
+forces KAMP with nested nozzle cleaning. It covers the `print`, `kamp`,
+`mesh_validation`, `nozzle_clean`, and `recovery` contexts plus the print
+pause, resume, cancel, and terminal-dialog controls.
 
 `CONTEXT_MATERIAL` drives the normal action-prompt protocol: it selects the
 requested material, performs Load, Purge, Unload, and Done, then selects the

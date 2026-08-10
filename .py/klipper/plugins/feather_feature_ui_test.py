@@ -1313,25 +1313,6 @@ class UITestFeature:
             steps, "context_print-prepare", self._prepare_context_print)
 
         self._add_call(
-            steps, "print_kamp-context-start",
-            lambda: self._start_context_scenario(
-                "print_kamp", ("print_kamp",)), delay=0.0)
-        self._add_call(
-            steps, "print_kamp-file-open",
-            lambda: self._open_context_file(self.context_files[0]))
-        self._add_tap(steps, "file.item0", Page.FILE_CONFIRM)
-        self._add_tap(steps, "file.start")
-        self._add_wait(
-            steps, "print_kamp-started", self._context_printing,
-            1900.0, 0.5)
-        self._add_wait(
-            steps, "print_kamp-complete", self._context_print_complete,
-            1900.0, 0.5)
-        self._add_call(
-            steps, "print_kamp-context-verify",
-            self._finish_context_scenario, delay=0.0)
-
-        self._add_call(
             steps, "print_mesh-context-start",
             lambda: self._start_context_scenario(
                 "print_mesh_resume", ("print_mesh_resume",)), delay=0.0)
@@ -1341,16 +1322,40 @@ class UITestFeature:
         self._add_tap(steps, "file.item0", Page.FILE_CONFIRM)
         self._add_tap(steps, "file.start")
         self._add_wait(
-            steps, "print_mesh-started", self._context_printing,
+            steps, "print_mesh-started", self._context_print_controls_ready,
             1900.0, 0.5)
-        self._add_tap(steps, "print.pause", Page.PAUSED)
+        self._add_tap(steps, "print.pause")
+        self._add_call(
+            steps, "print_mesh-pause-motion-complete",
+            lambda: self.host._run_script("M400"))
+        self._add_wait(
+            steps, "print_mesh-paused", self._context_paused,
+            10.0, 0.1)
+        self._add_tap(steps, "print.resume")
+        self._add_wait(
+            steps, "print_mesh-resumed", self._context_print_controls_ready,
+            10.0, 0.1)
+        self._add_tap(
+            steps, "print.pause", label="print_mesh-pause-for-recovery")
+        self._add_call(
+            steps, "print_mesh-recovery-pause-motion-complete",
+            lambda: self.host._run_script("M400"))
+        self._add_wait(
+            steps, "print_mesh-recovery-paused", self._context_paused,
+            10.0, 0.1)
         self._add_wait(
             steps, "print_mesh-idle-timeout", self._context_idle_timeout,
             30.0, 0.25)
-        self._add_tap(steps, "print.resume", Page.PRINTING)
         self._add_wait(
             steps, "print_mesh-checkpoint", self._context_checkpoint_ready,
             15.0, 0.25)
+        self._add_call(
+            steps, "print_mesh-cancel", self._cancel_context_print)
+        self._add_wait(
+            steps, "print_mesh-cancelled", self._context_cancelled,
+            10.0, 0.1)
+        self._add_tap(steps, "message.ok", Page.IDLE_HOME,
+                      "print_mesh-cancelled-dismiss")
         self._add_call(
             steps, "print_mesh-activate-recovery",
             self._activate_context_recovery)
@@ -1372,8 +1377,31 @@ class UITestFeature:
         self._add_wait(
             steps, "recovery-complete", self._context_print_complete,
             1900.0, 0.5)
+        self._add_tap(steps, "message.ok", Page.IDLE_HOME,
+                      "recovery-finished-dismiss")
         self._add_call(
             steps, "recovery-context-verify",
+            self._finish_context_scenario, delay=0.0)
+
+        self._add_call(
+            steps, "print_kamp-context-start",
+            lambda: self._start_context_scenario(
+                "print_kamp", ("print_kamp",)), delay=0.0)
+        self._add_call(
+            steps, "print_kamp-file-open",
+            lambda: self._open_context_file(self.context_files[0]))
+        self._add_tap(steps, "file.item0", Page.FILE_CONFIRM)
+        self._add_tap(steps, "file.start")
+        self._add_wait(
+            steps, "print_kamp-started", self._context_printing,
+            1900.0, 0.5)
+        self._add_wait(
+            steps, "print_kamp-complete", self._context_print_complete,
+            1900.0, 0.5)
+        self._add_tap(steps, "message.ok", Page.IDLE_HOME,
+                      "print_kamp-finished-dismiss")
+        self._add_call(
+            steps, "print_kamp-context-verify",
             self._finish_context_scenario, delay=0.0)
         self._add_call(
             steps, "context_print-cleanup", self._hardware_cleanup)
@@ -1715,7 +1743,7 @@ class UITestFeature:
             common % (nozzle, bed, "FORCE_KAMP=1")
             + "G4 P500\nEND_PRINT\n",
             common % (nozzle, bed, "")
-            + ("G4 P250\n" * 80) + "END_PRINT\n",
+            + "M83\nG1 E1 F300\n" + ("G4 P250\n" * 80) + "END_PRINT\n",
         ]
         self.context_files = []
         for path, payload in zip(paths, payloads):
@@ -1772,11 +1800,31 @@ class UITestFeature:
             self.reactor.monotonic()).get("state", "")).lower()
         return state == "printing" and self.host.page == Page.PRINTING
 
+    def _context_print_controls_ready(self):
+        return (self._context_printing()
+                and "print.pause" in self.host.renderer._buttons)
+
+    def _context_paused(self):
+        state = str(self.host.print_stats.get_status(
+            self.reactor.monotonic()).get("state", "")).lower()
+        return (state == "paused" and self.host.page == Page.PAUSED
+                and "print.resume" in self.host.renderer._buttons)
+
     def _context_print_complete(self):
         state = str(self.host.print_stats.get_status(
             self.reactor.monotonic()).get("state", "")).lower()
         return (state not in ("printing", "paused")
-                and not self.host.virtual_sdcard.is_active())
+                and not self.host.virtual_sdcard.is_active()
+                and self.host.print_state == PrintState.IDLE)
+
+    def _context_cancelled(self):
+        state = str(self.host.print_stats.get_status(
+            self.reactor.monotonic()).get("state", "")).lower()
+        return (state == "cancelled"
+                and not self.host.virtual_sdcard.is_active()
+                and self.host.print_state == PrintState.IDLE
+                and self.host.page == Page.MESSAGE
+                and "message.ok" in self.host.renderer._buttons)
 
     def _context_idle_timeout(self):
         status = self.host.idle_timeout.get_status(
@@ -1800,11 +1848,15 @@ class UITestFeature:
         self.context_checkpoint = path
         return True
 
+    def _cancel_context_print(self):
+        if not self._context_checkpoint_ready():
+            raise RuntimeError("Runner recovery checkpoint is unavailable")
+        self.host.virtual_sdcard.do_cancel()
+
     def _activate_context_recovery(self):
         if not self._context_checkpoint_ready():
             raise RuntimeError("Runner recovery checkpoint is unavailable")
         resurrection = self.host.resurrection
-        self.host.virtual_sdcard.do_cancel()
         self.host._run_script("_CONTEXT_RESET")
         # A real restart presents recovery from an idle controller. Recreate
         # only that volatile controller fact so the subsequent restored print
@@ -2157,8 +2209,11 @@ class UITestFeature:
         first_error = None
         if self.suite == "CONTEXT_PRINT":
             try:
-                if self.host.virtual_sdcard.is_active():
-                    self.host.virtual_sdcard.do_cancel()
+                virtual_sdcard = self.host.virtual_sdcard
+                file_path = getattr(
+                    virtual_sdcard, "file_path", lambda: None)()
+                if virtual_sdcard.is_active() or file_path:
+                    virtual_sdcard.do_cancel()
             except Exception as exc:
                 first_error = exc
                 logging.exception(

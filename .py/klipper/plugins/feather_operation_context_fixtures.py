@@ -209,7 +209,6 @@ PRINT_MESH_RESUME = (
     ("state", "HOMING"), ("state", "CHECKING MESH"), ("end",),
     ("state", "RESUMING HEAT"), ("wait", "NOZZLE"),
     ("state", "PRIMING"), ("state", "PRINTING"),
-    ("begin", "resume"), ("wait", "NOZZLE"), ("end",),
     ("reset",),
 )
 RECOVERY = (

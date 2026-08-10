@@ -814,13 +814,21 @@ class RunnerContractTest(unittest.TestCase):
         printing = feature._build_steps("CONTEXT_PRINT")
         print_labels = [step["label"] for step in printing]
         expected = (
-            "print_kamp-context-start", "print_kamp-file-open",
-            "print_kamp-complete", "print_kamp-context-verify",
-            "print_mesh-context-start", "print_mesh-idle-timeout",
-            "print_mesh-checkpoint", "print_mesh-activate-recovery",
+            "print_mesh-context-start", "print_mesh-pause-motion-complete",
+            "print_mesh-paused",
+            "print_mesh-resumed", "print_mesh-pause-for-recovery",
+            "print_mesh-recovery-pause-motion-complete",
+            "print_mesh-recovery-paused", "print_mesh-idle-timeout",
+            "print_mesh-checkpoint", "print_mesh-cancel",
+            "print_mesh-cancelled", "print_mesh-cancelled-dismiss",
+            "print_mesh-activate-recovery",
             "print_mesh-context-verify", "recovery-context-start",
             "recovery-printing", "recovery-complete",
+            "recovery-finished-dismiss",
             "recovery-context-verify",
+            "print_kamp-context-start", "print_kamp-file-open",
+            "print_kamp-complete", "print_kamp-finished-dismiss",
+            "print_kamp-context-verify",
         )
         positions = [print_labels.index(label) for label in expected]
         self.assertEqual(positions, sorted(positions))
@@ -876,6 +884,56 @@ class RunnerContractTest(unittest.TestCase):
             self.assertEqual(
                 feature.context_runtime["file_browser"]["cache"],
                 ["original"])
+
+    def test_context_print_waits_for_ui_terminal_state(self):
+        host = type("Host", (), {})()
+        host.reactor = type("Reactor", (), {
+            "monotonic": lambda self: 1.0,
+        })()
+        host.print_stats = type("Stats", (), {
+            "get_status": lambda self, eventtime: {"state": "complete"},
+        })()
+        host.virtual_sdcard = type("SD", (), {
+            "is_active": lambda self: False,
+        })()
+        host.print_state = FEATHER.PrintState.PRINTING
+        feature = UI_TEST.UITestFeature(host)
+
+        self.assertFalse(feature._context_print_complete())
+        host.print_state = FEATHER.PrintState.IDLE
+        self.assertTrue(feature._context_print_complete())
+
+    def test_context_print_waits_for_pause_control(self):
+        status = {"state": "printing"}
+        host = type("Host", (), {})()
+        host.reactor = type("Reactor", (), {
+            "monotonic": lambda self: 1.0,
+        })()
+        host.print_stats = type("Stats", (), {
+            "get_status": lambda self, eventtime: dict(status),
+        })()
+        host.page = FEATHER.Page.PRINTING
+        host.renderer = type("Renderer", (), {"_buttons": {}})()
+        feature = UI_TEST.UITestFeature(host)
+
+        self.assertTrue(feature._context_printing())
+        self.assertFalse(feature._context_print_controls_ready())
+        host.renderer._buttons["print.pause"] = ()
+        self.assertTrue(feature._context_print_controls_ready())
+
+        status["state"] = "paused"
+        host.page = FEATHER.Page.PAUSED
+        host.renderer._buttons = {"print.resume": ()}
+        self.assertTrue(feature._context_paused())
+
+        status["state"] = "cancelled"
+        host.print_state = FEATHER.PrintState.IDLE
+        host.page = FEATHER.Page.MESSAGE
+        host.virtual_sdcard = type("SD", (), {
+            "is_active": lambda self: False,
+        })()
+        host.renderer._buttons = {"message.ok": ()}
+        self.assertTrue(feature._context_cancelled())
 
     def test_extended_suites_require_confirm_two(self):
         feature = UI_TEST.UITestFeature(object())
@@ -953,12 +1011,15 @@ class RunnerContractTest(unittest.TestCase):
                 "variables": {"idle_timeout": 2},
             })()
             commands = []
+            cancelled = []
             host = type("Host", (), {})()
             host.reactor = type("Reactor", (), {
                 "monotonic": lambda self: 1.0,
             })()
             host.virtual_sdcard = type("SD", (), {
                 "is_active": lambda self: False,
+                "file_path": lambda self: str(gcode),
+                "do_cancel": lambda self: cancelled.append(True),
             })()
             host.operation_context = type("Context", (), {
                 "get_status": lambda self, eventtime: {"contexts": ()},
@@ -989,6 +1050,7 @@ class RunnerContractTest(unittest.TestCase):
             self.assertIs(params._store_value, original_store)
             self.assertEqual(client.variables["idle_timeout"], 3600)
             self.assertIn("SET_IDLE_TIMEOUT TIMEOUT=600", commands)
+            self.assertEqual(cancelled, [True])
             self.assertFalse(gcode.exists())
             self.assertFalse(checkpoint.exists())
             self.assertTrue(unrelated.exists())
