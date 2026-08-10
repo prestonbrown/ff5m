@@ -628,6 +628,62 @@ class RunnerContractTest(unittest.TestCase):
         # additional controller fixture is needed for this safety check.
         controller._dispatch_action("cal.mesh.save")
 
+    def test_test_action_propagates_controller_failure_after_message(self):
+        class FailingOwner:
+            def allows_action(self, page, action):
+                return True
+
+            def handle_action(self, page, action):
+                raise RuntimeError("synthetic command failed")
+
+        class Manager:
+            def __init__(self, feature):
+                self.feature = feature
+                self.owner = FailingOwner()
+
+            def peek(self, name):
+                return self.feature if name == "ui_test" else None
+
+            def owner_name(self, page):
+                return "failing"
+
+            def resolve_semantic_action(self, page, action):
+                return self.owner, None
+
+            def handle_immediate_action(self, page, action):
+                return False
+
+            @property
+            def input_blocked(self):
+                return False
+
+        controller = FEATHER.FeatherScreen.__new__(FEATHER.FeatherScreen)
+        controller.print_state = FEATHER.PrintState.IDLE
+        controller.command_depth = 0
+        controller.busy_message = None
+        controller.page = FEATHER.Page.IDLE_HOME
+        controller.previous_page = FEATHER.Page.IDLE_HOME
+        controller.last_action_time = -1.0
+        controller.pending_action = None
+        controller.reactor = type("Reactor", (), {
+            "monotonic": lambda self: 1.0,
+        })()
+        feature = UI_TEST.UITestFeature(controller)
+        controller.feature_manager = Manager(feature)
+        messages = []
+        controller._show_message = lambda message, page: messages.append(
+            (message, page))
+
+        controller._dispatch_action("synthetic.action")
+        self.assertEqual(messages, [("synthetic command failed",
+                                     FEATHER.Page.IDLE_HOME)])
+
+        feature.dispatching_test_action = True
+        controller.last_action_time = -1.0
+        with self.assertRaisesRegex(RuntimeError, "synthetic command failed"):
+            controller._handle_touch_action("synthetic.action")
+        self.assertEqual(len(messages), 2)
+
     def test_nonphysical_cleanup_does_not_issue_hardware_gcode(self):
         shown = []
         host = type("Host", (), {

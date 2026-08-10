@@ -883,6 +883,12 @@ class FeatherScreen(FeatherPagesMixin, FeatherControlsMixin):
             logging.info("[feather_screen] touch ignored during visual feedback: %s",
                          action)
             return
+        # Synthetic runner taps must remain synchronous: a delayed visual
+        # flash would clear dispatching_test_action before the command error
+        # can propagate back to the runner.
+        if test_dispatch:
+            self._dispatch_action(action)
+            return
         flash = getattr(self.renderer, "flash_button", None)
         if flash is None or not flash(action):
             self._dispatch_action(action)
@@ -943,6 +949,8 @@ class FeatherScreen(FeatherPagesMixin, FeatherControlsMixin):
         manager = getattr(self, "feature_manager", None)
         test_feature = (None if manager is None
                         else manager.peek("ui_test"))
+        test_dispatch = bool(getattr(
+            test_feature, "dispatching_test_action", False))
         if (test_feature is not None
                 and test_feature.blocks_action(action)):
             logging.warning(
@@ -956,6 +964,8 @@ class FeatherScreen(FeatherPagesMixin, FeatherControlsMixin):
                     self.page, action)
             except FeatureLoadError as exc:
                 self._show_message(str(exc), self.previous_page)
+                if test_dispatch:
+                    raise
                 return
         else:
             semantic_action = self._resolve_semantic_ui_action(action)
@@ -1062,6 +1072,8 @@ class FeatherScreen(FeatherPagesMixin, FeatherControlsMixin):
         except Exception as exc:
             logging.exception("[feather_screen] action failed: %s", action)
             self._show_message(str(exc), self.page)
+            if test_dispatch:
+                raise
 
     def _action_allowed(self, page, action):
         if action in EXACT_ACTIONS.get(page, ()):
