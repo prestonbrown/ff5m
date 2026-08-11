@@ -51,7 +51,7 @@ class ScenarioCatalog:
         self.motion_expected = None
         self.heat_initial = None
         self.heat_stable_since = None
-        self.mesh_snapshot = None
+        self._mesh_snapshot = None
         self.ui_filament_target = None
         self.z_probe_local = None
 
@@ -972,54 +972,23 @@ class ScenarioCatalog:
             actual, self.motion_expected, abs_tol=0.05)
 
     def _save_heat_initial(self):
-        values = self._temperatures()
+        values = self.run._temperatures()
         self.heat_initial = (values["nozzle"], values["bed"])
         self.heat_stable_since = None
 
-    def _temperatures(self):
-        now = self.reactor.monotonic()
-        nozzle = self.host.extruder.get_status(now)
-        bed = self.host.heater_bed.get_status(now)
-        values = {
-            "time": time.time(), "nozzle": float(nozzle["temperature"]),
-            "nozzle_target": float(nozzle["target"]),
-            "bed": float(bed["temperature"]),
-            "bed_target": float(bed["target"]),
-        }
-        if self.worker is not None:
-            self.worker.log("TEMPERATURE %s" % json.dumps(values, sort_keys=True))
-            self.worker.telemetry(
-                "temperatures",
-                ("time", "nozzle", "nozzle_target", "bed", "bed_target"),
-                values)
-        return values
-
-    def _position(self):
-        status = self.host.toolhead.get_status(self.reactor.monotonic())
-        values = [float(value) for value in status.get("position", ())[:3]]
-        if self.worker is not None:
-            self.worker.log("POSITION %s" % json.dumps(values))
-            self.worker.telemetry(
-                "positions", ("time", "x", "y", "z"),
-                {"time": time.time(),
-                 "x": values[0] if len(values) > 0 else "",
-                 "y": values[1] if len(values) > 1 else "",
-                 "z": values[2] if len(values) > 2 else ""})
-        return values
-
     def _heat_targets_set(self):
-        values = self._temperatures()
+        values = self.run._temperatures()
         nozzle, bed = self.host.heating_profiles[self.material]
         return (abs(values["nozzle_target"] - nozzle) <= 1.0
                 and abs(values["bed_target"] - bed) <= 1.0)
 
     def _heat_is_rising(self):
-        values = self._temperatures()
+        values = self.run._temperatures()
         return (values["nozzle"] >= self.heat_initial[0] + 3.0
                 or abs(values["nozzle"] - values["nozzle_target"]) <= 5.0)
 
     def _heat_is_stable(self):
-        values = self._temperatures()
+        values = self.run._temperatures()
         stable = (abs(values["nozzle"] - values["nozzle_target"]) <= 5.0
                   and abs(values["bed"] - values["bed_target"]) <= 3.0)
         now = self.reactor.monotonic()
@@ -1031,7 +1000,7 @@ class ScenarioCatalog:
         return now - self.heat_stable_since >= 10.0
 
     def _heaters_off(self):
-        values = self._temperatures()
+        values = self.run._temperatures()
         return values["nozzle_target"] <= 0.0 and values["bed_target"] <= 0.0
 
     def _calibration_result(self):

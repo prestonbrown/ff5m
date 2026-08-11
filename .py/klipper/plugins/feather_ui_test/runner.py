@@ -691,6 +691,38 @@ class UITestRun:
             "position": self._position(),
         }
 
+    def _temperatures(self):
+        now = self.reactor.monotonic()
+        nozzle = self.host.extruder.get_status(now)
+        bed = self.host.heater_bed.get_status(now)
+        values = {
+            "time": time.time(), "nozzle": float(nozzle["temperature"]),
+            "nozzle_target": float(nozzle["target"]),
+            "bed": float(bed["temperature"]),
+            "bed_target": float(bed["target"]),
+        }
+        if self.worker is not None:
+            self.worker.log(
+                "TEMPERATURE %s" % json.dumps(values, sort_keys=True))
+            self.worker.telemetry(
+                "temperatures",
+                ("time", "nozzle", "nozzle_target", "bed", "bed_target"),
+                values)
+        return values
+
+    def _position(self):
+        status = self.host.toolhead.get_status(self.reactor.monotonic())
+        values = [float(value) for value in status.get("position", ())[:3]]
+        if self.worker is not None:
+            self.worker.log("POSITION %s" % json.dumps(values))
+            self.worker.telemetry(
+                "positions", ("time", "x", "y", "z"),
+                {"time": time.time(),
+                 "x": values[0] if len(values) > 0 else "",
+                 "y": values[1] if len(values) > 1 else "",
+                 "z": values[2] if len(values) > 2 else ""})
+        return values
+
     def _tap(self, action):
         action = str(action)
         renderer = self.host.renderer

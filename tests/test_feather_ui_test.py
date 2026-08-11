@@ -303,6 +303,13 @@ class RunnerContractTest(unittest.TestCase):
         self.assertLess(labels.index("motion-x-forward-complete"),
                         labels.index("motion-x-forward"))
 
+    def test_mesh_restore_is_noop_before_snapshot(self):
+        feature = UI_TEST.UITestRun(object())
+
+        feature.scenarios._restore_mesh_snapshot()
+
+        self.assertIsNone(feature.scenarios._mesh_snapshot)
+
     def test_render_suite_is_nonphysical_and_waits_for_recovery(self):
         statuses = [
             {"worker_state": "running", "typer_restarts": 2},
@@ -403,6 +410,59 @@ class RunnerContractTest(unittest.TestCase):
         self.assertEqual(len(captures), 1)
         self.assertNotIn(token, feature.capture_receipts)
         self.assertEqual(step, {"kind": "capture", "label": "presented"})
+
+    def test_screen_metadata_observes_live_telemetry(self):
+        telemetry = []
+        logs = []
+
+        class Status:
+            def __init__(self, values):
+                self.values = values
+
+            def get_status(self, eventtime):
+                return dict(self.values)
+
+        renderer = type("Renderer", (), {
+            "generation": 7,
+            "_buttons": {}, "_hitboxes": {}, "_toggles": {},
+            "get_status": lambda self: {
+                "semantic_page_id": "home", "dropped_batches": 0,
+            },
+        })()
+        host = type("Host", (), {
+            "reactor": type("Reactor", (), {
+                "monotonic": lambda self: 12.5,
+            })(),
+            "renderer": renderer,
+            "page": FEATHER.Page.IDLE_HOME,
+            "extruder": Status({"temperature": 31.5, "target": 0.0}),
+            "heater_bed": Status({"temperature": 29.0, "target": 0.0}),
+            "toolhead": Status({"position": (1.0, 2.0, 3.0, 4.0)}),
+        })()
+        feature = UI_TEST.UITestRun(host)
+        feature.phase = "baseline"
+        feature.worker = type("Worker", (), {
+            "log": lambda self, message: logs.append(message),
+            "telemetry": lambda self, name, fields, values:
+                telemetry.append((name, fields, values)),
+        })()
+
+        metadata = feature._screen_metadata()
+
+        self.assertEqual(metadata["phase"], "baseline")
+        self.assertEqual(metadata["semantic_page_id"], "home")
+        self.assertEqual(metadata["position"], [1.0, 2.0, 3.0])
+        self.assertEqual(metadata["temperatures"]["nozzle"], 31.5)
+        self.assertEqual(metadata["temperatures"]["bed"], 29.0)
+        self.assertEqual(
+            [(name, fields) for name, fields, values in telemetry], [
+                ("temperatures", (
+                    "time", "nozzle", "nozzle_target", "bed", "bed_target")),
+                ("positions", ("time", "x", "y", "z")),
+            ])
+        self.assertEqual(telemetry[1][2]["z"], 3.0)
+        self.assertTrue(logs[0].startswith("TEMPERATURE "))
+        self.assertEqual(logs[1], "POSITION [1.0, 2.0, 3.0]")
 
     def test_full_suite_order_and_z_safety_sequence(self):
         renderer = type("Renderer", (), {
