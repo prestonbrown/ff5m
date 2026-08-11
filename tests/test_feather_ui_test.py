@@ -1130,6 +1130,13 @@ class RunnerContractTest(unittest.TestCase):
                 "register_callback": lambda self, callback, when:
                     callbacks.append((when, callback)),
             })(),
+            "toolhead": type("Toolhead", (), {
+                "check_busy": lambda self, eventtime:
+                    (eventtime, eventtime, True),
+            })(),
+            "_operation_context_status": lambda self, eventtime: {
+                "current_state": None,
+            },
         })())
         run.running = True
         run.screen_capture_interval = 5.0
@@ -1163,9 +1170,48 @@ class RunnerContractTest(unittest.TestCase):
 
         callbacks[0][1](110.0)
         self.assertEqual(len(captures), 2)
-
         callbacks[1][1](115.0)
         self.assertEqual(len(captures), 2)
+
+    def test_periodic_capture_skips_motion_and_timing_critical_contexts(self):
+        callbacks = []
+        events = []
+        host = type("Host", (), {
+            "reactor": type("Reactor", (), {
+                "register_callback": lambda self, callback, when:
+                    callbacks.append((when, callback)),
+            })(),
+            "toolhead": type("Toolhead", (), {
+                "check_busy": lambda self, eventtime:
+                    (eventtime + 1.0, eventtime, True),
+            })(),
+            "_operation_context_status": lambda self, eventtime: {
+                "current_state": None,
+            },
+        })()
+        run = UI_TEST.UITestRun(host)
+        run.running = True
+        run.screen_capture_interval = 5.0
+        run.next_periodic_capture = 105.0
+        run.worker = mock.Mock()
+        run._event = events.append
+
+        run._periodic_capture_tick(105.0)
+        self.assertIn("periodic capture skipped: toolhead busy", events)
+        run.worker.capture.assert_not_called()
+        self.assertEqual(run.next_periodic_capture, 110.0)
+
+        host.toolhead.check_busy = lambda eventtime: (
+            eventtime, eventtime, True)
+        host._operation_context_status = lambda eventtime: {
+            "current_state": "LEVELING",
+        }
+        callbacks[0][1](110.0)
+
+        self.assertIn(
+            "periodic capture skipped: operation state LEVELING", events)
+        run.worker.capture.assert_not_called()
+        self.assertEqual(run.next_periodic_capture, 115.0)
 
     def test_interrupted_context_cleanup_removes_only_owned_resources(self):
         with tempfile.TemporaryDirectory() as temporary:

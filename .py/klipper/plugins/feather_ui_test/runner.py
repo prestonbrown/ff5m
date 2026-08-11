@@ -163,6 +163,23 @@ class UITestRun:
         if isinstance(result, Exception):
             self._event("stage capture failed: %s" % result)
 
+    def _periodic_capture_block_reason(self, eventtime):
+        try:
+            print_time, estimated_time, lookahead_empty = \
+                self.host.toolhead.check_busy(eventtime)
+        except Exception as exc:
+            return "toolhead state unavailable: %s" % exc
+        if not lookahead_empty or print_time > estimated_time:
+            return "toolhead busy"
+        try:
+            operation = self.host._operation_context_status(eventtime)
+            state = str(operation.get("current_state") or "").upper()
+        except Exception as exc:
+            return "operation state unavailable: %s" % exc
+        if state in ("HOMING", "PROBING", "LEVELING"):
+            return "operation state %s" % state
+        return None
+
     def _periodic_capture_tick(self, eventtime):
         if (not self.running or self.finalizing
                 or not self.screen_capture_interval
@@ -177,6 +194,10 @@ class UITestRun:
         if self.periodic_capture_pending:
             self._event(
                 "periodic capture skipped: previous capture still pending")
+            return
+        blocked = self._periodic_capture_block_reason(eventtime)
+        if blocked is not None:
+            self._event("periodic capture skipped: %s" % blocked)
             return
         self.periodic_capture_pending += 1
         self.capture_number += 1

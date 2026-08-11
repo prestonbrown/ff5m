@@ -65,8 +65,10 @@ class FakeClient:
             "directory": REGRESSION.ARTIFACT_ROOT + "/" + run_id,
         }
 
-    def wait(self, marker, timeout, run_state=None, events_alive=None):
+    def wait(self, marker, timeout, run_state=None, events_alive=None,
+             progress=None):
         del marker, timeout, run_state
+        del progress
         if events_alive is not None and not events_alive():
             raise REGRESSION.RegressionError(
                 "no printer status event for 30 seconds")
@@ -168,6 +170,8 @@ class FakeMedia:
 class FakeTelemetry:
     def __init__(self, rate_hz):
         self.rate_hz = float(rate_hz)
+        self.sample_count = 0
+        self.latest_test_status = None
 
     def start(self, _origin, test_status=None):
         self.test_status = test_status
@@ -446,6 +450,38 @@ class OrchestrationTest(unittest.TestCase):
                          "synthetic assertion")
         self.assertEqual(durable["telemetry"]["status"], "recorded")
         self.assertEqual(durable["telemetry"]["sample_count"], 1)
+
+    def test_console_progress_uses_already_sampled_test_status(self):
+        class ProgressClient(FakeClient):
+            def wait(self, marker, timeout, run_state=None,
+                     events_alive=None, progress=None):
+                del marker, timeout, run_state, events_alive
+                progress(65.0)
+                return False
+
+        with tempfile.TemporaryDirectory() as temporary:
+            output = pathlib.Path(temporary) / "run"
+            args = arguments(output, suite="core")
+            telemetry = FakeTelemetry(args.telemetry_rate)
+            telemetry.sample_count = 66
+            telemetry.latest_test_status = {
+                "phase": "mesh", "step": "leveling",
+                "step_index": 2, "step_count": 8,
+            }
+            messages = []
+            run = REGRESSION.RegressionRun(
+                args, client=ProgressClient(), media=FakeMedia(),
+                telemetry=telemetry, progress=messages.append)
+            with mock.patch.object(
+                    REGRESSION, "_host_preflight",
+                    side_effect=fake_host_preflight):
+                run.run()
+
+        self.assertIn(
+            "core: running 1m 05s | phase=mesh | step=3/8 | "
+            "action=leveling | telemetry=66",
+            messages)
+        self.assertIn("core: downloading artifacts", messages)
 
     def test_screen_timeline_is_anchored_after_lazy_runner_launch(self):
         class Clock:
@@ -817,6 +853,37 @@ class TelemetryContractTest(unittest.TestCase):
 
         self.assertEqual(clock.now, 30.0)
         client.active_marker.assert_not_called()
+
+    def test_wait_emits_progress_from_its_existing_observation_loop(self):
+        class Clock:
+            now = 0.0
+
+            def __call__(self):
+                return self.now
+
+            def sleep(self, delay):
+                self.now += delay
+
+        clock = Clock()
+        client = REGRESSION.PrinterRunClient(
+            object(), clock=clock, sleeper=clock.sleep)
+        marker = {
+            "run_id": "20260811-120000-000001-ui",
+            "suite": "UI",
+            "directory": REGRESSION.ARTIFACT_ROOT +
+                         "/20260811-120000-000001-ui",
+        }
+        observed = []
+
+        timed_out = client.wait(
+            marker, 100.0,
+            run_state=lambda _run_id: (
+                "finished" if clock.now >= 21.0 else "active"),
+            events_alive=lambda: True,
+            progress=observed.append)
+
+        self.assertFalse(timed_out)
+        self.assertEqual(observed, [10.0, 20.0])
 
     def test_run_completion_is_owned_by_status_heartbeat(self):
         recorder = REGRESSION.TelemetryRecorder(

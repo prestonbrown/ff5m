@@ -83,6 +83,7 @@ RESOURCE_FILE = "resources.tsv"
 RESOURCE_MONITOR_SCRIPT = "/opt/config/mod/.shell/printer_resource_monitor.sh"
 SAFE_MONITOR_ID = re.compile(r"^[0-9]+-[0-9]+$")
 EVENT_STALL_TIMEOUT = 30.0
+PROGRESS_INTERVAL = 10.0
 LINUX_USER_HZ = 100.0
 TELEMETRY_QUERY = (
     "/printer/objects/query?toolhead=homed_axes,position"
@@ -528,9 +529,11 @@ class PrinterRunClient:
         raise RegressionError("printer did not publish the launched run id")
 
     def wait(self, marker, timeout, run_state=None, events_alive=None,
-             abort_grace=60):
+             progress=None, abort_grace=60):
         run_id, _directory = _safe_remote_run(marker)
-        deadline = self.clock() + float(timeout)
+        started = self.clock()
+        deadline = started + float(timeout)
+        next_progress = started + PROGRESS_INTERVAL
         while self.clock() < deadline:
             if events_alive is not None and not events_alive():
                 raise RegressionError(
@@ -551,6 +554,10 @@ class PrinterRunClient:
                 raise RegressionError("printer active run ownership changed")
             if state not in ("pending", "active"):
                 raise RegressionError("printer run status is invalid")
+            now = self.clock()
+            if progress is not None and now >= next_progress:
+                progress(max(0.0, now - started))
+                next_progress = now + PROGRESS_INTERVAL
             self.sleeper(0.25 if run_state is not None else 1.0)
         self.abort(marker, abort_grace=abort_grace)
         return True
@@ -1504,6 +1511,29 @@ class RegressionRun:
             "printer_suite": suite.get("printer_suite"),
         }
 
+    def _suite_progress(self, elapsed):
+        suite = self.current_suite or {}
+        seconds = max(0, int(elapsed))
+        parts = ["%s: running %dm %02ds" % (
+            suite.get("name", "suite"), seconds // 60, seconds % 60)]
+        status = getattr(self.telemetry, "latest_test_status", None)
+        if isinstance(status, dict):
+            phase = " ".join(str(status.get("phase") or "").split())
+            step = " ".join(str(status.get("step") or "").split())
+            if phase:
+                parts.append("phase=%s" % phase)
+            index = status.get("step_index")
+            count = status.get("step_count")
+            if (isinstance(index, int) and isinstance(count, int)
+                    and count > 0):
+                parts.append("step=%d/%d" % (index + 1, count))
+            if step:
+                parts.append("action=%s" % step[:60])
+        samples = getattr(self.telemetry, "sample_count", None)
+        if isinstance(samples, int):
+            parts.append("telemetry=%d" % samples)
+        self.progress(" | ".join(parts))
+
     def _run_suites(self):
         for index, spec in enumerate(self.specs):
             self.progress("%s: running" % spec["name"])
@@ -1531,7 +1561,9 @@ class RegressionRun:
                     run_state=(self.telemetry.run_state
                                if self.args.telemetry_rate else None),
                     events_alive=(self.telemetry.events_alive
-                                  if self.args.telemetry_rate else None))
+                                  if self.args.telemetry_rate else None),
+                    progress=self._suite_progress)
+                self.progress("%s: downloading artifacts" % spec["name"])
                 local, summary, manifest = self.client.copy_and_verify(
                     marker, self.output / "suites" / spec["name"])
                 self._finish_suite(
