@@ -584,10 +584,17 @@ class ScenarioCatalog:
         self._add_call(
             steps, "filament-open",
             lambda: self.host._run_script("LOAD_MATERIAL"))
+        self._add_capture(steps, "filament-material-prompt-screen")
         self._add_prompt_tap(steps, self.material, Page.ACTION_PROMPT)
-        for label in ("Load", "Purge", "Unload"):
-            self._add_prompt_tap(steps, label, Page.ACTION_PROMPT)
+        self._add_capture(steps, "filament-action-prompt-screen")
+        self._add_prompt_tap(steps, "Load", Page.ACTION_PROMPT)
+        self._add_capture(steps, "filament-loaded-screen")
+        self._add_prompt_tap(steps, "Purge", Page.ACTION_PROMPT)
+        self._add_capture(steps, "filament-purged-screen")
+        self._add_prompt_tap(steps, "Unload", Page.ACTION_PROMPT)
+        self._add_capture(steps, "filament-unloaded-screen")
         self._add_prompt_tap(steps, "Done")
+        self._add_capture(steps, "filament-done-screen")
         self._add_call(
             steps, "filament-context-verify",
             self._finish_context_scenario, delay=0.0)
@@ -598,8 +605,10 @@ class ScenarioCatalog:
         self._add_call(
             steps, "cold_pull-open",
             lambda: self.host._run_script("COLDPULL"))
+        self._add_capture(steps, "cold_pull-material-prompt-screen")
         self._add_prompt_tap(
             steps, self._context_cold_pull_material(), None)
+        self._add_capture(steps, "cold_pull-complete-screen")
         self._add_call(
             steps, "cold_pull-context-verify",
             self._finish_context_scenario, delay=0.0)
@@ -622,6 +631,7 @@ class ScenarioCatalog:
         self._add_wait(
             steps, "print_mesh-started", self._context_print_controls_ready,
             1900.0, 0.5)
+        self._add_capture(steps, "print_mesh-printing-screen")
         self._add_tap(steps, "print.pause")
         self._add_call(
             steps, "print_mesh-pause-motion-complete",
@@ -629,10 +639,12 @@ class ScenarioCatalog:
         self._add_wait(
             steps, "print_mesh-paused", self._context_paused,
             10.0, 0.1)
+        self._add_capture(steps, "print_mesh-paused-screen")
         self._add_tap(steps, "print.resume")
         self._add_wait(
             steps, "print_mesh-resumed", self._context_print_controls_ready,
             10.0, 0.1)
+        self._add_capture(steps, "print_mesh-resumed-screen")
         self._add_tap(
             steps, "print.pause", label="print_mesh-pause-for-recovery")
         self._add_call(
@@ -641,6 +653,7 @@ class ScenarioCatalog:
         self._add_wait(
             steps, "print_mesh-recovery-paused", self._context_paused,
             10.0, 0.1)
+        self._add_capture(steps, "print_mesh-recovery-paused-screen")
         self._add_wait(
             steps, "print_mesh-idle-timeout", self._context_idle_timeout,
             30.0, 0.25)
@@ -652,11 +665,13 @@ class ScenarioCatalog:
         self._add_wait(
             steps, "print_mesh-cancelled", self._context_cancelled,
             10.0, 0.1)
+        self._add_capture(steps, "print_mesh-cancelled-screen")
         self._add_tap(steps, "message.ok", Page.IDLE_HOME,
                       "print_mesh-cancelled-dismiss")
         self._add_call(
             steps, "print_mesh-activate-recovery",
             self._activate_context_recovery)
+        self._add_capture(steps, "print_mesh-recovery-prompt-screen")
         self._add_call(
             steps, "print_mesh-context-verify",
             self._finish_context_scenario, delay=0.0)
@@ -667,14 +682,18 @@ class ScenarioCatalog:
                 "recovery", ("recovery",)), delay=0.0)
         self._add_tap(
             steps, "recovery.restore", Page.RECOVERY_CONFIRM)
+        self._add_capture(steps, "recovery-confirm-screen")
         self._add_tap(
             steps, "recovery.confirm", Page.CALIBRATION_PROGRESS)
+        self._add_capture(steps, "recovery-progress-screen")
         self._add_wait(
             steps, "recovery-printing", self._context_printing,
             1900.0, 0.5)
+        self._add_capture(steps, "recovery-printing-screen")
         self._add_wait(
             steps, "recovery-complete", self._context_print_complete,
             1900.0, 0.5)
+        self._add_capture(steps, "recovery-complete-screen")
         self._add_tap(steps, "message.ok", Page.IDLE_HOME,
                       "recovery-finished-dismiss")
         self._add_call(
@@ -689,13 +708,16 @@ class ScenarioCatalog:
             steps, "print_kamp-file-open",
             lambda: self._open_context_file(self.context_fixture.files[0]))
         self._add_tap(steps, "file.item0", Page.FILE_CONFIRM)
+        self._add_capture(steps, "print_kamp-confirm-screen")
         self._add_tap(steps, "file.start")
         self._add_wait(
             steps, "print_kamp-started", self._context_printing,
             1900.0, 0.5)
+        self._add_capture(steps, "print_kamp-printing-screen")
         self._add_wait(
             steps, "print_kamp-complete", self._context_print_complete,
             1900.0, 0.5)
+        self._add_capture(steps, "print_kamp-complete-screen")
         self._add_tap(steps, "message.ok", Page.IDLE_HOME,
                       "print_kamp-finished-dismiss")
         self._add_call(
@@ -796,6 +818,11 @@ class ScenarioCatalog:
     def _cancel_context_print(self):
         if not self._context_checkpoint_ready():
             raise RuntimeError("Runner recovery checkpoint is unavailable")
+        resurrection = self.host.resurrection
+        resurrection._pause_checkpoint_active = False
+        resurrection._resume_pending = False
+        state_type = type(resurrection.state)
+        resurrection._change_state(state_type.RESURRECTION)
         self.host.virtual_sdcard.do_cancel()
 
     def _activate_context_recovery(self):
@@ -807,10 +834,9 @@ class ScenarioCatalog:
         # only that volatile controller fact so the subsequent restored print
         # gets the normal IDLE -> PRINTING page transition.
         self.host.print_state = PrintState.IDLE
-        resurrection._pause_checkpoint_active = False
-        resurrection._resume_pending = False
         state_type = type(resurrection.state)
-        resurrection._change_state(state_type.RESURRECTION)
+        if resurrection.state != state_type.RESURRECTION:
+            raise RuntimeError("Runner recovery checkpoint is not armed")
         for line in (
                 "// action:prompt_begin Resurrection",
                 "// action:prompt_text Resurrection is available! Would you like to restore the print?",

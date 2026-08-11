@@ -152,6 +152,168 @@ own temporary G-code files and checkpoint. Before and after any live group,
 independently verify standby, zero heater targets, and inactive virtual SD, and
 retain the artifact directory plus deployed UI fingerprint.
 
+### Host-orchestrated unattended runs
+
+`tests.printer_regression` is the separate developer-machine entry point for
+recording and collecting the real printer suites. It does not replace the
+on-printer runner: Feather still owns each scenario, its safety preflight, state
+snapshot/restore, semantic screenshots, and suite outcome. The host owns only
+suite ordering, camera capture, verified artifact transfer, video assembly, and
+the local report.
+
+Run the existing core `FULL` suite from the repository root with:
+
+```bash
+python3 -m tests.printer_regression \
+  --printer <printer-host> \
+  --suite core \
+  --confirm-unattended-physical-test
+```
+
+The host-facing aggregate names deliberately differ from the printer's suite
+names:
+
+- `core` starts printer `FULL`;
+- `print` starts printer `CONTEXT_PRINT`;
+- `material` starts printer `CONTEXT_MATERIAL`;
+- `all` runs `core`, then `print`, then `material`.
+
+The existing individual `ui`, `component`, `render`, `motion`, `heat`,
+`screws`, `mesh`, and `z` suites are also available. `full` is intentionally
+not a host-facing alias. Use `--material PLA` only when an explicit profile is
+needed; otherwise material selection remains owned by Feather.
+
+The default recording rate is 10 FPS and the accepted range is 1-30 FPS. The
+host discovers enabled webcams through Moonraker and records the camera
+directly with FFmpeg. Relative webcam URLs resolve to the printer's HTTP port
+80. `--no-camera` explicitly disables camera capture. An absent or failed
+camera leaves the printer outcomes intact and produces screen-only media when
+semantic screenshots are available.
+
+The host also requests one coherent Feather framebuffer snapshot every 5
+seconds by default. These periodic timeline records complement rather than
+replace the settled semantic captures attached to meaningful test states, so
+both small screen updates and unchanged holds remain visible in the assembled
+video. A periodic snapshot reads the active framebuffer once and stores only
+minimal timeline metadata; it does not wait for the UI to become visually
+quiet. If the previous periodic snapshot is still pending, the next tick is
+skipped instead of building an artifact backlog inside the Klipper process.
+The worker writes each BMP as a small header plus the framebuffer payload and
+publishes `manifest.json` once during finalization. It deliberately does not
+fsync and rewrite the growing manifest after every periodic frame, because
+that storage latency can delay the Klipper reactor during probing.
+All reactor callbacks submit artifact work through an unbounded
+`SimpleQueue`; only the single artifact thread opens the framebuffer or output
+files. Each completed capture is appended immediately, without `fsync`, to
+`artifact_timing.csv`. Its queued, worker-started, and worker-finished wall and
+monotonic timestamps, queue delay, duration, kind, phase, and page survive a
+later Klipper failure and distinguish scheduling delay from framebuffer and
+file work.
+Use `--screen-capture-interval <seconds>` to select an interval from 5 to 300
+seconds, or `--screen-capture-interval 0` to keep semantic captures only.
+Capture remains inside the lazy test runner and its existing background
+artifact worker; normal Feather runtime and the printer never encode video.
+
+While a suite is active, the host records `telemetry.jsonl` at 1 Hz by
+default. Each timestamped sample contains the live XYZ position and velocity,
+homed axes, nozzle and bed temperatures/targets/power, print state and
+progress, Feather page/generation, current suite/phase/step, and semantic
+operation context. `--telemetry-rate <hz>` accepts 1-10 Hz, while
+`--telemetry-rate 0` disables collection. Physical suites reject rates above
+1 Hz because every query executes object status callbacks in the Klipper
+reactor; higher rates remain available for non-physical UI, component, and
+render suites. Sampling uses one bounded Moonraker object query per tick, and
+that same status snapshot carries the active `run_id`. The active wait does
+not poll over SSH: startup, ownership, completion, and abort observation use
+Feather's Moonraker status. SSH is used only for bounded lifecycle actions such
+as preflight, starting/stopping the independent resource sampler, and artifact
+transfer. The configured value is the requested upper rate; the report also
+records the effective rate because Klipper/Moonraker status publication may be
+slower. An intermittent or unavailable telemetry stream is reported as a
+warning and never rewrites the printer suite outcome.
+During an active suite, successful RT status samples are also the host's
+printer-process heartbeat. If no new sample arrives for 30 seconds, the host
+stops waiting on a possibly stale run and records an
+infrastructure failure instead of waiting for the suite's physical timeout.
+
+One bounded printer-side shell process independently samples `/proc` once per
+second into `resources.tsv`. It records system CPU ticks, load, available
+memory, free swap, and per-process CPU ticks/RSS/state for Klipper, Moonraker,
+Dropbear, and Typer. Per-process rows also expose thread count, voluntary and
+involuntary context switches, minor and major faults, scheduler runtime/wait
+and timeslices, I/O byte and syscall counters, and the current kernel wait
+channel. This gives Typer telemetry without importing, tracing, or modifying
+Typer itself. The sampler neither imports nor calls Klipper and therefore keeps
+recording if the Klipper process or reactor fails. The host owns one persistent
+foreground SSH transport for the sampler instead of repeatedly opening
+Dropbear sessions, stops that exact local process after the physical suite,
+copies the exact remote file, and removes it only after the local header is
+verified. Preflight, launch ownership, active waiting, and post-suite safety
+observation use Moonraker and do not open additional SSH sessions.
+
+While the hidden test runner is active, a temporary 5 Hz reactor timer measures
+its own scheduling lag. It aggregates one row per second into `reactor.csv`
+through the existing artifact worker: average/max lag, longest callback
+interval, exact eventtimes for both maxima, current phase/step, pending capture
+state, sample count, and missed 200 ms deadlines. The timer is owned by the
+single `UITestRun`, returns an explicit next wake time, and is unregistered on
+completion, setup failure, or deactivation. It is not active during normal
+Feather operation.
+
+The inspection video uses a fixed 800x1080 vertical canvas: the native
+800x480 Feather screen is above the printer camera, the complete camera image
+is fitted without cropping into an 800x450 region, and an 800x150 RT panel is
+below it. The panel is rendered from the timestamped JSONL timeline through a
+raw in-memory bitmap stream; the host does not retain one uncompressed image
+per telemetry sample. Its five compact rows show test/step, UI and printer
+state, integer motion/heater values, operation context, and time-aligned
+Klipper/Typer/Dropbear CPU plus RSS, available memory, and load from
+`resources.tsv`. Screen transitions use printer-relative capture times
+anchored only after the lazy runner is observed active; setup latency therefore
+cannot advance the screen track ahead of the continuously recorded camera. A
+missing screen or camera gets an explicit placeholder so the layout and
+timeline remain stable.
+
+Before any mutable printer command, the entry point verifies local FFmpeg,
+SSH, SCP, artifact-root write access, disk capacity, Moonraker/Klipper
+readiness, the Feather screen object, SSH access, idle print state, zero heater
+targets, inactive virtual SD, and absence of another active UI-test run. The
+confirmation option acknowledges an observed idle printer, a prepared empty
+bed, and unattended motion/heating; it is translated into Feather's existing
+`CONFIRM=1` or `CONFIRM=2` contract rather than bypassing it.
+
+Each run gets a unique ignored directory under
+`tests/artifacts/printer-runs/` unless `--output` selects another new directory.
+It contains `report.html`, `report.json`, `recording.mp4` when media succeeds,
+`telemetry.jsonl`, `resources.tsv`, and verified printer artifacts below
+`suites/`. Each printer artifact can also contain `reactor.csv`. Large `work/`
+intermediates are
+removed only after successful media finalization and retained on failure.
+
+For every launched suite the host observes the exact `run_id` and directory
+from Feather's Moonraker status, copies that exact directory, verifies
+`summary.json` ownership
+and the screenshot/manifest contract, and only then removes the same remote
+directory. It never cleans the printer artifact root globally. A copy or
+verification failure preserves the remote source. If Klipper disappears before
+finalization, the host attempts a non-destructive partial copy so `run.log`,
+`reactor.csv`, screenshots, and other already-flushed evidence remain attached
+to the infrastructure failure.
+
+An ordinary printer test failure is reported and later selected suites still
+run after host safety is re-observed. Lost connectivity, changed run ownership,
+runner timeout/stall, cleanup failure, active print, non-zero heater target, or
+active virtual SD stops later physical suites and records them as skipped. A
+timeout uses Feather's existing explicit abort command; no service restart or
+generic recovery ladder is attempted.
+
+Normal host tests substitute Moonraker, SSH/SCP, clocks, camera processes, and
+FFmpeg. They never require or contact a live printer:
+
+```bash
+python3 -m unittest tests.test_printer_regression
+```
+
 ## Development-only semantic screenshot checks
 
 Semantic screenshot review is a separate Mac host-side tool under

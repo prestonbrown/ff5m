@@ -1799,6 +1799,13 @@ class RendererStateTest(unittest.TestCase):
             "CONTROL_HEAT", 1)
         self.assertEqual(controller._update_failures, 0)
 
+    def test_destroyed_periodic_update_parks_the_direct_reactor_timer(self):
+        controller = FEATHER.FeatherScreen.__new__(FEATHER.FeatherScreen)
+        controller.print_state = FEATHER.PrintState.DESTROYED
+        controller.reactor = type("Reactor", (), {"NEVER": 12345.0})()
+
+        self.assertEqual(controller._update(100.0), 12345.0)
+
     def test_joystick_move_page_registers_two_continuous_regions(self):
         controller = FEATHER.FeatherScreen.__new__(FEATHER.FeatherScreen)
         controller.renderer = FEATHER.FeatherRenderer()

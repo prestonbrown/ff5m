@@ -10,6 +10,7 @@
 import hashlib
 import json
 import logging
+import math
 import os
 import shutil
 import time
@@ -31,6 +32,8 @@ from .resources import (
 
 CAPTURE_RECEIPT_TIMEOUT = 6.0
 TAP_OPERATION_TIMEOUT = 1900.0
+REACTOR_PROBE_INTERVAL = 0.2
+REACTOR_PROBE_FLUSH_INTERVAL = 1.0
 PERSISTENT_ACTIONS = frozenset((
     "cal.mesh.save", "cal.tuning.save", "z.save", "live_z.save",
     "live_z.save.yes", "mod.apply", "mod.save", "error.restart",
@@ -72,6 +75,9 @@ class UITestRun:
         self.run_directory = None
         self.worker = None
         self.capture_number = 0
+        self.screen_capture_interval = 0.0
+        self.next_periodic_capture = None
+        self.periodic_capture_pending = 0
         self.failures = []
         self.started_at = None
         self.snapshot = None
@@ -84,6 +90,17 @@ class UITestRun:
         self.capture_receipts = {}
         self.context_recorder = None
         self.context_fixture = None
+        self.reactor_probe_timer = None
+        self.reactor_probe_next = None
+        self.reactor_probe_last = None
+        self.reactor_probe_window = None
+        self.reactor_probe_samples = 0
+        self.reactor_probe_lag_total = 0.0
+        self.reactor_probe_lag_max = 0.0
+        self.reactor_probe_lag_max_eventtime = None
+        self.reactor_probe_interval_max = 0.0
+        self.reactor_probe_interval_max_eventtime = None
+        self.reactor_probe_missed = 0
         self.scenarios = ScenarioCatalog(self)
 
     @property
@@ -146,6 +163,137 @@ class UITestRun:
         if isinstance(result, Exception):
             self._event("stage capture failed: %s" % result)
 
+    def _periodic_capture_tick(self, eventtime):
+        if (not self.running or self.finalizing
+                or not self.screen_capture_interval
+                or self.worker is None
+                or self.next_periodic_capture is None
+                or eventtime < self.next_periodic_capture):
+            return
+        self.next_periodic_capture = (
+            eventtime + self.screen_capture_interval)
+        self.reactor.register_callback(
+            self._periodic_capture_tick, self.next_periodic_capture)
+        if self.periodic_capture_pending:
+            self._event(
+                "periodic capture skipped: previous capture still pending")
+            return
+        self.periodic_capture_pending += 1
+        self.capture_number += 1
+        number = self.capture_number
+        label = "periodic-%03d" % number
+        try:
+            self._event("CAPTURE_QUEUED %s eventtime=%.6f" % (
+                label, eventtime))
+            metadata = {
+                "time": time.time(),
+                "phase": self.phase,
+                "page": self.host.page.name,
+                "generation": getattr(self.host.renderer, "generation", None),
+                "capture_kind": "periodic",
+            }
+            self.worker.capture(
+                number, label, metadata,
+                lambda result, name=label:
+                self._periodic_capture_finished(name, result),
+                settle=False)
+        except Exception as exc:
+            self.periodic_capture_pending = max(
+                0, self.periodic_capture_pending - 1)
+            self._event("periodic capture failed: %s" % exc)
+
+    def _periodic_capture_finished(self, label, result):
+        self.periodic_capture_pending = max(
+            0, self.periodic_capture_pending - 1)
+        if isinstance(result, Exception):
+            self._event("periodic capture failed: %s" % result)
+            return
+        self._event("CAPTURE %s %s" % (label, result["file"]))
+
+    def _start_reactor_probe(self):
+        now = self.reactor.monotonic()
+        self.reactor_probe_next = now + REACTOR_PROBE_INTERVAL
+        self.reactor_probe_last = now
+        self.reactor_probe_window = now
+        self.reactor_probe_samples = 0
+        self.reactor_probe_lag_total = 0.0
+        self.reactor_probe_lag_max = 0.0
+        self.reactor_probe_lag_max_eventtime = None
+        self.reactor_probe_interval_max = 0.0
+        self.reactor_probe_interval_max_eventtime = None
+        self.reactor_probe_missed = 0
+        self.reactor_probe_timer = self.reactor.register_timer(
+            self._reactor_probe_tick, self.reactor_probe_next)
+
+    def _reactor_probe_tick(self, eventtime):
+        if (not self.running or self.worker is None
+                or self.reactor_probe_next is None):
+            return self.reactor.NEVER
+        scheduled = self.reactor_probe_next
+        lag = max(0.0, eventtime - scheduled)
+        callback_interval = max(0.0, eventtime - self.reactor_probe_last)
+        skipped = int(lag / REACTOR_PROBE_INTERVAL)
+        self.reactor_probe_samples += 1
+        self.reactor_probe_lag_total += lag
+        if lag >= self.reactor_probe_lag_max:
+            self.reactor_probe_lag_max = lag
+            self.reactor_probe_lag_max_eventtime = eventtime
+        if callback_interval >= self.reactor_probe_interval_max:
+            self.reactor_probe_interval_max = callback_interval
+            self.reactor_probe_interval_max_eventtime = eventtime
+        self.reactor_probe_missed += skipped
+        self.reactor_probe_last = eventtime
+        self.reactor_probe_next = (
+            scheduled + (skipped + 1) * REACTOR_PROBE_INTERVAL)
+        if (eventtime - self.reactor_probe_window
+                >= REACTOR_PROBE_FLUSH_INTERVAL):
+            samples = self.reactor_probe_samples
+            step = (self.steps[self.step_index]
+                    if 0 <= self.step_index < len(self.steps) else None)
+            self.worker.telemetry(
+                "reactor",
+                ("time", "eventtime", "scheduled", "lag_ms",
+                 "average_lag_ms", "max_lag_ms", "max_lag_eventtime",
+                 "max_interval_ms", "max_interval_eventtime",
+                 "missed_deadlines", "samples", "phase", "step_index",
+                 "step", "periodic_capture_pending"),
+                {
+                    "time": time.time(), "eventtime": eventtime,
+                    "scheduled": scheduled, "lag_ms": lag * 1000.0,
+                    "average_lag_ms": (
+                        self.reactor_probe_lag_total * 1000.0 / samples),
+                    "max_lag_ms": self.reactor_probe_lag_max * 1000.0,
+                    "max_lag_eventtime": (
+                        self.reactor_probe_lag_max_eventtime),
+                    "max_interval_ms": (
+                        self.reactor_probe_interval_max * 1000.0),
+                    "max_interval_eventtime": (
+                        self.reactor_probe_interval_max_eventtime),
+                    "missed_deadlines": self.reactor_probe_missed,
+                    "samples": samples,
+                    "phase": self.phase,
+                    "step_index": self.step_index,
+                    "step": None if step is None else step.get("label"),
+                    "periodic_capture_pending": (
+                        self.periodic_capture_pending),
+                })
+            self.reactor_probe_window = eventtime
+            self.reactor_probe_samples = 0
+            self.reactor_probe_lag_total = 0.0
+            self.reactor_probe_lag_max = 0.0
+            self.reactor_probe_lag_max_eventtime = None
+            self.reactor_probe_interval_max = 0.0
+            self.reactor_probe_interval_max_eventtime = None
+            self.reactor_probe_missed = 0
+        return self.reactor_probe_next
+
+    def _stop_reactor_probe(self):
+        timer = self.reactor_probe_timer
+        self.reactor_probe_timer = None
+        self.reactor_probe_next = None
+        if timer is not None:
+            self.reactor.unregister_timer(timer)
+
     def on_gcode_output(self, message):
         pass
 
@@ -175,6 +323,21 @@ class UITestRun:
             (self.suite, self.phase, self.step_index, len(self.steps),
              self.run_directory))
 
+    def get_status(self):
+        step = (self.steps[self.step_index]
+                if 0 <= self.step_index < len(self.steps) else None)
+        return {
+            "running": bool(self.running),
+            "finalizing": bool(self.finalizing),
+            "run_id": self.run_id,
+            "directory": self.run_directory,
+            "suite": self.suite,
+            "phase": self.phase,
+            "step": None if step is None else step.get("label"),
+            "step_index": self.step_index,
+            "step_count": len(self.steps),
+        }
+
     def abort(self, gcmd):
         if not self.running:
             gcmd.respond_info("Feather UI test: nothing to abort")
@@ -189,7 +352,8 @@ class UITestRun:
         gcmd.respond_info("Feather UI test abort requested: %s" % self.run_id)
         self._schedule(0.0)
 
-    def run(self, gcmd, suite, material, confirm, encoded_cases=""):
+    def run(self, gcmd, suite, material, confirm, encoded_cases="",
+            screen_capture_interval=0.0):
         if self.running:
             raise gcmd.error("Feather UI test is already running")
         if suite not in VALID_SUITES:
@@ -201,8 +365,20 @@ class UITestRun:
                     suite, required_confirm))
         if encoded_cases and suite != "COMPONENT":
             raise gcmd.error("CASES is supported only by SUITE=COMPONENT")
+        try:
+            screen_capture_interval = float(screen_capture_interval)
+        except (TypeError, ValueError):
+            raise gcmd.error("CAPTURE_INTERVAL must be a number")
+        if (not math.isfinite(screen_capture_interval)
+                or screen_capture_interval < 0.0
+                or (screen_capture_interval != 0.0
+                    and screen_capture_interval < 5.0)
+                or screen_capture_interval > 300.0):
+            raise gcmd.error(
+                "CAPTURE_INTERVAL must be 0 or between 5 and 300 seconds")
         self._preflight(suite, hardware_targets=False)
         self.suite = suite
+        self.screen_capture_interval = screen_capture_interval
         self.component_cases = self.scenarios._decode_component_cases(
             encoded_cases) if suite == "COMPONENT" else ()
         self.material = self._resolve_material(material, suite)
@@ -213,6 +389,8 @@ class UITestRun:
         self.step_index = 0
         self.step_runtime = {}
         self.capture_number = 0
+        self.next_periodic_capture = None
+        self.periodic_capture_pending = 0
         self.calibration_stages = []
         self.test_results = {}
         self.capture_receipts = {}
@@ -247,6 +425,14 @@ class UITestRun:
             self._attach_context_recorder()
             self.running = True
             self.finalizing = False
+            self._start_reactor_probe()
+            self.next_periodic_capture = (
+                self.reactor.monotonic() + self.screen_capture_interval
+                if self.screen_capture_interval else None)
+            if self.next_periodic_capture is not None:
+                self.reactor.register_callback(
+                    self._periodic_capture_tick,
+                    self.next_periodic_capture)
             self._last_stage_revision = -1
             self._last_stage_signature = None
             self._event("run started suite=%s material=%s" %
@@ -257,6 +443,7 @@ class UITestRun:
             self._schedule(0.0)
         except Exception:
             self.running = False
+            self._stop_reactor_probe()
             self._detach_context_recorder()
             if self.worker is not None:
                 self.worker.stop()
@@ -272,8 +459,9 @@ class UITestRun:
             raise
 
     def _persist_resource_marker(self):
-        if self.run_directory is not None and self.running:
-            _atomic_json(ACTIVE_MARKER, self._marker(self.phase))
+        if (self.run_directory is not None and self.running
+                and self.worker is not None):
+            self.worker.marker(self._marker(self.phase))
 
     def _discard_active_marker(self):
         try:
@@ -429,7 +617,9 @@ class UITestRun:
         start_args = getattr(self.host.printer, "get_start_args", lambda: {})()
         return {
             "run_id": self.run_id, "suite": self.suite,
-            "material": self.material, "pid": os.getpid(),
+            "material": self.material,
+            "pid": os.getpid(),
+            "screen_capture_interval": self.screen_capture_interval,
             "software_version": start_args.get("software_version"),
             "ui_fingerprint": self._ui_fingerprint(),
             "theme": getattr(self.host.renderer, "theme_name", None),
@@ -508,6 +698,12 @@ class UITestRun:
         step = self.steps[self.step_index]
         self.phase = step["phase"]
         try:
+            if not self.step_runtime.get("trace_started"):
+                self.step_runtime["trace_started"] = True
+                self._event(
+                    "STEP_START index=%d kind=%s label=%s eventtime=%.6f" % (
+                        self.step_index, step["kind"], step["label"],
+                        eventtime))
             if self.worker is not None:
                 self.worker.marker(self._marker(self.phase))
             kind = step["kind"]
@@ -652,6 +848,8 @@ class UITestRun:
         metadata = self._screen_metadata()
         if step.get("case_id"):
             metadata["case_id"] = step["case_id"]
+        self._event("CAPTURE_QUEUED %s eventtime=%.6f" % (
+            step["label"], self.reactor.monotonic()))
         self.worker.capture(
             self.capture_number, step["label"], metadata,
             lambda result, item=step: self._capture_finished(item, result))
@@ -786,6 +984,7 @@ class UITestRun:
             self.failures.append({"step": "cleanup", "error": str(exc)})
             outcome = "failed"
             reason = reason or ("cleanup failed: %s" % exc)
+        self._stop_reactor_probe()
         recorder = self.context_recorder
         if recorder is not None:
             recorder.abort_active(reason or outcome)
@@ -806,7 +1005,9 @@ class UITestRun:
         }
         summary = {
             "run_id": self.run_id, "suite": self.suite,
-            "material": self.material, "outcome": outcome,
+            "material": self.material,
+            "outcome": outcome,
+            "screen_capture_interval": self.screen_capture_interval,
             "reason": reason, "failures": self.failures,
             "calibration_stages": self.calibration_stages,
             "test_results": self.test_results,
@@ -860,4 +1061,5 @@ class UITestRun:
         if self.worker is not None:
             self.worker.stop()
             self.worker = None
+        self._stop_reactor_probe()
         self.running = False

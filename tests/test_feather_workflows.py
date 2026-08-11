@@ -1199,6 +1199,23 @@ class PrintWorkflowTest(unittest.TestCase):
             controller._operation_context_text(10.0),
             "CALIBRATION -> NOZZLE CLEANING -> HEATING NOZZLE")
 
+    def test_status_exposes_loaded_ui_test_without_loading_it(self):
+        controller = base_controller()
+        controller.renderer = FEATHER.FeatherRenderer()
+        feature = type("Feature", (), {
+            "get_status": lambda self: {
+                "running": True, "suite": "UI", "phase": "render",
+                "step": "ui-home", "step_index": 4, "step_count": 10,
+            },
+        })()
+        controller.feature_manager = type("Features", (), {
+            "peek": lambda self, name: feature if name == "ui_test" else None,
+        })()
+
+        status = controller.get_status(10.0)
+
+        self.assertEqual(status["ui_test"]["step"], "ui-home")
+
     def test_operation_revision_redraws_print_status_once(self):
         controller = base_controller("printing")
         controller.page = FEATHER.Page.PRINTING
@@ -3859,6 +3876,35 @@ class RecoveryRobustnessTest(unittest.TestCase):
         self.assertEqual(pages, [])
         self.assertEqual(controller.gcode.commands, [
             "RESPOND TYPE=command MSG=action:prompt_end"])
+
+    def test_restore_uses_owned_recovery_state_while_print_stats_lags(self):
+        controller = base_controller(state="idle")
+        controller.resurrection = StatusObject({
+            "state": "printing", "available": False})
+        commands = []
+        messages = []
+        controller._run_script = commands.append
+        controller._show_message = lambda message, page: messages.append(
+            (message, page))
+
+        controller._run_recovery(0., "RESURRECT")
+
+        self.assertEqual(commands, ["RESURRECT"])
+        self.assertEqual(messages, [])
+
+    def test_restore_reports_recovery_rollback(self):
+        controller = base_controller(state="idle")
+        controller.resurrection = StatusObject({
+            "state": "resurrection", "available": True})
+        messages = []
+        controller._run_script = lambda command: None
+        controller._show_message = lambda message, page: messages.append(
+            (message, page))
+
+        controller._run_recovery(0., "RESURRECT")
+
+        self.assertEqual(messages, [
+            ("Restore did not start printing", FEATHER.Page.RECOVERY_PROMPT)])
 
 
 class ActionPromptProtocolTest(unittest.TestCase):

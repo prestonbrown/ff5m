@@ -85,6 +85,12 @@ class UITestFeature:
             return
         run.respond_status(gcmd)
 
+    def get_status(self):
+        run = self.current_run
+        if run is None:
+            return {"running": False}
+        return run.get_status()
+
     def abort(self, gcmd):
         run = self.current_run
         if run is None or not run.running:
@@ -92,13 +98,16 @@ class UITestFeature:
             return
         run.abort(gcmd)
 
-    def run(self, gcmd, suite, material, confirm, encoded_cases=""):
+    def run(self, gcmd, suite, material, confirm, encoded_cases="",
+            screen_capture_interval=0.0):
         if self.running:
             raise gcmd.error("Feather UI test is already running")
         candidate = UITestRun(
             self.host, session_id=self.session_id,
             on_finished=self._run_finished)
-        candidate.run(gcmd, suite, material, confirm, encoded_cases)
+        candidate.run(
+            gcmd, suite, material, confirm, encoded_cases,
+            screen_capture_interval)
         self.current_run = candidate
 
     def _run_finished(self, run):

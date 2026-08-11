@@ -608,6 +608,10 @@ class FeatherScreen(FeatherPagesMixin, FeatherControlsMixin):
             "cancel_blocker_name": operation["cancel_blocker_name"],
             "operation_revision": operation["revision"],
         })
+        manager = getattr(self, "feature_manager", None)
+        ui_test = None if manager is None else manager.peek("ui_test")
+        if ui_test is not None:
+            status["ui_test"] = ui_test.get_status()
         return status
 
     def cmd_FEATHER_UI_TEST(self, gcmd):
@@ -634,7 +638,8 @@ class FeatherScreen(FeatherPagesMixin, FeatherControlsMixin):
                 gcmd, str(gcmd.get("SUITE", "FULL")).strip().upper(),
                 str(gcmd.get("MATERIAL", "")).strip(),
                 int(gcmd.get_int("CONFIRM", 0)),
-                str(gcmd.get("CASES", "")).strip())
+                str(gcmd.get("CASES", "")).strip(),
+                str(gcmd.get("CAPTURE_INTERVAL", "0")).strip())
         except Exception as exc:
             raise gcmd.error(str(exc))
 
@@ -1681,7 +1686,11 @@ class FeatherScreen(FeatherPagesMixin, FeatherControlsMixin):
 
     def _update(self, eventtime):
         if self.print_state == PrintState.DESTROYED:
-            return None
+            # This is a direct reactor timer callback. Deactivation can yield
+            # while components are being torn down, so a final timer dispatch
+            # may observe DESTROYED before the timer is unregistered. Returning
+            # None corrupts the reactor timer heap; park the callback instead.
+            return self.reactor.NEVER
         try:
             waketime = self._update_cycle(eventtime)
         except Exception:

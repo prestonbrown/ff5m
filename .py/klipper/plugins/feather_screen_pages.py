@@ -1561,5 +1561,5 @@ class FeatherPagesMixin(FeatherNetworkPagesMixin):
             self._show_message("Recovery cleanup failed", Page.RECOVERY_PROMPT)
         elif command == "RESURRECT_ABORT":
             self._show_message("Recovery data cleaned up", Page.IDLE_HOME)
-        elif self.print_stats.get_status(self.reactor.monotonic())["state"] != "printing":
+        elif status.get("state") != "printing":
             self._show_message("Restore did not start printing", Page.RECOVERY_PROMPT)

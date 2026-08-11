@@ -4,6 +4,7 @@
 ##
 ## This file may be distributed under the terms of the GNU GPLv3 license
 
+import csv
 import hashlib
 import json
 import logging
@@ -80,7 +81,10 @@ class ArtifactWorker:
         self.framebuffer_pan = framebuffer_pan
         self.framebuffer_stride = framebuffer_stride
         self.printer_log = printer_log
-        self.tasks = queue.Queue()
+        # SimpleQueue.put() is unbounded and never waits for the artifact
+        # thread. Reactor callbacks only enqueue short work descriptions;
+        # framebuffer, telemetry and filesystem work remain off-thread.
+        self.tasks = queue.SimpleQueue()
         self.records = []
         self.log_start = self._file_size(printer_log)
         self.thread = threading.Thread(
@@ -105,7 +109,8 @@ class ArtifactWorker:
             self.reactor.register_callback(deliver)
 
     def log(self, message):
-        self.tasks.put(("log", str(message), None))
+        self.tasks.put(("log", (
+            time.time(), time.monotonic(), str(message)), None))
 
     def marker(self, value):
         self.tasks.put(("marker", value, None))
@@ -113,8 +118,11 @@ class ArtifactWorker:
     def telemetry(self, name, fields, values):
         self.tasks.put(("telemetry", (name, fields, values), None))
 
-    def capture(self, number, label, metadata, callback):
-        self.tasks.put(("capture", (number, label, metadata), callback))
+    def capture(self, number, label, metadata, callback, settle=True):
+        self.tasks.put((
+            "capture", (
+                number, label, metadata, bool(settle),
+                time.time(), time.monotonic()), callback))
 
     def finish(self, summary, callback):
         self.tasks.put(("finish", summary, callback))
@@ -125,11 +133,13 @@ class ArtifactWorker:
     def _work(self):
         while True:
             kind, payload, callback = self.tasks.get()
+            capture_started = None
+            value = None
             try:
                 if kind == "stop":
                     return
                 if kind == "log":
-                    self._append_log(payload)
+                    self._append_log(*payload)
                     continue
                 if kind == "marker":
                     _atomic_json(ACTIVE_MARKER, payload)
@@ -138,7 +148,8 @@ class ArtifactWorker:
                     self._append_telemetry(*payload)
                     continue
                 if kind == "capture":
-                    value = self._capture(*payload)
+                    capture_started = (time.time(), time.monotonic())
+                    value = self._capture(*payload[:4])
                 elif kind == "finish":
                     value = self._finish(payload)
                 else:
@@ -146,14 +157,66 @@ class ArtifactWorker:
             except Exception as exc:
                 logging.exception("[feather_ui_test] artifact task failed")
                 value = exc
+            if kind == "capture" and capture_started is not None:
+                finished_wall = time.time()
+                finished_monotonic = time.monotonic()
+                metadata = payload[2]
+                try:
+                    self._append_capture_timing({
+                        "number": payload[0], "label": payload[1],
+                        "capture_kind": metadata.get(
+                            "capture_kind", "semantic"),
+                        "phase": metadata.get("phase", ""),
+                        "page": metadata.get("page", ""),
+                        "settle": bool(payload[3]),
+                        "queued_time": payload[4],
+                        "queued_monotonic": payload[5],
+                        "started_time": capture_started[0],
+                        "started_monotonic": capture_started[1],
+                        "finished_time": finished_wall,
+                        "finished_monotonic": finished_monotonic,
+                        "queue_delay_ms": (
+                            (capture_started[1] - payload[5]) * 1000.0),
+                        "duration_ms": (
+                            (finished_monotonic - capture_started[1])
+                            * 1000.0),
+                        "success": not isinstance(value, Exception),
+                        "file": (value.get("file", "")
+                                 if isinstance(value, dict) else ""),
+                        "error": (str(value)
+                                  if isinstance(value, Exception) else ""),
+                    })
+                except Exception as exc:
+                    logging.exception(
+                        "[feather_ui_test] capture timing write failed")
+                    if not isinstance(value, Exception):
+                        value = exc
             if callback is not None:
                 self._reactor_callback(callback, value)
 
-    def _append_log(self, message):
+    def _append_log(self, observed_wall, observed_monotonic, message):
         with open(os.path.join(self.run_directory, "run.log"), "a",
                   encoding="utf-8") as stream:
-            stream.write("%s %s\n" % (
-                datetime.now().isoformat(timespec="milliseconds"), message))
+            observed = datetime.fromtimestamp(observed_wall).isoformat(
+                timespec="milliseconds")
+            stream.write("%s monotonic=%.6f %s\n" % (
+                observed, observed_monotonic, message))
+
+    def _append_capture_timing(self, record):
+        fields = (
+            "number", "label", "capture_kind", "phase", "page", "settle",
+            "queued_time",
+            "queued_monotonic", "started_time", "started_monotonic",
+            "finished_time", "finished_monotonic", "queue_delay_ms",
+            "duration_ms", "success", "file", "error",
+        )
+        path = os.path.join(self.run_directory, "artifact_timing.csv")
+        new_file = not os.path.exists(path)
+        with open(path, "a", encoding="utf-8", newline="") as stream:
+            writer = csv.DictWriter(stream, fieldnames=fields)
+            if new_file:
+                writer.writeheader()
+            writer.writerow(record)
 
     def _append_telemetry(self, name, fields, values):
         path = os.path.join(self.run_directory, "%s.csv" % name)
@@ -262,16 +325,20 @@ class ArtifactWorker:
             time.sleep(FRAME_SAMPLE_INTERVAL)
 
     @staticmethod
-    def _bmp(data):
-        size = 54 + len(data)
+    def _bmp_header(data_size):
+        size = 54 + data_size
         header = struct.pack("<2sIHHI", b"BM", size, 0, 0, 54)
         header += struct.pack(
             "<IiiHHIIIIII", 40, SCREEN_WIDTH, -SCREEN_HEIGHT,
-            1, 32, 0, len(data), 2835, 2835, 0, 0)
-        return header + data
+            1, 32, 0, data_size, 2835, 2835, 0, 0)
+        return header
 
-    def _capture(self, number, label, metadata):
-        data, digest = self._stable_frame()
+    def _capture(self, number, label, metadata, settle):
+        if settle:
+            data, digest = self._stable_frame()
+        else:
+            data = self._read_frame()
+            digest = hashlib.sha256(data).hexdigest()
         if not any(data):
             raise RuntimeError("Framebuffer is blank")
         safe_label = "".join(
@@ -279,7 +346,8 @@ class ArtifactWorker:
         safe_label = "_".join(filter(None, safe_label.split("_")))[:48]
         filename = "%03d-%s.bmp" % (number, safe_label or "screen")
         with open(os.path.join(self.run_directory, filename), "wb") as stream:
-            stream.write(self._bmp(data))
+            stream.write(self._bmp_header(len(data)))
+            stream.write(data)
         record = dict(metadata)
         record.update({
             "number": number, "label": label, "file": filename,
@@ -287,8 +355,6 @@ class ArtifactWorker:
             "framebuffer": getattr(self, "last_frame_geometry", None),
         })
         self.records.append(record)
-        _atomic_json(os.path.join(self.run_directory, "manifest.json"),
-                     self.records)
         return record
 
     def _copy_printer_log(self):
@@ -305,6 +371,11 @@ class ArtifactWorker:
 
     def _finish(self, summary):
         summary = dict(summary)
+        # Per-capture manifest fsyncs can stall the small printer host during
+        # timing-sensitive probing. The worker already owns every record, so
+        # publish the complete manifest once at its canonical finalization.
+        _atomic_json(os.path.join(self.run_directory, "manifest.json"),
+                     self.records)
         operation_context = summary.pop("_operation_context_artifact", None)
         if operation_context is not None:
             _atomic_json(os.path.join(

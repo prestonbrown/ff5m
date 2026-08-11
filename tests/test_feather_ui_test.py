@@ -1,5 +1,6 @@
 ## Host-side contracts for the lazy on-printer Feather UI runner.
 
+import csv
 import json
 import pathlib
 import tempfile
@@ -67,6 +68,25 @@ class ArtifactWorkerTest(unittest.TestCase):
         self.assertEqual(worker._read_frame.call_count, 6)
         self.assertEqual(sleep.call_count, 5)
 
+    def test_one_shot_capture_does_not_wait_for_a_quiet_framebuffer(self):
+        worker = object.__new__(ARTIFACTS.ArtifactWorker)
+        worker.run_directory = "/unused"
+        worker._read_frame = mock.Mock(return_value=b"current")
+        worker._stable_frame = mock.Mock(
+            side_effect=AssertionError("one-shot capture waited for settling"))
+        worker.records = []
+
+        with mock.patch.object(ARTIFACTS, "_atomic_json") as atomic_json, \
+                mock.patch("builtins.open", mock.mock_open()):
+            record = worker._capture(1, "periodic", {}, settle=False)
+
+        self.assertEqual(
+            record["sha256"],
+            ARTIFACTS.hashlib.sha256(b"current").hexdigest())
+        worker._read_frame.assert_called_once_with()
+        worker._stable_frame.assert_not_called()
+        atomic_json.assert_not_called()
+
     def test_frame_capture_reads_the_active_virtual_page(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = pathlib.Path(temporary)
@@ -123,6 +143,15 @@ class ArtifactWorkerTest(unittest.TestCase):
                 lambda value: (captured.append(value), captured_event.set()))
             self.assertTrue(captured_event.wait(3.0))
             self.assertFalse(isinstance(captured[0], Exception))
+            with (run / "artifact_timing.csv").open(
+                    newline="", encoding="utf-8") as stream:
+                timings = list(csv.DictReader(stream))
+            self.assertEqual(len(timings), 1)
+            self.assertEqual(timings[0]["label"], "Main menu")
+            self.assertEqual(timings[0]["capture_kind"], "semantic")
+            self.assertEqual(timings[0]["success"], "True")
+            self.assertGreaterEqual(float(timings[0]["queue_delay_ms"]), 0.0)
+            self.assertGreater(float(timings[0]["duration_ms"]), 0.0)
 
             worker.telemetry(
                 "positions", ("time", "x", "y", "z"),
@@ -393,6 +422,7 @@ class RunnerContractTest(unittest.TestCase):
         captures = []
         feature.worker = type("Worker", (), {
             "capture": lambda self, *args: captures.append(args),
+            "log": lambda self, message: None,
         })()
         step = {"kind": "capture", "label": "settled"}
 
@@ -432,6 +462,7 @@ class RunnerContractTest(unittest.TestCase):
         captures = []
         feature.worker = type("Worker", (), {
             "capture": lambda self, *args: captures.append(args),
+            "log": lambda self, message: None,
         })()
         step = {"kind": "capture", "label": "presented"}
 
@@ -532,6 +563,48 @@ class RunnerContractTest(unittest.TestCase):
         self.assertIn(UI_TEST.z_actions.DISCARD_CONFIRM.wire_id, actions)
         self.assertNotIn(UI_TEST.z_actions.SAVE.wire_id, actions)
         self.assertFalse(any("pid" in label.lower() for label in labels))
+
+    def test_reactor_probe_records_delay_and_unregisters_its_timer(self):
+        telemetry = []
+        unregistered = []
+
+        class Reactor:
+            NEVER = 1.0e30
+
+            @staticmethod
+            def monotonic():
+                return 10.0
+
+            @staticmethod
+            def register_timer(callback, when):
+                return (callback, when)
+
+            @staticmethod
+            def unregister_timer(timer):
+                unregistered.append(timer)
+
+        run = UI_TEST.UITestRun(type("Host", (), {
+            "reactor": Reactor(),
+        })())
+        run.running = True
+        run.worker = type("Worker", (), {
+            "telemetry": lambda self, name, fields, values:
+                telemetry.append((name, fields, values)),
+        })()
+        run._start_reactor_probe()
+        wake = run._reactor_probe_tick(11.45)
+        timer = run.reactor_probe_timer
+        run._stop_reactor_probe()
+
+        self.assertGreater(wake, 11.45)
+        self.assertEqual(telemetry[0][0], "reactor")
+        self.assertGreaterEqual(telemetry[0][2]["missed_deadlines"], 6)
+        self.assertGreater(telemetry[0][2]["max_lag_ms"], 1000.0)
+        self.assertEqual(telemetry[0][2]["max_lag_eventtime"], 11.45)
+        self.assertEqual(telemetry[0][2]["max_interval_eventtime"], 11.45)
+        self.assertEqual(telemetry[0][2]["phase"], "idle")
+        self.assertIsNone(telemetry[0][2]["step"])
+        self.assertEqual(unregistered, [timer])
 
     def test_ui_file_browser_returns_home_before_reopening_menu(self):
         feature = UI_TEST.UITestRun(object())
@@ -869,7 +942,10 @@ class RunnerContractTest(unittest.TestCase):
         controller = FEATHER.FeatherScreen.__new__(FEATHER.FeatherScreen)
         controller.feature_manager = LazyFeatureManager(
             controller, FEATHER.FEATURE_SPECS)
-        gcmd = GCmd({"ACTION": "RUN", "SUITE": "UI", "CONFIRM": 1})
+        gcmd = GCmd({
+            "ACTION": "RUN", "SUITE": "UI", "CONFIRM": 1,
+            "CAPTURE_INTERVAL": "5",
+        })
         calls = []
 
         with mock.patch.object(
@@ -879,7 +955,8 @@ class RunnerContractTest(unittest.TestCase):
 
         feature = controller.feature_manager.peek("ui_test")
         self.assertIsNotNone(feature)
-        self.assertEqual(calls, [(feature, (gcmd, "UI", "", 1, ""))])
+        self.assertEqual(calls, [(
+            feature, (gcmd, "UI", "", 1, "", "5"))])
 
     def test_feature_publishes_only_a_successfully_started_run(self):
         host = object()
@@ -914,6 +991,35 @@ class RunnerContractTest(unittest.TestCase):
         feature._run_finished(older)
 
         self.assertIs(feature.current_run, newer)
+
+    def test_running_feature_exposes_current_test_step_for_host_telemetry(self):
+        run = object.__new__(UI_TEST.UITestRun)
+        run.running = True
+        run.finalizing = False
+        run.suite = "CONTEXT_MATERIAL"
+        run.phase = "cold_pull"
+        run.step_index = 2
+        run.run_id = "synthetic-run"
+        run.run_directory = "/data/feather-ui-tests/synthetic-run"
+        run.steps = [
+            {"label": "prepare"},
+            {"label": "heat"},
+            {"label": "cool"},
+        ]
+        feature = UI_TEST_FEATURE.UITestFeature(object())
+        feature.current_run = run
+
+        self.assertEqual(feature.get_status(), {
+            "running": True,
+            "finalizing": False,
+            "run_id": "synthetic-run",
+            "directory": "/data/feather-ui-tests/synthetic-run",
+            "suite": "CONTEXT_MATERIAL",
+            "phase": "cold_pull",
+            "step": "cool",
+            "step_index": 2,
+            "step_count": 3,
+        })
 
     def test_failed_run_setup_removes_marker_directory_and_worker(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -992,6 +1098,74 @@ class RunnerContractTest(unittest.TestCase):
         ])
         self.assertTrue(run.finalizing)
         self.assertFalse(run.input_blocked)
+
+    def test_resource_marker_is_serialized_by_the_artifact_worker(self):
+        markers = []
+        run = UI_TEST.UITestRun(type("Host", (), {
+            "reactor": object(),
+        })())
+        run.running = True
+        run.run_id = "test-run"
+        run.run_directory = "/data/feather-ui-tests/test-run"
+        run.suite = "CONTEXT_PRINT"
+        run.phase = "context_print"
+        run.worker = type("Worker", (), {
+            "marker": lambda self, value: markers.append(value),
+        })()
+
+        with mock.patch.object(
+                UI_TEST, "_atomic_json",
+                side_effect=AssertionError("reactor wrote active marker")):
+            run._persist_resource_marker()
+
+        self.assertEqual(len(markers), 1)
+        self.assertEqual(markers[0]["run_id"], "test-run")
+        self.assertEqual(markers[0]["phase"], "context_print")
+
+    def test_periodic_capture_uses_one_shot_frame_and_minimal_metadata(self):
+        captures = []
+        callbacks = []
+        run = UI_TEST.UITestRun(type("Host", (), {
+            "reactor": type("Reactor", (), {
+                "register_callback": lambda self, callback, when:
+                    callbacks.append((when, callback)),
+            })(),
+        })())
+        run.running = True
+        run.screen_capture_interval = 5.0
+        run.next_periodic_capture = 105.0
+        run.worker = type("Worker", (), {
+            "capture": lambda self, number, label, metadata, callback,
+            settle=True:
+                captures.append((number, label, metadata, callback, settle)),
+            "log": lambda self, message: None,
+        })()
+        run.host.page = type("Page", (), {"name": "CALIBRATION_PROGRESS"})()
+        run.host.renderer = type("Renderer", (), {"generation": 12})()
+
+        run._periodic_capture_tick(104.9)
+        self.assertEqual(captures, [])
+
+        run._periodic_capture_tick(105.0)
+        self.assertEqual(len(captures), 1)
+        self.assertEqual(captures[0][1], "periodic-001")
+        self.assertEqual(captures[0][2]["capture_kind"], "periodic")
+        self.assertEqual(captures[0][2]["page"], "CALIBRATION_PROGRESS")
+        self.assertEqual(captures[0][2]["generation"], 12)
+        self.assertNotIn("buttons", captures[0][2])
+        self.assertFalse(captures[0][4])
+        self.assertEqual(run.periodic_capture_pending, 1)
+        self.assertEqual(run.next_periodic_capture, 110.0)
+        self.assertEqual(callbacks[0][0], 110.0)
+
+        captures[0][3]({"file": "001-periodic.bmp"})
+        self.assertEqual(run.periodic_capture_pending, 0)
+
+        callbacks[0][1](110.0)
+        self.assertEqual(len(captures), 2)
+
+        callbacks[1][1](115.0)
+        self.assertEqual(len(captures), 2)
 
     def test_interrupted_context_cleanup_removes_only_owned_resources(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -1109,6 +1283,20 @@ class RunnerContractTest(unittest.TestCase):
                         material_labels.index("prompt-Done"))
         self.assertLess(material_labels.index("filament-context-verify"),
                         material_labels.index("cold_pull-context-start"))
+        self.assertEqual([
+            step["label"] for step in material
+            if step["kind"] == "capture"
+        ], [
+            "baseline",
+            "filament-material-prompt-screen",
+            "filament-action-prompt-screen",
+            "filament-loaded-screen",
+            "filament-purged-screen",
+            "filament-unloaded-screen",
+            "filament-done-screen",
+            "cold_pull-material-prompt-screen",
+            "cold_pull-complete-screen",
+        ])
 
         printing = feature.scenarios.build_steps("CONTEXT_PRINT")
         print_labels = [step["label"] for step in printing]
@@ -1137,6 +1325,25 @@ class RunnerContractTest(unittest.TestCase):
         self.assertEqual(print_phases["recovery-complete"], "recovery")
         self.assertEqual(
             print_phases["print_kamp-complete"], "print_kamp")
+        self.assertEqual([
+            step["label"] for step in printing
+            if step["kind"] == "capture"
+        ], [
+            "baseline",
+            "print_mesh-printing-screen",
+            "print_mesh-paused-screen",
+            "print_mesh-resumed-screen",
+            "print_mesh-recovery-paused-screen",
+            "print_mesh-cancelled-screen",
+            "print_mesh-recovery-prompt-screen",
+            "recovery-confirm-screen",
+            "recovery-progress-screen",
+            "recovery-printing-screen",
+            "recovery-complete-screen",
+            "print_kamp-confirm-screen",
+            "print_kamp-printing-screen",
+            "print_kamp-complete-screen",
+        ])
 
         full_labels = [
             step["label"] for step in feature.scenarios.build_steps("FULL")]
@@ -1144,6 +1351,46 @@ class RunnerContractTest(unittest.TestCase):
                              for label in full_labels))
         self.assertFalse(any(label.startswith("context_material-")
                              for label in full_labels))
+
+    def test_context_cancel_arms_recovery_before_checkpoint_cleanup(self):
+        class State:
+            pass
+
+        State.PAUSED = State()
+        State.RESURRECTION = State()
+
+        checkpoint = {"present": True}
+        resurrection = type("Resurrection", (), {})()
+        resurrection.state = State.PAUSED
+        resurrection._pause_checkpoint_active = True
+        resurrection._resume_pending = True
+        resurrection._change_state = lambda state: setattr(
+            resurrection, "state", state)
+
+        def cancel():
+            if resurrection.state != State.RESURRECTION:
+                checkpoint["present"] = False
+
+        host = type("Host", (), {
+            "resurrection": resurrection,
+            "virtual_sdcard": type("SD", (), {
+                "do_cancel": lambda self: cancel(),
+            })(),
+        })()
+        fixture = type("Fixture", (), {
+            "checkpoint_ready": lambda self: checkpoint["present"],
+        })()
+        run = type("Run", (), {
+            "host": host,
+            "context_fixture": fixture,
+        })()
+
+        SCENARIOS.ScenarioCatalog(run)._cancel_context_print()
+
+        self.assertTrue(checkpoint["present"])
+        self.assertEqual(resurrection.state, State.RESURRECTION)
+        self.assertFalse(resurrection._pause_checkpoint_active)
+        self.assertFalse(resurrection._resume_pending)
 
     def test_action_prompt_selection_uses_exact_visible_label(self):
         host = type("Host", (), {})()
@@ -1255,6 +1502,16 @@ class RunnerContractTest(unittest.TestCase):
             with self.subTest(suite=suite), self.assertRaisesRegex(
                     RuntimeError, "requires CONFIRM=2"):
                 feature.run(gcmd, suite, "PLA", 1)
+
+    def test_periodic_capture_interval_is_bounded_on_printer(self):
+        feature = UI_TEST.UITestRun(object())
+        gcmd = GCmd()
+        for interval in (-1, 4.9, 301, float("nan")):
+            with self.subTest(interval=interval), self.assertRaisesRegex(
+                    RuntimeError, "CAPTURE_INTERVAL"):
+                feature.run(
+                    gcmd, "UI", "", 1,
+                    screen_capture_interval=interval)
 
     def test_context_print_preflight_rejects_foreign_checkpoint(self):
         with tempfile.TemporaryDirectory() as temporary:
