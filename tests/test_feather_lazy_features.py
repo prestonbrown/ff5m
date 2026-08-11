@@ -90,7 +90,7 @@ class LazyImportContractTest(unittest.TestCase):
 import sys
 import feather_screen
 blocked = (
-    'feather_feature_ui_test',
+    'feather_feature_ui_test', 'feather_ui_test',
     'feather_feature_filament', 'ff5m_ui.filament',
     'feather_feature_calibration', 'feather_feature_z',
     'feather_feature_extruder', 'feather_feature_settings',
@@ -189,7 +189,7 @@ except ValueError as error:
 else:
     raise AssertionError('invalid raster acceleration was accepted')
 blocked = (
-    'feather_feature_ui_test',
+    'feather_feature_ui_test', 'feather_ui_test',
     'feather_feature_filament', 'ff5m_ui.filament',
     'feather_feature_calibration', 'feather_feature_z',
     'feather_feature_extruder', 'feather_feature_settings',

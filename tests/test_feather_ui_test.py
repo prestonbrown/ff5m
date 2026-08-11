@@ -14,8 +14,11 @@ PLUGINS = ROOT / ".py" / "klipper" / "plugins"
 import sys
 sys.path.insert(0, str(PLUGINS))
 
-import feather_feature_ui_test as UI_TEST  # noqa: E402
-import feather_operation_context_fixtures as CONTEXT_FIXTURES  # noqa: E402
+from feather_ui_test import feature as UI_TEST_FEATURE  # noqa: E402
+from feather_ui_test import artifacts as ARTIFACTS  # noqa: E402
+from feather_ui_test import runner as UI_TEST  # noqa: E402
+from feather_ui_test import scenarios as SCENARIOS  # noqa: E402
+from feather_ui_test import context_fixtures as CONTEXT_FIXTURES  # noqa: E402
 import feather_screen as FEATHER  # noqa: E402
 from feather_feature_manager import LazyFeatureManager  # noqa: E402
 from tests.visual_checks import hybrid as HYBRID  # noqa: E402
@@ -46,20 +49,21 @@ class GCmd:
 
 class ArtifactWorkerTest(unittest.TestCase):
     def test_frame_capture_requires_continuous_quiet_window(self):
-        worker = object.__new__(UI_TEST.ArtifactWorker)
+        worker = object.__new__(ARTIFACTS.ArtifactWorker)
         frames = [b"first", b"first", b"second", b"second",
                   b"second", b"second"]
         worker._read_frame = mock.Mock(side_effect=frames)
 
-        with mock.patch.object(UI_TEST, "FRAME_SETTLE_INTERVAL", 0.15), \
-                mock.patch.object(UI_TEST, "FRAME_SETTLE_TIMEOUT", 2.0), \
-                mock.patch.object(UI_TEST.time, "monotonic", side_effect=(
+        with mock.patch.object(ARTIFACTS, "FRAME_SETTLE_INTERVAL", 0.15), \
+                mock.patch.object(ARTIFACTS, "FRAME_SETTLE_TIMEOUT", 2.0), \
+                mock.patch.object(ARTIFACTS.time, "monotonic", side_effect=(
                     0.0, 0.0, 0.05, 0.10, 0.15, 0.20, 0.25, 0.30)), \
-                mock.patch.object(UI_TEST.time, "sleep") as sleep:
+                mock.patch.object(ARTIFACTS.time, "sleep") as sleep:
             data, digest = worker._stable_frame()
 
         self.assertEqual(data, b"second")
-        self.assertEqual(digest, UI_TEST.hashlib.sha256(b"second").hexdigest())
+        self.assertEqual(
+            digest, ARTIFACTS.hashlib.sha256(b"second").hexdigest())
         self.assertEqual(worker._read_frame.call_count, 6)
         self.assertEqual(sleep.call_count, 5)
 
@@ -70,13 +74,13 @@ class ArtifactWorkerTest(unittest.TestCase):
             pan = root / "pan"
             stride = root / "stride"
             first = b"\x11\x22\x33\xff" * (
-                UI_TEST.SCREEN_WIDTH * UI_TEST.SCREEN_HEIGHT)
+                ARTIFACTS.SCREEN_WIDTH * ARTIFACTS.SCREEN_HEIGHT)
             second = b"\xaa\xbb\xcc\xff" * (
-                UI_TEST.SCREEN_WIDTH * UI_TEST.SCREEN_HEIGHT)
+                ARTIFACTS.SCREEN_WIDTH * ARTIFACTS.SCREEN_HEIGHT)
             framebuffer.write_bytes(first + second)
             pan.write_text("0,480\n", encoding="ascii")
             stride.write_text("3200\n", encoding="ascii")
-            worker = object.__new__(UI_TEST.ArtifactWorker)
+            worker = object.__new__(ARTIFACTS.ArtifactWorker)
             worker.framebuffer = str(framebuffer)
             worker.framebuffer_pan = str(pan)
             worker.framebuffer_stride = str(stride)
@@ -84,7 +88,7 @@ class ArtifactWorkerTest(unittest.TestCase):
             self.assertEqual(worker._read_frame(), second)
 
     def test_frame_capture_retries_if_page_flips_during_read(self):
-        worker = object.__new__(UI_TEST.ArtifactWorker)
+        worker = object.__new__(ARTIFACTS.ArtifactWorker)
         first = b"first"
         second = b"second"
         worker._read_stride = mock.Mock(return_value=3200)
@@ -101,7 +105,7 @@ class ArtifactWorkerTest(unittest.TestCase):
             run = root / "20260729-120000-ui"
             run.mkdir()
             framebuffer = root / "fb0"
-            pixels = bytearray(UI_TEST.FRAME_BYTES)
+            pixels = bytearray(ARTIFACTS.FRAME_BYTES)
             pixels[0:4] = b"\x03\x06\x07\xff"
             framebuffer.write_bytes(pixels)
             printer_log = root / "printer.log"
@@ -109,7 +113,7 @@ class ArtifactWorkerTest(unittest.TestCase):
             active = root / "active.json"
             active.write_text("{}\n", encoding="utf-8")
 
-            worker = UI_TEST.ArtifactWorker(
+            worker = ARTIFACTS.ArtifactWorker(
                 AsyncReactor(), str(run), str(framebuffer), str(printer_log))
             printer_log.write_text("before\nafter\n", encoding="utf-8")
             captured = []
@@ -126,7 +130,7 @@ class ArtifactWorkerTest(unittest.TestCase):
             worker.log("finished phase")
             finished = []
             finished_event = threading.Event()
-            with mock.patch.object(UI_TEST, "ACTIVE_MARKER", str(active)):
+            with mock.patch.object(ARTIFACTS, "ACTIVE_MARKER", str(active)):
                 worker.finish(
                     {"outcome": "passed",
                      "operation_context": {
@@ -141,7 +145,8 @@ class ArtifactWorkerTest(unittest.TestCase):
 
             bmp = run / captured[0]["file"]
             self.assertEqual(bmp.read_bytes()[:2], b"BM")
-            self.assertEqual(bmp.stat().st_size, UI_TEST.FRAME_BYTES + 54)
+            self.assertEqual(
+                bmp.stat().st_size, ARTIFACTS.FRAME_BYTES + 54)
             manifest = json.loads((run / "manifest.json").read_text())
             self.assertEqual(manifest[0]["page"], "MAIN_MENU")
             self.assertTrue(manifest[0]["passed"])
@@ -172,11 +177,11 @@ class ArtifactWorkerTest(unittest.TestCase):
                 outcome = "failed" if index == 3 else "passed"
                 (directory / "summary.json").write_text(
                     json.dumps({"outcome": outcome}), encoding="utf-8")
-            worker = UI_TEST.ArtifactWorker(
+            worker = ARTIFACTS.ArtifactWorker(
                 AsyncReactor(), str(current), "/missing-fb", "/missing-log")
 
-            with mock.patch.object(UI_TEST, "MAX_RUNS", 3), \
-                    mock.patch.object(UI_TEST, "MAX_BYTES", 1024 * 1024):
+            with mock.patch.object(ARTIFACTS, "MAX_RUNS", 3), \
+                    mock.patch.object(ARTIFACTS, "MAX_BYTES", 1024 * 1024):
                 worker._retain()
             worker.stop()
 
@@ -198,7 +203,7 @@ class RunnerContractTest(unittest.TestCase):
             "command_depth": 1,
             "busy_message": "HOMING...",
         })()
-        feature = UI_TEST.UITestFeature(host)
+        feature = UI_TEST.UITestRun(host)
         feature.running = True
         feature.step_index = 4
         events = []
@@ -210,9 +215,9 @@ class RunnerContractTest(unittest.TestCase):
         feature._after_tap(10.0, step, FEATHER.Page.CONTROL_MOVE)
 
         self.assertEqual(feature.step_index, 4)
-        self.assertEqual(step["operation_deadline"],
+        self.assertEqual(feature.step_runtime["operation_deadline"],
                          10.0 + UI_TEST.TAP_OPERATION_TIMEOUT)
-        self.assertTrue(step["expected_page_seen"])
+        self.assertTrue(feature.step_runtime["expected_page_seen"])
         self.assertEqual(callbacks[0][1], 10.1)
         host.command_depth = 0
         host.busy_message = None
@@ -223,6 +228,7 @@ class RunnerContractTest(unittest.TestCase):
         self.assertEqual(feature.step_index, 5)
         self.assertEqual(events, ["PASS move.homeall"])
         self.assertEqual(schedules, [0.02])
+        self.assertEqual(step, {"kind": "tap", "label": "move.homeall"})
 
     def test_motion_return_clamps_homing_overshoot_to_ui_limits(self):
         position = [110.0, 109.1, 220.0]
@@ -244,16 +250,20 @@ class RunnerContractTest(unittest.TestCase):
             "toolhead": toolhead,
             "_feather_move_limits": lambda self, status: (
                 (-110.0, 110.0), (-110.0, 110.0), (0.0, 220.0)),
-            "_dispatch_action": dispatch,
+            "_start_touch_action": dispatch,
+            "renderer": type("Renderer", (), {
+                "_buttons": {SCENARIOS.move_actions.Y_PLUS.wire_id: ()},
+                "_toggles": {}, "_hitboxes": {},
+            })(),
         })()
-        feature = UI_TEST.UITestFeature(host)
-        feature.motion_origin = (110.0, 110.099675, 220.0)
+        feature = UI_TEST.UITestRun(host)
+        feature.scenarios.motion_origin = (110.0, 110.099675, 220.0)
 
-        feature._motion_step("y", -1)
+        feature.scenarios._motion_step("y", -1)
 
         self.assertEqual(
-            dispatched, [UI_TEST.move_actions.Y_PLUS.wire_id])
-        self.assertEqual(feature.motion_expected, 110.0)
+            dispatched, [SCENARIOS.move_actions.Y_PLUS.wire_id])
+        self.assertEqual(feature.scenarios.motion_expected, 110.0)
 
     def test_motion_step_waits_for_delayed_toolhead_update(self):
         position = [110.006, 109.0, 220.0]
@@ -270,19 +280,24 @@ class RunnerContractTest(unittest.TestCase):
             "toolhead": toolhead,
             "_feather_move_limits": lambda self, status: (
                 (-110.0, 110.0), (-110.0, 110.0), (0.0, 220.0)),
-            "_dispatch_action": lambda self, action: dispatched.append(action),
+            "_start_touch_action": (
+                lambda self, action: dispatched.append(action)),
+            "renderer": type("Renderer", (), {
+                "_buttons": {SCENARIOS.move_actions.X_MINUS.wire_id: ()},
+                "_toggles": {}, "_hitboxes": {},
+            })(),
         })()
-        feature = UI_TEST.UITestFeature(host)
-        feature.motion_origin = tuple(position)
+        feature = UI_TEST.UITestRun(host)
+        feature.scenarios.motion_origin = tuple(position)
 
-        feature._motion_step("x", 1)
+        feature.scenarios._motion_step("x", 1)
 
         self.assertEqual(
-            dispatched, [UI_TEST.move_actions.X_MINUS.wire_id])
-        self.assertFalse(feature._motion_reached("x"))
-        position[0] = feature.motion_expected
-        self.assertTrue(feature._motion_reached("x"))
-        labels = [step["label"] for step in feature._build_steps("MOTION")]
+            dispatched, [SCENARIOS.move_actions.X_MINUS.wire_id])
+        self.assertFalse(feature.scenarios._motion_reached("x"))
+        position[0] = feature.scenarios.motion_expected
+        self.assertTrue(feature.scenarios._motion_reached("x"))
+        labels = [step["label"] for step in feature.scenarios.build_steps("MOTION")]
         self.assertLess(labels.index("motion-x-forward-dispatch"),
                         labels.index("motion-x-forward-complete"))
         self.assertLess(labels.index("motion-x-forward-complete"),
@@ -298,10 +313,10 @@ class RunnerContractTest(unittest.TestCase):
             else statuses[0],
             "restart": lambda self: True,
         })()
-        feature = UI_TEST.UITestFeature(type("Host", (), {
+        feature = UI_TEST.UITestRun(type("Host", (), {
             "renderer": renderer,
         })())
-        steps = feature._build_steps("RENDER")
+        steps = feature.scenarios.build_steps("RENDER")
         labels = [step["label"] for step in steps]
 
         self.assertEqual(labels, [
@@ -322,7 +337,7 @@ class RunnerContractTest(unittest.TestCase):
             "send": lambda self, *args, **kwargs: True,
         })()
         reactor = type("Reactor", (), {"monotonic": lambda self: 10.0})()
-        feature = UI_TEST.UITestFeature(type("Host", (), {
+        feature = UI_TEST.UITestRun(type("Host", (), {
             "renderer": renderer, "reactor": reactor,
         })())
         scheduled = []
@@ -360,7 +375,7 @@ class RunnerContractTest(unittest.TestCase):
                 return True
 
         reactor = type("Reactor", (), {"monotonic": lambda self: 10.0})()
-        feature = UI_TEST.UITestFeature(type("Host", (), {
+        feature = UI_TEST.UITestRun(type("Host", (), {
             "renderer": Renderer(), "reactor": reactor,
         })())
         feature.running = True
@@ -378,7 +393,7 @@ class RunnerContractTest(unittest.TestCase):
         self.assertEqual(captures, [])
         self.assertEqual(len(submissions), 1)
         self.assertIn("--receipt-phase presented", submissions[0][0][0])
-        token = step["capture_receipt"]
+        token = feature.step_runtime["capture_receipt"]
         receipt = type("Receipt", (), {
             "token": token, "success": True,
         })()
@@ -387,16 +402,17 @@ class RunnerContractTest(unittest.TestCase):
 
         self.assertEqual(len(captures), 1)
         self.assertNotIn(token, feature.capture_receipts)
+        self.assertEqual(step, {"kind": "capture", "label": "presented"})
 
     def test_full_suite_order_and_z_safety_sequence(self):
         renderer = type("Renderer", (), {
             "get_status": lambda self: {"typer_restarts": 0},
         })()
-        feature = UI_TEST.UITestFeature(type("Host", (), {
+        feature = UI_TEST.UITestRun(type("Host", (), {
             "renderer": renderer,
         })())
         feature.material = "PLA"
-        steps = feature._build_steps("FULL")
+        steps = feature.scenarios.build_steps("FULL")
         labels = [step["label"] for step in steps]
 
         first = dict((phase, next(index for index, label in enumerate(labels)
@@ -407,7 +423,7 @@ class RunnerContractTest(unittest.TestCase):
             "ui", "render", "motion", "heat", "screws", "mesh", "z"])
         self.assertEqual(list(first.values()), sorted(first.values()))
         actions = [step.get("action") for step in steps]
-        self.assertIn(UI_TEST.move_actions.HOME_ALL.wire_id, actions)
+        self.assertIn(SCENARIOS.move_actions.HOME_ALL.wire_id, actions)
         self.assertNotIn("move.homeall", actions)
         self.assertEqual(
             actions.count(UI_TEST.z_actions.FARTHER.wire_id), 10)
@@ -418,8 +434,8 @@ class RunnerContractTest(unittest.TestCase):
         self.assertFalse(any("pid" in label.lower() for label in labels))
 
     def test_ui_file_browser_returns_home_before_reopening_menu(self):
-        feature = UI_TEST.UITestFeature(object())
-        steps = feature._build_steps("UI")
+        feature = UI_TEST.UITestRun(object())
+        steps = feature.scenarios.build_steps("UI")
         labels = [step["label"] for step in steps]
         returned = labels.index("ui-file-return")
 
@@ -431,9 +447,9 @@ class RunnerContractTest(unittest.TestCase):
             ("nav.menu", FEATHER.Page.MAIN_MENU))
 
     def test_component_suite_discovers_declarative_pages_without_hardware(self):
-        feature = UI_TEST.UITestFeature(object())
+        feature = UI_TEST.UITestRun(object())
 
-        steps = feature._build_steps("COMPONENT")
+        steps = feature.scenarios.build_steps("COMPONENT")
         labels = [step["label"] for step in steps]
         captures = [
             label for step, label in zip(steps, labels)
@@ -459,10 +475,10 @@ class RunnerContractTest(unittest.TestCase):
         page.title = "FORGE-X // FEATHER"
         page.page_key.value = "HOME.DASHBOARD"
         page.draw.return_value = ["body"]
-        feature = UI_TEST.UITestFeature(object())
+        feature = UI_TEST.UITestRun(object())
         feature.host = mock.Mock(renderer=renderer)
 
-        feature._render_component_default(page)
+        feature.scenarios._render_component_default(page)
 
         renderer.begin_page.assert_called_once_with(
             "FORGE-X // FEATHER", back=False)
@@ -471,7 +487,7 @@ class RunnerContractTest(unittest.TestCase):
             25.0, 0.0, 25.0, 0.0, "PREVIEW", "IDLE")
 
     def test_component_cases_accept_only_known_mutable_typed_state(self):
-        feature = UI_TEST.UITestFeature(object())
+        feature = UI_TEST.UITestRun(object())
         payload = [{
             "id": "move-fine",
             "page": "ui.pages.keys.AppPage.MOVE_STEP",
@@ -479,10 +495,10 @@ class RunnerContractTest(unittest.TestCase):
                 "ui.pages.move.state.MoveState.JOG_STEP": 0.1,
             },
         }]
-        encoded = UI_TEST.base64.urlsafe_b64encode(
+        encoded = SCENARIOS.base64.urlsafe_b64encode(
             json.dumps(payload).encode("utf-8")).decode("ascii")
 
-        cases = feature._decode_component_cases(encoded)
+        cases = feature.scenarios._decode_component_cases(encoded)
 
         self.assertEqual(len(cases), 1)
         self.assertEqual(cases[0]["id"], "move-fine")
@@ -493,10 +509,10 @@ class RunnerContractTest(unittest.TestCase):
         payload[0]["state"] = {
             "ui.pages.move.state.MoveState.CURSOR": [10, 20],
         }
-        encoded = UI_TEST.base64.urlsafe_b64encode(
+        encoded = SCENARIOS.base64.urlsafe_b64encode(
             json.dumps(payload).encode("utf-8")).decode("ascii")
         with self.assertRaisesRegex(ValueError, "bounded declared state"):
-            feature._decode_component_cases(encoded)
+            feature.scenarios._decode_component_cases(encoded)
 
         payload[0].update({
             "page": "ui.pages.keys.AppPage.Z_OFFSET_PAPER",
@@ -504,21 +520,21 @@ class RunnerContractTest(unittest.TestCase):
                 "ui.pages.z_offset.paper.state.PaperState.PROBING": True,
             },
         })
-        encoded = UI_TEST.base64.urlsafe_b64encode(
+        encoded = SCENARIOS.base64.urlsafe_b64encode(
             json.dumps(payload).encode("utf-8")).decode("ascii")
-        readonly = feature._decode_component_cases(encoded)
+        readonly = feature.scenarios._decode_component_cases(encoded)
         self.assertEqual(
             [str(key) for key in readonly[0]["state"]],
             ["ui.pages.z_offset.paper.state.PaperState.PROBING"])
 
     def test_printer_and_host_use_the_same_ui_fingerprint_contract(self):
         self.assertEqual(
-            UI_TEST.UITestFeature._ui_fingerprint(),
+            UI_TEST.UITestRun._ui_fingerprint(),
             HYBRID.ui_fingerprint(ROOT))
 
     def test_ui_filament_back_preserves_target_before_leaving_materials(self):
-        feature = UI_TEST.UITestFeature(object())
-        steps = feature._build_steps("UI")
+        feature = UI_TEST.UITestRun(object())
+        steps = feature.scenarios.build_steps("UI")
         labels = [step["label"] for step in steps]
         action_capture = next(
             index for index, step in enumerate(steps)
@@ -571,11 +587,11 @@ class RunnerContractTest(unittest.TestCase):
             "get": lambda self, name: filament,
         })()
         host._show_page = show
-        feature = UI_TEST.UITestFeature(host)
+        feature = UI_TEST.UITestRun(host)
         feature.material = "PETG"
 
-        feature._render_safe_filament_action()
-        feature._render_safe_filament_cooling()
+        feature.scenarios._render_safe_filament_action()
+        feature.scenarios._render_safe_filament_cooling()
 
         self.assertIs(host.extruder, original)
         self.assertEqual(host.filament_material, "PETG")
@@ -594,15 +610,15 @@ class RunnerContractTest(unittest.TestCase):
             "page": FEATHER.Page.IDLE_HOME,
             "_show_page": lambda self, page: setattr(self, "page", page),
         })()
-        feature = UI_TEST.UITestFeature(host)
+        feature = UI_TEST.UITestRun(host)
 
-        feature._open_calibration_home()
+        feature.scenarios._open_calibration_home()
 
         self.assertEqual(calibration.calibration_page, 0)
         self.assertEqual(host.page, FEATHER.Page.CALIBRATION_HOME)
 
     def test_test_mode_blocks_only_persistent_actions(self):
-        feature = UI_TEST.UITestFeature(object())
+        feature = UI_TEST.UITestRun(object())
         self.assertFalse(feature.blocks_action("z.save"))
         feature.running = True
         self.assertTrue(feature.input_blocked)
@@ -613,6 +629,10 @@ class RunnerContractTest(unittest.TestCase):
             UI_TEST.z_actions.SAFE_SAVE.wire_id))
         self.assertTrue(feature.blocks_action("cal.mesh.save"))
         self.assertFalse(feature.blocks_action("z.farther"))
+        feature.finalizing = True
+        self.assertFalse(feature.input_blocked)
+        self.assertFalse(feature.theme_update_blocked)
+        self.assertFalse(feature.blocks_action("cal.mesh.save"))
 
     def test_controller_drops_persistent_action_while_runner_is_active(self):
         controller = FEATHER.FeatherScreen.__new__(FEATHER.FeatherScreen)
@@ -622,41 +642,41 @@ class RunnerContractTest(unittest.TestCase):
         controller.feature_manager = LazyFeatureManager(
             controller, FEATHER.FEATURE_SPECS)
         feature = controller.feature_manager.get("ui_test")
-        feature.running = True
+        run = UI_TEST.UITestRun(controller)
+        run.running = True
+        feature.current_run = run
 
         # Returning before page routing is the contract: no save handler or
         # additional controller fixture is needed for this safety check.
         controller._dispatch_action("cal.mesh.save")
 
-    def test_test_action_propagates_controller_failure_after_message(self):
+    def test_test_action_keeps_feedback_timing_and_reports_failure(self):
         class FailingOwner:
+            name = "failing"
+
             def allows_action(self, page, action):
                 return True
 
             def handle_action(self, page, action):
                 raise RuntimeError("synthetic command failed")
 
-        class Manager:
-            def __init__(self, feature):
-                self.feature = feature
-                self.owner = FailingOwner()
+        callbacks = []
+        feature = UI_TEST.UITestRun(None)
+        owner = FailingOwner()
 
-            def peek(self, name):
-                return self.feature if name == "ui_test" else None
+        class Manager:
+            input_blocked = True
 
             def owner_name(self, page):
-                return "failing"
+                return owner.name
 
             def resolve_semantic_action(self, page, action):
-                return self.owner, None
+                return owner, None
 
             def handle_immediate_action(self, page, action):
                 return False
 
-            @property
-            def input_blocked(self):
-                return False
-
+        feedback = []
         controller = FEATHER.FeatherScreen.__new__(FEATHER.FeatherScreen)
         controller.print_state = FEATHER.PrintState.IDLE
         controller.command_depth = 0
@@ -665,29 +685,56 @@ class RunnerContractTest(unittest.TestCase):
         controller.previous_page = FEATHER.Page.IDLE_HOME
         controller.last_action_time = -1.0
         controller.pending_action = None
+        controller.touch_feedback_pending = False
         controller.reactor = type("Reactor", (), {
             "monotonic": lambda self: 1.0,
+            "register_callback": lambda self, callback, waketime=None:
+            callbacks.append(callback),
         })()
-        feature = UI_TEST.UITestFeature(controller)
-        controller.feature_manager = Manager(feature)
+        controller.renderer = type("Renderer", (), {
+            "generation": 1,
+            "_buttons": {"synthetic.action": ()},
+            "_toggles": {},
+            "_hitboxes": {},
+            "flash_button": lambda self, action:
+            feedback.append(("down", action)) or True,
+            "restore_button": lambda self, action:
+            feedback.append(("up", action)) or True,
+        })()
+        controller.feature_manager = Manager()
         messages = []
-        controller._show_message = lambda message, page: messages.append(
-            (message, page))
 
-        controller._dispatch_action("synthetic.action")
+        def show_message(message, page):
+            messages.append((message, page))
+            controller.message = message
+            controller.page = FEATHER.Page.MESSAGE
+
+        controller._show_message = show_message
+        feature.host = controller
+        feature.running = True
+        completed = []
+        feature._complete = lambda outcome, reason: completed.append(
+            (outcome, reason))
+
+        controller._handle_touch_action("synthetic.action")
+        self.assertEqual(feedback, [])
+
+        feature._tap("synthetic.action")
+        self.assertEqual(feedback, [("down", "synthetic.action")])
+
+        callbacks.pop()(1.08)
+        self.assertEqual(feedback[-1], ("up", "synthetic.action"))
         self.assertEqual(messages, [("synthetic command failed",
                                      FEATHER.Page.IDLE_HOME)])
 
-        feature.dispatching_test_action = True
-        controller.last_action_time = -1.0
-        with self.assertRaisesRegex(RuntimeError, "synthetic command failed"):
-            controller._handle_touch_action("synthetic.action")
-        self.assertEqual(len(messages), 2)
+        feature._after_tap(1.22, {"label": "synthetic.action"}, None)
+        self.assertEqual(completed, [("failed", "synthetic command failed")])
 
     def test_nonphysical_cleanup_does_not_issue_hardware_gcode(self):
         shown = []
         host = type("Host", (), {
             "timer": None,
+            "reactor": type("Reactor", (), {"NOW": 0.0})(),
             "filament_material": "PETG",
             "previous_page": FEATHER.Page.MAIN_MENU,
             "_run_script": lambda self, command: (_ for _ in ()).throw(
@@ -695,13 +742,11 @@ class RunnerContractTest(unittest.TestCase):
             "_show_page": lambda self, page: shown.append(page),
         })()
         for suite in ("UI", "COMPONENT", "RENDER"):
-            feature = UI_TEST.UITestFeature(host)
+            feature = UI_TEST.UITestRun(host)
             feature.suite = suite
-            feature.original = {
-                "filament_material": "PLA", "timer_active": False,
-                "page": FEATHER.Page.IDLE_HOME,
-                "previous_page": FEATHER.Page.CONTROL_HOME,
-            }
+            feature.snapshot = UI_TEST.PrinterStateSnapshot(
+                FEATHER.Page.IDLE_HOME, FEATHER.Page.CONTROL_HOME,
+                "PLA", 0.0, None, "", 0.0, 0.0, 0.0, False)
             feature._restore_state()
 
         self.assertEqual(host.filament_material, "PLA")
@@ -728,13 +773,167 @@ class RunnerContractTest(unittest.TestCase):
         calls = []
 
         with mock.patch.object(
-                UI_TEST.UITestFeature, "run",
+                UI_TEST_FEATURE.UITestFeature, "run",
                 lambda feature, *args: calls.append((feature, args))):
             controller.cmd_FEATHER_UI_TEST(gcmd)
 
         feature = controller.feature_manager.peek("ui_test")
         self.assertIsNotNone(feature)
         self.assertEqual(calls, [(feature, (gcmd, "UI", "", 1, ""))])
+
+    def test_feature_publishes_only_a_successfully_started_run(self):
+        host = object()
+        feature = UI_TEST_FEATURE.UITestFeature(host)
+        gcmd = GCmd()
+        started = []
+
+        class Candidate:
+            running = False
+
+            def __init__(self, candidate_host, session_id, on_finished):
+                self.host = candidate_host
+                self.on_finished = on_finished
+
+            def run(self, *args):
+                started.append(args)
+                raise RuntimeError("setup failed")
+
+        with mock.patch.object(UI_TEST_FEATURE, "UITestRun", Candidate):
+            with self.assertRaisesRegex(RuntimeError, "setup failed"):
+                feature.run(gcmd, "UI", "", 1)
+
+        self.assertIsNone(feature.current_run)
+        self.assertEqual(len(started), 1)
+
+    def test_late_finished_callback_cannot_clear_a_newer_run(self):
+        feature = UI_TEST_FEATURE.UITestFeature(object())
+        older = object()
+        newer = object()
+        feature.current_run = newer
+
+        feature._run_finished(older)
+
+        self.assertIs(feature.current_run, newer)
+
+    def test_failed_run_setup_removes_marker_directory_and_worker(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = pathlib.Path(temporary)
+            active = root / "active.json"
+            workers = []
+
+            class Worker:
+                def __init__(self, reactor, directory):
+                    self.directory = directory
+                    self.stopped = False
+                    workers.append(self)
+
+                def stop(self):
+                    self.stopped = True
+
+            host = type("Host", (), {
+                "renderer": type("Renderer", (), {
+                    "get_status": lambda self: {"dropped_batches": 0},
+                })(),
+                "reactor": object(),
+            })()
+            run = UI_TEST.UITestRun(host)
+            run._preflight = lambda *args, **kwargs: None
+            run._capture_original_state = lambda: None
+            run._recover_stale_marker = lambda: None
+            run._environment = lambda: {}
+            run._build_steps = lambda suite: []
+            run._attach_context_recorder = lambda: (_ for _ in ()).throw(
+                RuntimeError("recorder setup failed"))
+
+            with mock.patch.object(UI_TEST, "ARTIFACT_ROOT", str(root)), \
+                    mock.patch.object(UI_TEST, "ACTIVE_MARKER", str(active)), \
+                    mock.patch.object(UI_TEST, "ArtifactWorker", Worker):
+                with self.assertRaisesRegex(
+                        RuntimeError, "recorder setup failed"):
+                    run.run(GCmd(), "UI", "", 1)
+
+            self.assertEqual(len(workers), 1)
+            self.assertTrue(workers[0].stopped)
+            self.assertIsNone(run.run_directory)
+            self.assertEqual(list(root.iterdir()), [])
+
+    def test_completion_restores_once_before_artifact_finalization(self):
+        calls = []
+
+        class Snapshot:
+            def restore(self, host, reactor, hardware):
+                calls.append(("snapshot", hardware))
+
+        class Fixture:
+            def restore(self, suite):
+                calls.append(("fixture", suite))
+
+        class Worker:
+            def finish(self, summary, callback):
+                calls.append(("finish", summary["outcome"]))
+
+        run = UI_TEST.UITestRun(type("Host", (), {
+            "reactor": object(),
+        })())
+        run.running = True
+        run.suite = "UI"
+        run.run_id = "test-run"
+        run.started_at = UI_TEST.time.time()
+        run.snapshot = Snapshot()
+        run.context_fixture = Fixture()
+        run.worker = Worker()
+
+        run._complete("failed", "boom")
+        run._complete("failed", "again")
+
+        self.assertEqual(calls, [
+            ("fixture", "UI"), ("snapshot", False),
+            ("finish", "failed"),
+        ])
+        self.assertTrue(run.finalizing)
+        self.assertFalse(run.input_blocked)
+
+    def test_interrupted_context_cleanup_removes_only_owned_resources(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = pathlib.Path(temporary)
+            run_id = "20260811-120000-000001-context_print"
+            owned = root / ("feather-context-%s-recovery.gcode" % run_id)
+            unrelated = root / "keep.gcode"
+            checkpoint = root / "checkpoint.json"
+            owned.write_text("G4 P1\n", encoding="utf-8")
+            unrelated.write_text("G4 P1\n", encoding="utf-8")
+            checkpoint.write_text(json.dumps({
+                "file_path": str(owned),
+            }), encoding="utf-8")
+
+            class State:
+                IDLE = "idle"
+
+            resurrection = type("Resurrection", (), {
+                "file_path": str(checkpoint),
+                "state": State(),
+                "_change_state": lambda self, state: setattr(
+                    self, "state", state),
+            })()
+            host = type("Host", (), {
+                "virtual_sdcard": type("SD", (), {
+                    "sdcard_dirname": str(root),
+                })(),
+                "resurrection": resurrection,
+            })()
+            marker = {
+                "run_id": run_id,
+                "resources": {
+                    "files": [str(owned), str(unrelated)],
+                    "checkpoint": str(checkpoint),
+                },
+            }
+
+            UI_TEST.recover_interrupted_context_resources(host, marker)
+
+            self.assertFalse(owned.exists())
+            self.assertFalse(checkpoint.exists())
+            self.assertTrue(unrelated.exists())
 
     def test_stale_same_process_run_is_cleaned_before_next_run(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -751,7 +950,7 @@ class RunnerContractTest(unittest.TestCase):
             host = type("Host", (), {
                 "_run_script": lambda self, command: commands.append(command),
             })()
-            feature = UI_TEST.UITestFeature(host)
+            feature = UI_TEST.UITestRun(host)
             feature.session_id = "42-test"
 
             with mock.patch.object(UI_TEST, "ACTIVE_MARKER", str(active)), \
@@ -780,7 +979,7 @@ class RunnerContractTest(unittest.TestCase):
             host = type("Host", (), {
                 "_run_script": lambda self, command: commands.append(command),
             })()
-            feature = UI_TEST.UITestFeature(host)
+            feature = UI_TEST.UITestRun(host)
             feature.session_id = "new"
 
             with mock.patch.object(UI_TEST, "ACTIVE_MARKER", str(active)):
@@ -796,9 +995,9 @@ class RunnerContractTest(unittest.TestCase):
                 "get_status": lambda self: {"typer_restarts": 0},
             })(),
         })()
-        feature = UI_TEST.UITestFeature(host)
+        feature = UI_TEST.UITestRun(host)
         feature.material = "PLA"
-        material = feature._build_steps("CONTEXT_MATERIAL")
+        material = feature.scenarios.build_steps("CONTEXT_MATERIAL")
         material_labels = [step["label"] for step in material]
         self.assertLess(material_labels.index("filament-context-start"),
                         material_labels.index("prompt-PLA"))
@@ -811,7 +1010,7 @@ class RunnerContractTest(unittest.TestCase):
         self.assertLess(material_labels.index("filament-context-verify"),
                         material_labels.index("cold_pull-context-start"))
 
-        printing = feature._build_steps("CONTEXT_PRINT")
+        printing = feature.scenarios.build_steps("CONTEXT_PRINT")
         print_labels = [step["label"] for step in printing]
         expected = (
             "print_mesh-context-start", "print_mesh-pause-motion-complete",
@@ -832,9 +1031,15 @@ class RunnerContractTest(unittest.TestCase):
         )
         positions = [print_labels.index(label) for label in expected]
         self.assertEqual(positions, sorted(positions))
+        print_phases = dict(
+            (step["label"], step["phase"]) for step in printing)
+        self.assertEqual(print_phases["print_mesh-paused"], "print_mesh")
+        self.assertEqual(print_phases["recovery-complete"], "recovery")
+        self.assertEqual(
+            print_phases["print_kamp-complete"], "print_kamp")
 
         full_labels = [
-            step["label"] for step in feature._build_steps("FULL")]
+            step["label"] for step in feature.scenarios.build_steps("FULL")]
         self.assertFalse(any(label.startswith("context_print-")
                              for label in full_labels))
         self.assertFalse(any(label.startswith("context_material-")
@@ -846,12 +1051,12 @@ class RunnerContractTest(unittest.TestCase):
             "prompt.button.0": {"label": "Load"},
             "prompt.button.1": {"label": "Unload"},
         }}
-        feature = UI_TEST.UITestFeature(host)
+        feature = UI_TEST.UITestRun(host)
 
-        self.assertEqual(feature._prompt_action_for_label("load"),
+        self.assertEqual(feature.scenarios._prompt_action_for_label("load"),
                          "prompt.button.0")
         with self.assertRaisesRegex(RuntimeError, "found 0"):
-            feature._prompt_action_for_label("Purge")
+            feature.scenarios._prompt_action_for_label("Purge")
 
     def test_context_file_is_published_through_real_browser_entry(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -872,9 +1077,11 @@ class RunnerContractTest(unittest.TestCase):
             host.file_scan_token = 3
             host.page = FEATHER.Page.IDLE_HOME
             host._show_page = lambda page: setattr(host, "page", page)
-            feature = UI_TEST.UITestFeature(host)
+            feature = UI_TEST.UITestRun(host)
+            feature.context_fixture = UI_TEST.ContextTestFixture(
+                host, host.reactor, "test-run", "PLA")
 
-            feature._open_context_file(str(path))
+            feature.scenarios._open_context_file(str(path))
 
             entry = host.file_entry_cache["internal"][0]
             self.assertEqual(entry["path"], str(path.resolve()))
@@ -882,7 +1089,7 @@ class RunnerContractTest(unittest.TestCase):
             self.assertEqual(host.page, FEATHER.Page.FILE_BROWSER)
             self.assertEqual(host.file_scan_token, 4)
             self.assertEqual(
-                feature.context_runtime["file_browser"]["cache"],
+                feature.context_fixture.file_browser["cache"],
                 ["original"])
 
     def test_context_print_waits_for_ui_terminal_state(self):
@@ -897,11 +1104,17 @@ class RunnerContractTest(unittest.TestCase):
             "is_active": lambda self: False,
         })()
         host.print_state = FEATHER.PrintState.PRINTING
-        feature = UI_TEST.UITestFeature(host)
+        host.page = FEATHER.Page.PRINTING
+        host.renderer = type("Renderer", (), {"_buttons": {}})()
+        feature = UI_TEST.UITestRun(host)
 
-        self.assertFalse(feature._context_print_complete())
+        self.assertFalse(feature.scenarios._context_print_complete())
         host.print_state = FEATHER.PrintState.IDLE
-        self.assertTrue(feature._context_print_complete())
+        self.assertFalse(feature.scenarios._context_print_complete())
+        host.page = FEATHER.Page.MESSAGE
+        self.assertFalse(feature.scenarios._context_print_complete())
+        host.renderer._buttons["message.ok"] = ()
+        self.assertTrue(feature.scenarios._context_print_complete())
 
     def test_context_print_waits_for_pause_control(self):
         status = {"state": "printing"}
@@ -914,17 +1127,17 @@ class RunnerContractTest(unittest.TestCase):
         })()
         host.page = FEATHER.Page.PRINTING
         host.renderer = type("Renderer", (), {"_buttons": {}})()
-        feature = UI_TEST.UITestFeature(host)
+        feature = UI_TEST.UITestRun(host)
 
-        self.assertTrue(feature._context_printing())
-        self.assertFalse(feature._context_print_controls_ready())
+        self.assertTrue(feature.scenarios._context_printing())
+        self.assertFalse(feature.scenarios._context_print_controls_ready())
         host.renderer._buttons["print.pause"] = ()
-        self.assertTrue(feature._context_print_controls_ready())
+        self.assertTrue(feature.scenarios._context_print_controls_ready())
 
         status["state"] = "paused"
         host.page = FEATHER.Page.PAUSED
         host.renderer._buttons = {"print.resume": ()}
-        self.assertTrue(feature._context_paused())
+        self.assertTrue(feature.scenarios._context_paused())
 
         status["state"] = "cancelled"
         host.print_state = FEATHER.PrintState.IDLE
@@ -933,10 +1146,10 @@ class RunnerContractTest(unittest.TestCase):
             "is_active": lambda self: False,
         })()
         host.renderer._buttons = {"message.ok": ()}
-        self.assertTrue(feature._context_cancelled())
+        self.assertTrue(feature.scenarios._context_cancelled())
 
     def test_extended_suites_require_confirm_two(self):
-        feature = UI_TEST.UITestFeature(object())
+        feature = UI_TEST.UITestRun(object())
         gcmd = GCmd()
         for suite in ("CONTEXT_PRINT", "CONTEXT_MATERIAL"):
             with self.subTest(suite=suite), self.assertRaisesRegex(
@@ -981,7 +1194,7 @@ class RunnerContractTest(unittest.TestCase):
             host.resurrection = type("Resurrection", (), {
                 "enabled": True, "file_path": str(checkpoint),
             })()
-            feature = UI_TEST.UITestFeature(host)
+            feature = UI_TEST.UITestRun(host)
 
             with self.assertRaisesRegex(
                     RuntimeError, "foreign recovery checkpoint"):
@@ -1030,18 +1243,19 @@ class RunnerContractTest(unittest.TestCase):
                 "file_path": str(checkpoint),
             })()
             host._run_script = lambda command: commands.append(command)
-            feature = UI_TEST.UITestFeature(host)
+            feature = UI_TEST.UITestRun(host)
             feature.suite = "CONTEXT_PRINT"
-            feature.context_files = [str(gcode)]
-            feature.context_checkpoint = str(checkpoint)
-            feature.context_runtime = {
-                "mod_params": {"check_md5": 1},
-                "current_material": "PETG",
-                "params_store": (params, True, original_store),
-                "client_macro": client,
-                "client_idle_timeout": 3600,
-                "idle_timeout": 600.0,
-            }
+            fixture = UI_TEST.ContextTestFixture(
+                host, host.reactor, "test-run", "PETG")
+            fixture.files = [str(gcode)]
+            fixture.checkpoint = str(checkpoint)
+            fixture.saved_mod_params = {"check_md5": 1}
+            fixture.saved_current_material = "PETG"
+            fixture.params_store_guard = (params, True, original_store)
+            fixture.client_macro = client
+            fixture.client_idle_timeout = 3600
+            fixture.idle_timeout = 600.0
+            feature.context_fixture = fixture
 
             feature._restore_context_runtime()
 
@@ -1205,7 +1419,7 @@ class OperationContextRecorderTest(unittest.TestCase):
 
     def test_feature_deactivation_restores_changed_wrapper(self):
         manager = ContextManagerFixture()
-        feature = UI_TEST.UITestFeature(type("Host", (), {})())
+        feature = UI_TEST.UITestRun(type("Host", (), {})())
         feature.context_recorder = CONTEXT_FIXTURES.OperationContextRecorder(
             manager)
         feature.context_recorder.attach()

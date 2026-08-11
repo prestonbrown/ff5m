@@ -827,22 +827,22 @@ class FeatherScreen(FeatherPagesMixin, FeatherControlsMixin):
                     "screws", "mesh", "z")):
             self._open_calibration_cancel()
             return
+        if ((manager is not None and manager.input_blocked) or
+                (manager is None and
+                 getattr(self, "mod_update_pending", False))):
+            logging.info(
+                "[feather_screen] touch ignored while input is blocked: %s",
+                action)
+            return
+        self._start_touch_action(action)
+
+    def _start_touch_action(self, action):
+        """Apply normal button feedback, then dispatch one UI action."""
         if self._blocking_operation_active():
             logging.info(
                 "[feather_screen] touch ignored while blocking operation "
                 "is active: action=%s operation=%s",
                 action, self.busy_message)
-            return
-        test_feature = (None if manager is None
-                        else manager.peek("ui_test"))
-        test_dispatch = bool(getattr(
-            test_feature, "dispatching_test_action", False))
-        if ((manager is not None and manager.input_blocked
-             and not test_dispatch) or
-                (manager is None and
-                 getattr(self, "mod_update_pending", False))):
-            logging.info("[feather_screen] touch ignored while mod update is active: %s",
-                         action)
             return
         busy_allowed = action in (
             "print.cancel", "operation.cancel.confirm",
@@ -861,12 +861,6 @@ class FeatherScreen(FeatherPagesMixin, FeatherControlsMixin):
         if getattr(self, "touch_feedback_pending", False):
             logging.info("[feather_screen] touch ignored during visual feedback: %s",
                          action)
-            return
-        # Synthetic runner taps must remain synchronous: a delayed visual
-        # flash would clear dispatching_test_action before the command error
-        # can propagate back to the runner.
-        if test_dispatch:
-            self._dispatch_action(action)
             return
         flash = getattr(self.renderer, "flash_button", None)
         if flash is None or not flash(action):
@@ -937,15 +931,11 @@ class FeatherScreen(FeatherPagesMixin, FeatherControlsMixin):
                 action, self.busy_message)
             return
         manager = getattr(self, "feature_manager", None)
-        test_feature = (None if manager is None
-                        else manager.peek("ui_test"))
-        test_dispatch = bool(getattr(
-            test_feature, "dispatching_test_action", False))
-        if (test_feature is not None
-                and test_feature.blocks_action(action)):
+        blocks_action = (None if manager is None
+                         else getattr(manager, "blocks_action", None))
+        if blocks_action is not None and blocks_action(action):
             logging.warning(
-                "[feather_screen] test mode blocked persistent action=%s",
-                action)
+                "[feather_screen] feature blocked action=%s", action)
             return
         owner = None
         if manager is not None and manager.owner_name(self.page) is not None:
@@ -954,8 +944,6 @@ class FeatherScreen(FeatherPagesMixin, FeatherControlsMixin):
                     self.page, action)
             except FeatureLoadError as exc:
                 self._show_message(str(exc), self.previous_page)
-                if test_dispatch:
-                    raise
                 return
         else:
             semantic_action = self._resolve_semantic_ui_action(action)
@@ -1062,8 +1050,6 @@ class FeatherScreen(FeatherPagesMixin, FeatherControlsMixin):
         except Exception as exc:
             logging.exception("[feather_screen] action failed: %s", action)
             self._show_message(str(exc), self.page)
-            if test_dispatch:
-                raise
 
     def _action_allowed(self, page, action):
         if page == Page.MESSAGE and action == "net.reset.saved":

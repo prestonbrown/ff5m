@@ -109,6 +109,13 @@ class LazyFeatureManager:
                 return True
         return False
 
+    def blocks_action(self, action):
+        for feature in self.loaded():
+            callback = getattr(feature, "blocks_action", None)
+            if callback is not None and callback(action):
+                return True
+        return False
+
     def safety_active_reasons(self, eventtime):
         reasons = []
         for feature in self.loaded():

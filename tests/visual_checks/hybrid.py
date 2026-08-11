@@ -24,6 +24,7 @@ UI_FINGERPRINT_FILES = (
     "feather_feature_ui_test.py",
     "feather_operation_context_fixtures.py",
 )
+UI_FINGERPRINT_PACKAGES = ("ui", "ff5m_ui", "feather_ui_test")
 UI_SUITE_LABELS = frozenset((
     "baseline",
     "ui-home-filled",
@@ -549,7 +550,7 @@ def ui_fingerprint(project_root):
         path = root / relative
         if path.is_file():
             files.append((relative, path))
-    for package in ("ui", "ff5m_ui"):
+    for package in UI_FINGERPRINT_PACKAGES:
         package_root = root / package
         if not package_root.is_dir():
             raise RegressionConfigurationError(

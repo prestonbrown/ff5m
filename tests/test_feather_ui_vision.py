@@ -1224,10 +1224,13 @@ class HostPipelineTest(unittest.TestCase):
         screen = (
             ROOT / ".py" / "klipper" / "plugins" / "feather_screen.py"
         ).read_text(encoding="utf-8")
-        runner = (
-            ROOT / ".py" / "klipper" / "plugins" /
-            "feather_feature_ui_test.py"
-        ).read_text(encoding="utf-8")
+        plugins = ROOT / ".py" / "klipper" / "plugins"
+        runner = "\n".join(
+            path.read_text(encoding="utf-8")
+            for path in (
+                plugins / "feather_feature_ui_test.py",
+                *sorted((plugins / "feather_ui_test").rglob("*.py")),
+            ))
         sync = (ROOT / "sync.sh").read_text(encoding="utf-8")
         remote_sync = (ROOT / "sync_remote.sh").read_text(encoding="utf-8")
 
