@@ -2088,7 +2088,7 @@ class ControllerSafetyTest(unittest.TestCase):
         self.assertIn("print.cancel", controller.renderer._buttons)
         self.assertIn("global.abort", controller.renderer._buttons)
 
-    def test_print_progress_shows_remaining_layer_and_height(self):
+    def test_print_progress_prefers_live_height_and_falls_back(self):
         controller = ScenarioController.__new__(ScenarioController)
         controller.renderer = FEATHER.FeatherRenderer()
         batches = []
@@ -2104,7 +2104,9 @@ class ControllerSafetyTest(unittest.TestCase):
         controller.virtual_sdcard = StatusObject({"progress": 0.25})
         controller.virtual_sdcard.estimate_print_time = 400.0
         controller.toolhead = StatusObject({
-            "position": (10.0, 20.0, 3.25, 0.0), "homed_axes": "xyz"})
+            "position": (10.0, 20.0, 9.75, 0.0), "homed_axes": "xyz"})
+        controller.motion_report = StatusObject({
+            "live_position": (10.0, 20.0, 3.25, 0.0)})
 
         controller._update_print_progress(100)
 
@@ -2113,6 +2115,13 @@ class ControllerSafetyTest(unittest.TestCase):
         self.assertIn("00:05:00", drawing)
         self.assertIn('? / ?', drawing)
         self.assertIn("3.25 MM", drawing)
+
+        controller.motion_report = None
+        controller.toolhead.status["position"] = (10.0, 20.0, 4.5, 0.0)
+
+        controller._update_print_progress(101)
+
+        self.assertIn("4.50 MM", "\n".join(batches[1]))
 
     def test_print_progress_uses_sd_position_and_never_moves_backwards(self):
         controller = ScenarioController.__new__(ScenarioController)

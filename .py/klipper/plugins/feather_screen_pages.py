@@ -436,6 +436,10 @@ class FeatherPagesMixin(FeatherNetworkPagesMixin):
                               total if total is not None else "?")
         toolhead = self.toolhead.get_status(eventtime)
         position = toolhead.get("position", (0.0, 0.0, 0.0, 0.0))
+        motion_report = getattr(self, "motion_report", None)
+        if motion_report is not None:
+            position = motion_report.get_status(eventtime).get(
+                "live_position", position)
         height = float(position[2])
         values = (self._clock_duration(elapsed),
                   self._clock_duration(remaining), layer, round(height, 2))
