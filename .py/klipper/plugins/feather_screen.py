@@ -910,6 +910,17 @@ class FeatherScreen(FeatherPagesMixin, FeatherControlsMixin):
         self._set_backlight(brightness)
         return True
 
+    def _update_eco_backlight(self, eventtime):
+        eco_enabled = self._setting("display_eco", True)
+        if not eco_enabled and self.dimmed:
+            self._wake_if_dimmed()
+        elif (eco_enabled and not self.dimmed
+              and eventtime - self.last_touch_time >= self.dim_timeout):
+            self.dimmed = True
+            logging.info("[feather_screen] dimming display after %.1fs idle",
+                         eventtime - self.last_touch_time)
+            self._set_backlight(self._setting("backlight_eco", 10))
+
     def _restart_renderer(self, eventtime):
         # Lifecycle and backoff are worker-owned. The reactor only signals.
         return self.renderer.restart()
@@ -1704,11 +1715,7 @@ class FeatherScreen(FeatherPagesMixin, FeatherControlsMixin):
                          self.renderer.theme_name)
             self._show_page(self.page)
         self._service_network(eventtime)
-        if not self.dimmed and eventtime - self.last_touch_time >= self.dim_timeout:
-            self.dimmed = True
-            logging.info("[feather_screen] dimming display after %.1fs idle",
-                         eventtime - self.last_touch_time)
-            self._set_backlight(self._setting("backlight_eco", 10))
+        self._update_eco_backlight(eventtime)
         stats = self.print_stats.get_status(eventtime)
         state = stats["state"]
         virtual_sd_active = self.virtual_sdcard.is_active()

@@ -658,6 +658,7 @@ class FeatherUtilitiesTest(unittest.TestCase):
         manager.variables = dict((param.key, param.default)
                                  for param in manager.params)
         cases = (
+            ("backlight_eco", "display_eco", False, True),
             ("weight_check_max", "weight_check", False, True),
             ("bed_mesh_validation_clear", "bed_mesh_validation", False, True),
             ("bed_mesh_validation_tolerance", "bed_mesh_validation", False, True),

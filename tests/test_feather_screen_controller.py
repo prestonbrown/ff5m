@@ -1995,6 +1995,31 @@ class ControllerSafetyTest(unittest.TestCase):
         self.assertFalse(controller._wake_if_dimmed())
         self.assertEqual(values, [55])
 
+    def test_eco_setting_controls_idle_dimming_and_wakes_when_disabled(self):
+        controller = ScenarioController.__new__(ScenarioController)
+        controller.last_touch_time = 0.0
+        controller.dim_timeout = 60.0
+        controller.dimmed = False
+        controller.params = type("Params", (), {"variables": {
+            "backlight": 65, "backlight_eco": 10,
+            "display_eco": False}})()
+        values = []
+        controller._set_backlight = values.append
+
+        controller._update_eco_backlight(61.0)
+        self.assertFalse(controller.dimmed)
+        self.assertEqual(values, [])
+
+        controller.params.variables["display_eco"] = True
+        controller._update_eco_backlight(62.0)
+        self.assertTrue(controller.dimmed)
+        self.assertEqual(values, [10])
+
+        controller.params.variables["display_eco"] = False
+        controller._update_eco_backlight(63.0)
+        self.assertFalse(controller.dimmed)
+        self.assertEqual(values, [10, 65])
+
     def test_background_wake_action_has_no_page_side_effect(self):
         controller = ScenarioController.__new__(ScenarioController)
 

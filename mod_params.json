@@ -104,6 +104,7 @@
           "power_loss_recovery",
           "feather_theme",
           "backlight",
+          "display_eco",
           "backlight_eco",
           "sound",
           "close_dialogs"
@@ -151,6 +152,12 @@
       }
     ],
     "strict_visibility_dependencies": [
+      {
+        "parameter": "backlight_eco",
+        "depends_on": "display_eco",
+        "operator": "equals",
+        "value": true
+      },
       {
         "parameter": "weight_check_max",
         "depends_on": "weight_check",
@@ -382,12 +389,20 @@
       "order": 50001
     },
     {
+      "key": "display_eco",
+      "type": "bool",
+      "default": 1,
+      "label": "Display ECO mode",
+      "description": "Dim the display after inactivity.",
+      "order": 50002
+    },
+    {
       "key": "backlight_eco",
       "type": "int",
       "default": 10,
       "label": "Screen brightness in ECO mode",
       "description": "Set dimmed display brightness percent.",
-      "order": 50002
+      "order": 50003
     },
     {
       "key": "chamber_light",
