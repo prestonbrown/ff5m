@@ -191,6 +191,46 @@ class ArtifactWorkerTest(unittest.TestCase):
 
 
 class RunnerContractTest(unittest.TestCase):
+    def test_stage_capture_follows_semantic_context_revisions(self):
+        operation = {
+            "revision": 1,
+            "context_types": ("bed_level", "nozzle_clean"),
+            "context_path": ("Bed Mesh", "Nozzle Cleaning"),
+            "current_state": "CLEANING",
+        }
+        host = type("Host", (), {
+            "_operation_context_status":
+                lambda self, eventtime: dict(operation),
+            "_operation_context_text":
+                lambda self, eventtime=None, status=None:
+                " -> ".join(tuple(status["context_path"]) +
+                            (status["current_state"],)),
+        })()
+        run = UI_TEST.UITestRun(host)
+        run.running = True
+        run.phase = "mesh"
+        run.worker = mock.Mock()
+        run._screen_metadata = lambda: {"page": "CALIBRATION_PROGRESS"}
+
+        run.update(1.0)
+        run.update(2.0)
+        operation["revision"] = 2
+        run.update(3.0)
+        operation.update(revision=3, current_state="LEVELING",
+                         context_types=("bed_level",),
+                         context_path=("Bed Mesh",))
+        run.update(4.0)
+
+        self.assertEqual(run.worker.capture.call_count, 2)
+        self.assertEqual(
+            [stage["current_state"] for stage in run.calibration_stages],
+            ["CLEANING", "LEVELING"])
+        self.assertEqual(
+            run.calibration_stages[0]["context_types"],
+            ("bed_level", "nozzle_clean"))
+        self.assertEqual(
+            run.calibration_stages[1]["context_path"], ("Bed Mesh",))
+
     def test_tap_waits_for_active_gcode_before_advancing(self):
         callbacks = []
         reactor = type("Reactor", (), {
@@ -1422,6 +1462,22 @@ class OperationContextRecorderTest(unittest.TestCase):
                 _manager, _recorder, result = self._record(
                     "screws", (variant,))
                 self.assertEqual(result["temperature_variants"], [variant])
+
+    def test_optional_homing_matches_both_real_helper_outcomes(self):
+        candidates = dict((variant, expected)
+                          for variant, expected, _choices
+                          in CONTEXT_FIXTURES.exact_variants("screws"))
+        self.assertIn("HOMING,NONE", candidates)
+        self.assertIn("SKIP_HOMING,NONE", candidates)
+        homed = candidates["HOMING,NONE"]
+        skipped = candidates["SKIP_HOMING,NONE"]
+        self.assertTrue(any(
+            snapshot["current_state"] == "HOMING" for snapshot in homed))
+        self.assertFalse(any(
+            snapshot["current_state"] == "HOMING" for snapshot in skipped))
+        self.assertEqual(
+            [snapshot["current_state"] for snapshot in skipped],
+            [None, "HEATING", "PROBING", None])
 
     def test_mismatch_reports_first_exact_difference_and_final_stack(self):
         manager = ContextManagerFixture()

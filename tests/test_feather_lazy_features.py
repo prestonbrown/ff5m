@@ -330,19 +330,31 @@ with tempfile.TemporaryDirectory() as directory:
 
 
 class FeatureHostProxyTest(unittest.TestCase):
+    def test_recovery_progress_reset_belongs_to_calibration_feature(self):
+        from feather_feature_calibration import CalibrationFeature
+
+        host = types.SimpleNamespace(heating_materials=())
+        feature = CalibrationFeature(host)
+        feature.calibration_progress_key = ("mesh", ("PREP", "LEVEL"))
+        feature.calibration_seen_phases = {"PREP", "LEVEL"}
+
+        feature.begin_recovery()
+
+        self.assertEqual(feature.calibration_kind, "recovery")
+        self.assertIsNone(feature.calibration_progress_key)
+        self.assertEqual(feature.calibration_seen_phases, set())
+        self.assertFalse(hasattr(host, "calibration_progress_key"))
+
     def test_shared_controller_fields_are_explicit_properties(self):
-        host = types.SimpleNamespace(
-            page=1, previous_page=0, print_status_text="idle")
+        host = types.SimpleNamespace(page=1, previous_page=0)
         proxy = FeatureHostProxy(host)
 
         proxy.page = 2
         proxy.previous_page = 1
-        proxy.print_status_text = "printing"
         proxy.local_state = "feature-only"
 
         self.assertEqual(host.page, 2)
         self.assertEqual(host.previous_page, 1)
-        self.assertEqual(host.print_status_text, "printing")
         self.assertFalse(hasattr(host, "local_state"))
         self.assertEqual(proxy.local_state, "feature-only")
 

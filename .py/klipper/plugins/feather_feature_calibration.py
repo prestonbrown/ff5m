@@ -30,6 +30,7 @@ class CalibrationFeature(FeatherControlsMixin, FeatureHostProxy):
         self.calibration_cancel_requested = False
         self.calibration_cancel_dispatched = False
         self.calibration_cancelled = False
+        self.calibration_starting_text = "STARTING..."
         self._last_calibration_label = None
         self._last_calibration_cancel_visible = False
 
@@ -84,17 +85,13 @@ class CalibrationFeature(FeatherControlsMixin, FeatureHostProxy):
             return False
         return True
 
-    def begin_recovery(self, status):
+    def begin_recovery(self):
         self.calibration_kind = "recovery"
-        self.print_status_text = status
+        self.calibration_starting_text = "STARTING..."
+        self._reset_calibration_progress()
 
     def update(self, eventtime):
-        if (self._page_paint_allowed(Page.CALIBRATION_PROGRESS) and
-                self.calibration_kind in ("screws", "mesh", "z", "recovery")):
-            self._update_calibration_progress()
-
-    def on_print_status(self, status):
-        if self.page == Page.CALIBRATION_PROGRESS:
+        if self._page_paint_allowed(Page.CALIBRATION_PROGRESS):
             self._update_calibration_progress()
 
     def on_gcode_output(self, message):

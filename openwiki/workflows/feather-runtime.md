@@ -84,7 +84,7 @@ During initialization, [`.shell/S00init`](../../.shell/S00init) runs `apply_klip
 
 [`.shell/commands/zdisplay.sh`](../../.shell/commands/zdisplay.sh) activates [`.cfg/init.display.feather.cfg`](../../.cfg/init.display.feather.cfg), which adds `config/feather.cfg` to `/opt/config/printer.cfg` and removes competing display roots. `config/feather.cfg` declares `[feather_screen]`; Klipper calls `load_config(config)` in `feather_screen.py`.
 
-The plugin registers `klippy:ready`, `klippy:shutdown`, and `klippy:disconnect`. It also registers `FEATHER_PRINT_STATUS`, an internal Forge-X macro-to-screen status bridge. Its optional config values are read at Klipper config-load time; defaults deliberately live in Python for upgrade compatibility until Klipper restarts.
+The plugin registers `klippy:ready`, `klippy:shutdown`, and `klippy:disconnect`. Managed workflow status is read directly from the `operation_context` snapshot during the normal display update cycle. Optional config values are read at Klipper config-load time; defaults deliberately live in Python for upgrade compatibility until Klipper restarts.
 
 ## Boot and restart chain
 

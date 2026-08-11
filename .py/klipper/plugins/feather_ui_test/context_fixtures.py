@@ -108,11 +108,13 @@ def _snapshot(stack):
     }
 
 
-def expand_events(events, wait_variants=()):
+def expand_events(events, wait_variants=(), optional_variants=None):
     """Expand compact semantic events into the exact status trace."""
     stack = []
     snapshots = []
     variants = iter(wait_variants)
+    default_optionals = optional_variants is None
+    optionals = iter(optional_variants or ())
     for event in events:
         kind = event[0]
         if kind == "begin":
@@ -126,6 +128,11 @@ def expand_events(events, wait_variants=()):
         elif kind == "state":
             stack[-1]["current_state"] = event[1]
             snapshots.append(_snapshot(stack))
+        elif kind == "optional_state":
+            enabled = True if default_optionals else next(optionals)
+            if enabled:
+                stack[-1]["current_state"] = event[1]
+                snapshots.append(_snapshot(stack))
         elif kind == "wait":
             variant = next(variants)
             if variant not in WAIT_VARIANTS:
@@ -149,22 +156,33 @@ def expand_events(events, wait_variants=()):
     try:
         next(variants)
     except StopIteration:
-        return snapshots
-    raise ValueError("too many temperature fixture variants")
+        pass
+    else:
+        raise ValueError("too many temperature fixture variants")
+    if not default_optionals:
+        try:
+            next(optionals)
+        except StopIteration:
+            pass
+        else:
+            raise ValueError("too many optional fixture variants")
+    return snapshots
 
 
 NO_CONTEXT = ()
 SCREWS = (
-    ("begin", "bed_screws"), ("state", "HOMING"),
-    ("wait", "NOZZLE"), ("state", "PROBING"), ("end",),
+    ("begin", "bed_screws"), ("optional_state", "HOMING"),
+    ("state", "HEATING"), ("wait", "NOZZLE"),
+    ("state", "PROBING"), ("end",),
 )
 Z_OFFSET_SKIP_CLEAN = (
-    ("begin", "z_offset"), ("state", "HOMING"),
-    ("wait", "NOZZLE"), ("state", "TARING"), ("end",),
+    ("begin", "z_offset"), ("optional_state", "HOMING"),
+    ("state", "HEATING"), ("wait", "NOZZLE"),
+    ("state", "TARING"), ("end",),
 )
 NOZZLE_CLEAN = (
-    ("begin", "nozzle_clean"), ("state", "HOMING"),
-    ("wait", "BED"), ("wait", "NOZZLE"),
+    ("begin", "nozzle_clean"), ("optional_state", "HOMING"),
+    ("state", "HEATING"), ("wait", "BED"), ("wait", "NOZZLE"),
     ("state", "PREPARING TO CLEAN"), ("state", "CLEANING"),
     ("wait", "NOZZLE"), ("state", "FINISHING"), ("end",),
 )
@@ -176,7 +194,8 @@ MESH_CLEAN = (
 )
 MESH_SKIP_CLEAN = (
     ("begin", "auto_bed_level"), ("begin", "bed_level"),
-    ("state", "HOMING"), ("wait", "BED"), ("wait", "NOZZLE"),
+    ("optional_state", "HOMING"), ("state", "HEATING"),
+    ("wait", "BED"), ("wait", "NOZZLE"),
     ("state", "LEVELING"), ("state", "FINISHING"), ("end",),
     ("state", "FINISHING"), ("end",),
 )
@@ -189,12 +208,13 @@ FILAMENT = (
     ("end",),
 )
 COLD_PULL = (
-    ("begin", "cold_pull"), ("state", "HOMING"),
-    ("wait", "NOZZLE"), ("state", "EXTRUDING"),
+    ("begin", "cold_pull"), ("optional_state", "HOMING"),
+    ("state", "HEATING"), ("wait", "NOZZLE"),
+    ("state", "EXTRUDING"),
     ("wait", "NOZZLE"), ("state", "PULLING"), ("end",),
 )
 PRINT_KAMP = (
-    ("begin", "print"), ("state", "HOMING"),
+    ("begin", "print"), ("optional_state", "HOMING"),
     ("state", "LEVELING"), ("begin", "kamp"),
 ) + NOZZLE_CLEAN + (
     ("state", "LEVELING"), ("end",), ("state", "PARKING"),
@@ -202,11 +222,12 @@ PRINT_KAMP = (
     ("state", "PRIMING"), ("state", "PRINTING"), ("reset",),
 )
 PRINT_MESH_RESUME = (
-    ("begin", "print"), ("state", "HOMING"),
+    ("begin", "print"), ("optional_state", "HOMING"),
     ("state", "LEVELING"), ("state", "USING LOADED PROFILE"),
     ("state", "PARKING"), ("wait", "BED"),
     ("wait", "NOZZLE"), ("begin", "mesh_validation"),
-    ("state", "HOMING"), ("state", "CHECKING MESH"), ("end",),
+    ("optional_state", "HOMING"),
+    ("state", "CHECKING MESH"), ("end",),
     ("state", "RESUMING HEAT"), ("wait", "NOZZLE"),
     ("state", "PRIMING"), ("state", "PRINTING"),
     ("reset",),
@@ -214,7 +235,7 @@ PRINT_MESH_RESUME = (
 RECOVERY = (
     ("begin", "recovery"), ("state", "LOADING STATE"),
     ("state", "PREPARING"), ("wait", "BED"),
-    ("wait", "NOZZLE"), ("state", "HOMING"),
+    ("wait", "NOZZLE"), ("optional_state", "HOMING"),
     ("state", "POSITIONING"), ("state", "RESTORING STATE"),
     ("end",), ("begin", "print"), ("state", "PRINTING"),
     ("reset",),
@@ -239,15 +260,26 @@ def _wait_count(events):
     return sum(1 for event in events if event[0] == "wait")
 
 
+def _optional_count(events):
+    return sum(1 for event in events if event[0] == "optional_state")
+
+
 def exact_variants(fixture_name):
     events = FIXTURES[fixture_name]
-    count = _wait_count(events)
-    if not count:
-        yield "default", expand_events(events), ()
-        return
-    for variants in itertools.product(WAIT_VARIANTS, repeat=count):
-        name = ",".join(variants)
-        yield name, expand_events(events, variants), variants
+    wait_count = _wait_count(events)
+    optional_count = _optional_count(events)
+    wait_choices = (itertools.product(
+        WAIT_VARIANTS, repeat=wait_count) if wait_count else ((),))
+    optional_choices = tuple(itertools.product(
+        (True, False), repeat=optional_count)) if optional_count else ((),)
+    for variants in wait_choices:
+        for optionals in optional_choices:
+            names = ["HOMING" if enabled else "SKIP_HOMING"
+                     for enabled in optionals]
+            names.extend(variants)
+            name = ",".join(names) or "default"
+            yield (name, expand_events(
+                events, variants, optional_variants=optionals), variants)
 
 
 def first_difference(expected, actual):

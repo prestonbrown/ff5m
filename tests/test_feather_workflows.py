@@ -1201,8 +1201,10 @@ class PrintWorkflowTest(unittest.TestCase):
 
     def test_operation_revision_redraws_print_status_once(self):
         controller = base_controller("printing")
+        controller.page = FEATHER.Page.PRINTING
         controller.operation_context.status.update(
-            context_path=("PRINT PREP",), current_state="HOMING",
+            context_types=("print",), context_path=("PRINT PREP",),
+            current_state="HOMING",
             revision=3)
         drawn = []
         controller._draw_print_status = drawn.append
@@ -1240,6 +1242,28 @@ class PrintWorkflowTest(unittest.TestCase):
 
         self.assertEqual(pages, [])
 
+    def test_dashboard_uses_only_the_active_print_context_for_detail(self):
+        controller = base_controller("printing")
+        controller.last_job_name = "part.gcode"
+        controller._print_progress = lambda eventtime, stats: 0.25
+        controller._print_time_values = (
+            lambda eventtime, stats, progress: (60.0, 180.0))
+        controller.operation_context.status.update(
+            context_types=("pid_bed",), context_path=("Bed PID",),
+            current_state="COMPLETE", revision=2)
+
+        ordinary = controller._dashboard_job(1.0)
+
+        self.assertEqual(ordinary.detail, "PRINTING")
+
+        controller.operation_context.status.update(
+            context_types=("print",), context_path=("Print",),
+            current_state="HEATING BED", revision=3)
+
+        managed = controller._dashboard_job(2.0)
+
+        self.assertEqual(managed.detail, "PRINT -> HEATING BED")
+
     def test_filament_back_uses_live_terminal_state(self):
         controller = base_controller("paused")
         controller.page = FEATHER.Page.FILAMENT_MATERIAL
@@ -1267,12 +1291,89 @@ class PrintWorkflowTest(unittest.TestCase):
         macros = (root / "macros" / "base.cfg").read_text(encoding="utf-8")
         start = macros.split("[gcode_macro _START_PRINT]", 1)[1].split(
             "[gcode_macro _WAIT_TEMPERATURE]", 1)[0]
-        self.assertIn("G28", start)
         self.assertIn("_CONTEXT_BEGIN TYPE=print", start)
-        self.assertIn("_CONTEXT_STATE NAME=HOMING", start)
+        self.assertIn("_HOME_IF_NEEDED", start)
+        self.assertNotIn("_CONTEXT_STATE NAME=HOMING", start)
         self.assertIn("_CONTEXT_STATE NAME=PRIMING", start)
         self.assertIn("_CONTEXT_STATE NAME=PRINTING", start)
         self.assertNotIn("_PRINT_FLOW", macros)
+
+    def test_workflows_share_conditional_homing_without_changing_g28(self):
+        root = pathlib.Path(__file__).parents[1]
+        macros = (root / "macros" / "base.cfg").read_text(encoding="utf-8")
+        material = (root / "config" / "material.cfg").read_text(
+            encoding="utf-8")
+        home = macros.split("[gcode_macro G28]", 1)[1].split(
+            "[gcode_macro _HOME_IF_NEEDED]", 1)[0]
+        self.assertNotIn("operation_context", home)
+        self.assertNotIn("_CONTEXT_STATE", home)
+
+        helper = macros.split(
+            "[gcode_macro _HOME_IF_NEEDED]", 1)[1].split(
+                "[gcode_macro LIST_MOD_PARAMS]", 1)[0]
+        self.assertIn(
+            '{% if "xyz" not in printer.toolhead.homed_axes %}', helper)
+        self.assertIn("_CONTEXT_STATE NAME=HOMING", helper)
+        self.assertNotIn("STATUS", helper)
+        self.assertIn("G28", helper)
+
+        blocks = (
+            macros.split("[gcode_macro BED_LEVEL_SCREWS_TUNE]", 1)[1].split(
+                "[gcode_macro BED_LEVEL_SCREWS_PROBE]", 1)[0],
+            macros.split("[gcode_macro _CHECK_BED_MESH]", 1)[1].split(
+                "[gcode_macro _CHECK_BED_MESH_PROBE]", 1)[0],
+            macros.split("[gcode_macro CLEAR_NOZZLE]", 1)[1].split(
+                "[gcode_macro _CLEAR_NOZZLE_PROBE]", 1)[0],
+            macros.split("[gcode_macro _PREPARE_LEVELING]", 1)[1].split(
+                "[gcode_macro _FULL_BED_LEVEL]", 1)[0],
+            macros.split("[gcode_macro _START_PRINT]", 1)[1].split(
+                "[gcode_macro _WAIT_TEMPERATURE]", 1)[0],
+            material.split("[gcode_macro _COLDPULL_LOAD_MATERIAL]", 1)[1].split(
+                "[gcode_macro COLDPULL]", 1)[0],
+        )
+        for block in blocks:
+            self.assertIn("_HOME_IF_NEEDED", block)
+            self.assertNotIn("_CONTEXT_STATE NAME=HOMING", block)
+
+        for macro, context_type in (
+                ("PID_TUNE_BED", "pid_bed"),
+                ("PID_TUNE_EXTRUDER", "pid_extruder"),
+                ("ZSHAPER", "input_shaper")):
+            block = macros.split("[gcode_macro %s]" % macro, 1)[1].split(
+                "[gcode_macro ", 1)[0]
+            self.assertIn("_CONTEXT_BEGIN TYPE=%s" % context_type, block)
+            self.assertIn("_HOME_IF_NEEDED", block)
+            self.assertNotIn("STATUS=", block)
+            self.assertIn("_CONTEXT_STATE NAME=COMPLETE", block)
+            self.assertIn("_CONTEXT_END", block)
+
+    def test_tuning_workflows_publish_their_lifecycle_in_order(self):
+        macros = (pathlib.Path(__file__).parents[1] / "macros" /
+                  "base.cfg").read_text(encoding="utf-8")
+        workflows = {
+            "PID_TUNE_BED": (
+                "_CONTEXT_BEGIN TYPE=pid_bed", "_HOME_IF_NEEDED",
+                "_CONTEXT_STATE NAME=TUNING", "PID_CALIBRATE",
+                "_CONTEXT_STATE NAME=COMPLETE", "_CONTEXT_END"),
+            "PID_TUNE_EXTRUDER": (
+                "_CONTEXT_BEGIN TYPE=pid_extruder", "_HOME_IF_NEEDED",
+                "_CONTEXT_STATE NAME=TUNING", "PID_CALIBRATE",
+                "_CONTEXT_STATE NAME=COMPLETE", "_CONTEXT_END"),
+            "ZSHAPER": (
+                "_CONTEXT_BEGIN TYPE=input_shaper",
+                "_CONTEXT_STATE NAME=PREPARING", "_HOME_IF_NEEDED",
+                "_CONTEXT_STATE NAME=MEASURING", "SHAPER_CALIBRATE",
+                "_CONTEXT_STATE NAME=PROCESSING",
+                "RUN_SHELL_COMMAND CMD=zshaper PARAMS=\"--calculate\"",
+                "_CONTEXT_STATE NAME=COMPLETE", "_CONTEXT_END"),
+        }
+        for macro, lifecycle in workflows.items():
+            with self.subTest(macro=macro):
+                block = macros.split(
+                    "[gcode_macro %s]" % macro, 1)[1].split(
+                        "[gcode_macro ", 1)[0]
+                positions = [block.index(marker) for marker in lifecycle]
+                self.assertEqual(positions, sorted(positions))
 
     def test_feather_abort_is_an_immediate_gcode_command(self):
         root = pathlib.Path(__file__).parents[1]
@@ -1423,15 +1524,36 @@ class PrintWorkflowTest(unittest.TestCase):
         for context_type in (
                 "print", "auto_bed_level", "bed_screws", "bed_level",
                 "kamp", "mesh_validation", "nozzle_clean", "filament",
-                "cold_pull", "resume", "z_offset", "recovery"):
+                "cold_pull", "resume", "z_offset", "recovery", "pid_bed",
+                "pid_extruder", "input_shaper"):
             self.assertIn(
                 "[operation_context_type %s]" % context_type, registry)
         self.assertIn("cancel_mode: cancelable", registry)
         recovery = registry.split(
             "[operation_context_type recovery]", 1)[1]
         self.assertIn("cancel_mode: non_interruptible", recovery)
+        for context_type in ("pid_bed", "pid_extruder", "input_shaper"):
+            block = registry.split(
+                "[operation_context_type %s]" % context_type, 1)[1].split(
+                    "[operation_context_type ", 1)[0]
+            self.assertIn("cancel_mode: non_interruptible", block)
+            self.assertNotIn("on_cancel:", block)
         self.assertNotIn("cancelable:", registry)
         self.assertNotIn("suggest_force:", registry)
+
+    def test_runtime_has_no_legacy_status_bridge(self):
+        root = pathlib.Path(__file__).parents[1]
+        runtime_paths = tuple((root / "macros").glob("*.cfg"))
+        runtime_paths += tuple((root / "config").glob("*.cfg"))
+        runtime_paths += tuple(
+            (root / ".py" / "klipper" / "plugins").rglob("*.py"))
+        runtime = "\n".join(
+            path.read_text(encoding="utf-8") for path in runtime_paths)
+
+        for legacy_name in (
+                "_PRINT_STATUS", "FEATHER_PRINT_STATUS",
+                "print_status_text", "on_print_status"):
+            self.assertNotIn(legacy_name, runtime)
 
     def test_wait_temperature_derives_and_releases_thermal_state(self):
         root = pathlib.Path(__file__).parents[1]
@@ -2297,7 +2419,7 @@ class FilamentAndCalibrationWorkflowTest(unittest.TestCase):
         controller._handle_z_offset_command(Z_OFFSET_UI.SAFE_PROBE)
 
         self.assertEqual(moves, [
-            ("G28\n"
+            ("_HOME_IF_NEEDED\n"
              "MOVE_SAFE Z=16 ABSOLUTE=1 F=600\n"
              "MOVE_SAFE X=0 Y=0 ABSOLUTE=1 F=6000\n"
              "LOAD_CELL_TARE",
@@ -2364,7 +2486,7 @@ class FilamentAndCalibrationWorkflowTest(unittest.TestCase):
         feature.back(FEATHER.Page.Z_OFFSET_SUMMARY)
 
         self.assertEqual(moves, [(
-            "G28\nMOVE_SAFE Z=12 ABSOLUTE=1 F=600\n"
+            "_HOME_IF_NEEDED\nMOVE_SAFE Z=12 ABSOLUTE=1 F=600\n"
             "MOVE_SAFE X=0 Y=0 ABSOLUTE=1 F=6000\n"
             "LOAD_CELL_TARE\nMOVE_SAFE Z=6.000000 ABSOLUTE=1 F=300",
             "POSITIONING HEAD...")])
@@ -2485,7 +2607,9 @@ class FilamentAndCalibrationWorkflowTest(unittest.TestCase):
         self.assertIn('action:prompt_begin Cold Pull', cold_pull)
         self.assertIn("Cancel|_CONTEXT_CANCEL|secondary", cold_pull)
         self.assertIn("_CONTEXT_BEGIN TYPE=cold_pull", cold_pull)
-        self.assertIn("_CONTEXT_STATE NAME=HOMING", cold_pull)
+        self.assertIn("_HOME_IF_NEEDED", cold_pull)
+        self.assertNotIn("_CONTEXT_STATE NAME=HOMING", cold_pull)
+        self.assertIn("_CONTEXT_STATE NAME=HEATING", cold_pull)
         self.assertIn("_CONTEXT_STATE NAME=EXTRUDING", cold_pull)
         self.assertIn("_CONTEXT_STATE NAME=PULLING", cold_pull)
         self.assertIn("_CONTEXT_END", cold_pull)

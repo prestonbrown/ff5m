@@ -491,8 +491,12 @@ class ControllerSafetyTest(unittest.TestCase):
         controller._print_progress = lambda eventtime, stats: 1.0
         controller._print_time_values = (
             lambda eventtime, stats, progress: (359999.0, 359999.0))
-        controller.print_status_text = (
-            "CALIBRATING AND PREPARING PRINT SURFACE")
+        controller.operation_context = StatusObject({
+            "context_types": ("print",),
+            "context_path": ("Print",),
+            "current_state": "CALIBRATING AND PREPARING PRINT SURFACE",
+            "revision": 1,
+        })
         controller._last_dashboard = None
         controller._read_text = lambda path: ""
         controller._refresh_local_timezone = lambda: None
@@ -925,6 +929,8 @@ class ControllerSafetyTest(unittest.TestCase):
         controller.calibration_clean_nozzle = True
         controller.calibration_repeat_probe = False
 
+        controller._calibration_stage_commands("CALIBRATION: STARTING")
+
         with mock.patch.object(
                 controller.renderer, "text",
                 wraps=controller.renderer.text) as text:
@@ -933,9 +939,71 @@ class ControllerSafetyTest(unittest.TestCase):
         colors = dict((call.args[2], call.args[3])
                       for call in text.call_args_list)
         self.assertEqual(colors["PREP"], UI.ThemeColor.PRIMARY)
-        self.assertEqual(colors["HEAT"], UI.ThemeColor.SECONDARY)
+        self.assertEqual(colors["HEAT"], UI.ThemeColor.BRIGHT)
         for stage in ("CLEAN", "PROBE", "DONE"):
-            self.assertEqual(colors[stage], UI.ThemeColor.MUTED)
+            self.assertEqual(colors[stage], UI.ThemeColor.TEXT)
+
+    def test_mesh_progress_uses_current_state_not_context_path(self):
+        controller = ScenarioController.__new__(ScenarioController)
+        controller.renderer = FEATHER.FeatherRenderer()
+        controller.calibration_kind = "mesh"
+
+        controller._calibration_stage_commands("CALIBRATION: STARTING")
+        with mock.patch.object(
+                controller.renderer, "text",
+                wraps=controller.renderer.text) as text:
+            controller._calibration_stage_commands(
+                "BED LEVEL -> BED MESH -> NOZZLE CLEANING -> CLEANING", {
+                    "context_path": (
+                        "Bed Level", "Bed Mesh", "Nozzle Cleaning"),
+                    "current_state": "CLEANING",
+                })
+
+        colors = dict((call.args[2], call.args[3])
+                      for call in text.call_args_list)
+        self.assertEqual(colors["PREP"], UI.ThemeColor.PRIMARY)
+        self.assertEqual(colors["CLEAN"], UI.ThemeColor.BRIGHT)
+        self.assertEqual(colors["LEVEL"], UI.ThemeColor.TEXT)
+
+    def test_context_name_without_state_does_not_advance_progress(self):
+        controller = ScenarioController.__new__(ScenarioController)
+        controller.renderer = FEATHER.FeatherRenderer()
+        controller.calibration_kind = "mesh"
+
+        with mock.patch.object(
+                controller.renderer, "text",
+                wraps=controller.renderer.text) as text:
+            controller._calibration_stage_commands("BED LEVEL", {
+                "context_path": ("Bed Level",),
+                "current_state": None,
+            })
+
+        colors = dict((call.args[2], call.args[3])
+                      for call in text.call_args_list)
+        self.assertEqual(colors["PREP"], UI.ThemeColor.BRIGHT)
+        self.assertEqual(colors["LEVEL"], UI.ThemeColor.TEXT)
+
+    def test_skipped_and_pending_calibration_phases_use_distinct_colors(self):
+        controller = ScenarioController.__new__(ScenarioController)
+        controller.renderer = FEATHER.FeatherRenderer()
+        controller.calibration_kind = "mesh"
+
+        controller._calibration_stage_commands("CALIBRATION: STARTING")
+        with mock.patch.object(
+                controller.renderer, "text",
+                wraps=controller.renderer.text) as text:
+            controller._calibration_stage_commands(
+                "BED LEVEL -> BED MESH -> NOZZLE CLEANING -> HEATING NOZZLE")
+
+        colors = dict((call.args[2], call.args[3])
+                      for call in text.call_args_list)
+        self.assertEqual(colors["PREP"], UI.ThemeColor.PRIMARY)
+        self.assertEqual(colors["HOME"], UI.ThemeColor.DIM)
+        self.assertEqual(colors["HEAT"], UI.ThemeColor.BRIGHT)
+        labels = [call.args[2] for call in text.call_args_list]
+        self.assertNotIn("SKIPPED", labels)
+        self.assertNotIn("PENDING", labels)
+        self.assertNotIn("ACTIVE", labels)
 
     def test_cancelable_calibration_offers_context_cancel_and_global_abort(self):
         for kind in ("screws", "mesh", "z"):
@@ -956,7 +1024,6 @@ class ControllerSafetyTest(unittest.TestCase):
                         "revision": 1,
                     }})()
                 controller.reactor = Reactor()
-                controller.print_status_text = "HEATING..."
                 controller.renderer.send = lambda commands: None
                 controller.renderer.set_emergency_stop_visible(True)
 
@@ -985,15 +1052,16 @@ class ControllerSafetyTest(unittest.TestCase):
         self.assertIn("_CONTEXT_END", clean)
         self.assertIn("MOVE_SAFE Z=20 ABSOLUTE=1 F=600", clean)
         self.assertIn("LOAD_CELL_TARE", clean)
-        self.assertNotIn("_PRINT_STATUS", clean)
 
         controller.calibration_clean_nozzle = False
         no_clean = controller._z_preparation_command()
         self.assertIn("M104 S120", no_clean)
-        self.assertIn("G28", no_clean)
+        self.assertIn("_HOME_IF_NEEDED", no_clean)
         self.assertIn(
             "_WAIT_TEMPERATURE CMD=M104 VALUE=120", no_clean)
-        self.assertNotIn("_CONTEXT_STATE NAME=HEATING", no_clean)
+        self.assertIn("_CONTEXT_STATE NAME=HEATING", no_clean)
+        self.assertNotIn("_CONTEXT_STATE NAME=HOMING", no_clean)
+        self.assertNotIn("\nG28\n", no_clean)
         self.assertNotIn("M140", no_clean)
         self.assertNotIn("CLEAR_NOZZLE", no_clean)
         self.assertIn("MOVE_SAFE Z=20 ABSOLUTE=1 F=600", no_clean)
@@ -1333,14 +1401,23 @@ class ControllerSafetyTest(unittest.TestCase):
         controller.temperature_wait = type(
             "Wait", (), {"variables": {
                 "active": False, "cancel": False}})()
-        controller.print_status_text = "CALIBRATION: STARTING"
+        operation = {
+            "context_types": ("bed_level",),
+            "context_path": ("Bed Mesh",),
+            "current_state": None,
+            "revision": 1,
+        }
+        controller.operation_context = type("Contexts", (), {
+            "get_status": lambda self, eventtime: dict(operation),
+        })()
+        controller.reactor = Reactor()
         batches = []
         controller.renderer.send = batches.append
         controller.renderer.set_emergency_stop_visible(True)
         controller._render_calibration_progress()
         initial_generation = controller.renderer.generation
 
-        controller.print_status_text = "HOMING..."
+        operation.update(current_state="HOMING", revision=2)
         controller._update_calibration_progress()
 
         self.assertGreater(controller.renderer.generation, initial_generation)
@@ -1381,10 +1458,8 @@ class ControllerSafetyTest(unittest.TestCase):
 
         colors = dict((call.args[2], call.args[3])
                       for call in text.call_args_list)
-        self.assertEqual(colors, {
-            "PROBE": UI.ThemeColor.SECONDARY,
-            "DONE": UI.ThemeColor.MUTED,
-        })
+        self.assertEqual(colors["PROBE"], UI.ThemeColor.BRIGHT)
+        self.assertEqual(colors["DONE"], UI.ThemeColor.TEXT)
 
     def test_settings_use_switch_for_sound_and_show_light_level(self):
         controller = ScenarioController.__new__(ScenarioController)
@@ -2045,7 +2120,7 @@ class ControllerSafetyTest(unittest.TestCase):
         controller.reactor = Reactor()
         controller.print_state = FEATHER.PrintState.PRINTING
         controller.pending_action = None
-        controller.print_status_text = "Heating"
+        controller.operation_context = None
         controller.virtual_sdcard = type("SD", (), {
             "file_path": lambda self: "/data/test.gcode"})()
         controller._live_z_adjust_allowed = lambda eventtime: False
@@ -2070,7 +2145,7 @@ class ControllerSafetyTest(unittest.TestCase):
         controller.reactor = Reactor()
         controller.print_state = FEATHER.PrintState.PREPARING
         controller.pending_action = None
-        controller.print_status_text = "Heating"
+        controller.operation_context = None
         controller.virtual_sdcard = type("SD", (), {
             "file_path": lambda self: "/data/test.gcode"})()
         controller.print_flow = type("Flow", (), {"variables": {
@@ -2848,7 +2923,12 @@ class ControllerSafetyTest(unittest.TestCase):
             "BED MESH: PREPARING"))
         labels = re.findall(r'-t "([^"]+)"', drawing)
 
-        self.assertEqual(len(labels), 5)
+        self.assertEqual(
+            [label for label in labels if label in (
+                "PREP", "HOME", "HEAT", "CLEAN", "LEVEL")],
+            ["PREP", "HOME", "HEAT", "CLEAN", "LEVEL"])
+        self.assertNotIn("ACTIVE", labels)
+        self.assertNotIn("PENDING", labels)
 
     def test_persisted_theme_is_selected_before_first_renderer_output(self):
         with tempfile.TemporaryDirectory() as directory:

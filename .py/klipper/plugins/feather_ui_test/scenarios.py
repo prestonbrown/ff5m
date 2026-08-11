@@ -396,7 +396,8 @@ class ScenarioCatalog:
             "extruder", "heater_bed", "toolhead", "network_status",
             "last_job_name", "print_state", "print_stats", "virtual_sdcard",
             "_current_material", "_print_progress", "_print_time_values",
-            "print_status_text", "_last_dashboard",
+            "_operation_context_status", "_operation_context_text",
+            "_last_dashboard",
         )
         original = dict((name, getattr(host, name)) for name in names)
         try:
@@ -419,7 +420,14 @@ class ScenarioCatalog:
             host._print_progress = lambda _eventtime, _stats: 1.0
             host._print_time_values = (
                 lambda _eventtime, _stats, _progress: (359999.0, 359999.0))
-            host.print_status_text = "CALIBRATING AND PREPARING PRINT SURFACE"
+            host._operation_context_status = lambda _eventtime: {
+                "context_types": ("print",),
+                "context_path": ("Print",),
+                "current_state": "CALIBRATING AND PREPARING PRINT SURFACE",
+            }
+            host._operation_context_text = (
+                lambda eventtime=None, status=None:
+                "PRINT -> CALIBRATING AND PREPARING PRINT SURFACE")
             host._last_dashboard = None
             host._render_home()
         finally:

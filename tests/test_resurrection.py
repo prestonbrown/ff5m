@@ -543,6 +543,28 @@ class ResurrectorLifecycleTest(unittest.TestCase):
                              os.path.join("models", "part.gcode"))
             self.assertEqual(command.responses, [])
 
+    def test_recovery_context_wraps_validation_and_resets_on_rejection(self):
+        for command_name in ("cmd_RESURRECT", "cmd_RESURRECT_ABORT"):
+            with self.subTest(command=command_name):
+                resurrector = RESURRECTION.Resurrector.__new__(
+                    RESURRECTION.Resurrector)
+                resurrector.state = (
+                    RESURRECTION.ResurrectorState.RESURRECTION)
+                resurrector.gcode = GCodeRecorder()
+                resurrector._load_resurrection_state = lambda gcmd: None
+                command = Command()
+
+                getattr(resurrector, command_name)(command)
+
+                lines = [
+                    line for script in resurrector.gcode.commands
+                    for line in script.splitlines()]
+                self.assertEqual(lines, [
+                    "_CONTEXT_BEGIN TYPE=recovery",
+                    '_CONTEXT_STATE NAME="LOADING STATE"',
+                    "_CONTEXT_RESET",
+                ])
+
     def test_resurrection_applies_reduced_state_in_safe_order(self):
         resurrector = RESURRECTION.Resurrector.__new__(
             RESURRECTION.Resurrector)
@@ -689,6 +711,35 @@ class ResurrectorLifecycleTest(unittest.TestCase):
         self.assertTrue(any(
             "preparation failed" in response
             for response in command.responses))
+
+    def test_cleanup_failure_resets_context_and_turns_off_heat_and_fan(self):
+        class FailingCleanupGCode(GCodeRecorder):
+            def run_script_from_command(self, command):
+                self.commands.append(command)
+                if "_CONTEXT_STATE NAME=PREPARING" in command:
+                    raise RuntimeError("cleanup failed")
+
+        resurrector = RESURRECTION.Resurrector.__new__(
+            RESURRECTION.Resurrector)
+        resurrector.state = RESURRECTION.ResurrectorState.RESURRECTION
+        resurrector.gcode = FailingCleanupGCode()
+        resurrector._worker = None
+        resurrector._worker_cancel = None
+        resurrector._load_resurrection_state = lambda gcmd: {
+            "bed_temp": 60., "extruder_temp": 220.,
+        }
+        command = Command()
+
+        resurrector.cmd_RESURRECT_ABORT(command)
+
+        cleanup = "\n".join(resurrector.gcode.commands)
+        self.assertIn("_CONTEXT_RESET", cleanup)
+        self.assertIn("TURN_OFF_HEATERS", cleanup)
+        self.assertIn("M106 P1 S0", cleanup)
+        self.assertEqual(
+            resurrector.state, RESURRECTION.ResurrectorState.RESURRECTION)
+        self.assertTrue(any(
+            "cleanup failed" in response for response in command.responses))
 
 
 class RecoveryMacroIntegrationTest(unittest.TestCase):

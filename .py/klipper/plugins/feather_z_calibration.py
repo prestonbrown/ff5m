@@ -437,7 +437,8 @@ class FeatherZCalibrationMixin:
         self._show_page(Page.SAFE_Z_BRIEFING)
 
     def _start_z_calibration_preparation(self):
-        self.print_status_text = "Z OFFSET: PREP"
+        self.calibration_starting_text = "STARTING..."
+        self._reset_calibration_progress()
         self._show_page(Page.CALIBRATION_PROGRESS)
         self.reactor.register_callback(self._run_z_calibration_preparation)
 
@@ -458,8 +459,8 @@ class FeatherZCalibrationMixin:
         return "\n".join((
             '_CONTEXT_BEGIN TYPE=z_offset',
             "M104 S%.0f" % cooldown,
-            '_CONTEXT_STATE NAME=HOMING',
-            "G28",
+            '_HOME_IF_NEEDED',
+            '_CONTEXT_STATE NAME=HEATING',
             "_WAIT_TEMPERATURE CMD=M104 VALUE=%.0f BELOW=2 ABOVE=3" %
             cooldown,
             '_CONTEXT_STATE NAME=TARING',
@@ -513,7 +514,7 @@ class FeatherZCalibrationMixin:
             session.safe_z_candidate = None
         session.safe_z_probing = False
         commands = [
-            "G28",
+            "_HOME_IF_NEEDED",
             "MOVE_SAFE Z=%g ABSOLUTE=1 F=600" %
             self._safe_z_preparation_height(),
             "MOVE_SAFE X=0 Y=0 ABSOLUTE=1 F=6000",

@@ -544,8 +544,9 @@ class FeatherPagesMixin(FeatherNetworkPagesMixin):
         if revision == getattr(self, "_last_operation_revision", -1):
             return
         self._last_operation_revision = revision
-        if not self._blocking_operation_active():
-            self._draw_print_status(self._display_status_text(eventtime))
+        if self._page_paint_allowed(Page.PRINTING, Page.PAUSED):
+            self._draw_print_status(
+                self._display_status_text(status=operation))
 
     cmd_FEATHER_ABORT_help = "Request cancellation of the active operation"
     def _request_operation_cancel(self):
@@ -1536,14 +1537,13 @@ class FeatherPagesMixin(FeatherNetworkPagesMixin):
             self._show_page(Page.RECOVERY_CONFIRM)
         elif action == "recovery.confirm":
             command = "RESURRECT" if self.recovery_action == "restore" else "RESURRECT_ABORT"
-            status = ("STARTING RECOVERY..."
-                      if command == "RESURRECT" else "STARTING CLEANUP...")
             manager = getattr(self, "feature_manager", None)
             if manager is not None:
-                manager.get("calibration").begin_recovery(status)
+                manager.get("calibration").begin_recovery()
             else:
                 self.calibration_kind = "recovery"
-                self.print_status_text = status
+                self.calibration_starting_text = "STARTING..."
+                self._reset_calibration_progress()
             self._show_page(Page.CALIBRATION_PROGRESS)
             self.reactor.register_callback(
                 lambda eventtime, cmd=command: self._run_recovery(eventtime, cmd))

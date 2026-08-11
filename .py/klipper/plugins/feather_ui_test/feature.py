@@ -54,11 +54,6 @@ class UITestFeature:
         if run is not None:
             run.update(eventtime)
 
-    def on_print_status(self, status):
-        run = self.current_run
-        if run is not None:
-            run.on_print_status(status)
-
     def on_gcode_output(self, message):
         run = self.current_run
         if run is not None:

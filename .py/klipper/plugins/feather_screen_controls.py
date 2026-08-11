@@ -1193,6 +1193,10 @@ class FeatherControlsMixin:
             if self._tuning_save_available():
                 self._restart_klipper("SAVE_CONFIG")
 
+    def _reset_calibration_progress(self):
+        self.calibration_progress_key = None
+        self.calibration_seen_phases = set()
+
     def _start_calibration(self, repeat_probe=False):
         self._require_idle()
         self._cancel_delayed_tasks()
@@ -1204,14 +1208,8 @@ class FeatherControlsMixin:
         self.calibration_cancel_requested = False
         self.calibration_cancel_dispatched = False
         self.calibration_cancelled = False
-        if self.calibration_repeat_probe:
-            self.print_status_text = "BED SCREWS: PROBING"
-        else:
-            self.print_status_text = {
-                "pid_bed": "BED PID: STARTING",
-                "pid_extruder": "HOTEND PID: STARTING",
-                "shaper": "INPUT SHAPER: STARTING",
-            }.get(self.calibration_kind, "CALIBRATION: STARTING")
+        self._reset_calibration_progress()
+        self.calibration_starting_text = "STARTING..."
         self._show_page(Page.CALIBRATION_PROGRESS)
         self.reactor.register_callback(self._run_calibration)
 
@@ -1442,14 +1440,16 @@ class FeatherControlsMixin:
         self.renderer.send(commands)
 
     def _render_calibration_progress(self):
-        label = (self._operation_context_text()
-                 or self.print_status_text or "Calibration running...")
+        operation = self._operation_context_status()
+        label = (self._operation_context_text(status=operation)
+                 or getattr(
+                     self, "calibration_starting_text", "STARTING..."))
         title = "Recovery" if self.calibration_kind == "recovery" else "Calibration"
         commands = self.renderer.begin_page(title)
         commands.append(self.renderer.text(
             400, 142, label, ThemeColor.SECONDARY, "JetBrainsMono Bold 12pt", "center",
             max_width=704, truncate=True))
-        commands += self._calibration_stage_commands(label)
+        commands += self._calibration_stage_commands(label, operation)
         cancel_visible = self._calibration_cancel_visible()
         if cancel_visible:
             commands += self.renderer.button(
@@ -1466,8 +1466,10 @@ class FeatherControlsMixin:
         self._last_calibration_cancel_visible = cancel_visible
 
     def _update_calibration_progress(self):
-        label = (self._operation_context_text()
-                 or self.print_status_text or "Calibration running...")
+        operation = self._operation_context_status()
+        label = (self._operation_context_text(status=operation)
+                 or getattr(
+                     self, "calibration_starting_text", "STARTING..."))
         cancel_visible = self._calibration_cancel_visible()
         if (label == self._last_calibration_label
                 and cancel_visible == getattr(
@@ -1488,7 +1490,7 @@ class FeatherControlsMixin:
                     self.renderer.text(
                         400, 142, label, ThemeColor.SECONDARY, "JetBrainsMono Bold 12pt",
                         "center", max_width=704, truncate=True)]
-        commands += self._calibration_stage_commands(label)
+        commands += self._calibration_stage_commands(label, operation)
         self.renderer.send(commands)
 
     def _calibration_cancel_visible(self):
@@ -1532,8 +1534,13 @@ class FeatherControlsMixin:
             return False
         return True
 
-    def _calibration_stage_commands(self, label):
-        text = str(label).upper()
+    def _calibration_stage_commands(self, label, operation=None):
+        # Context paths contain workflow names such as BED LEVEL and NOZZLE
+        # CLEANING. Only the trailing state describes the current phase.
+        if operation and operation.get("context_path"):
+            text = str(operation.get("current_state") or "").upper()
+        else:
+            text = str(label).upper().rsplit(" -> ", 1)[-1]
         if self.calibration_kind == "recovery":
             if getattr(self, "recovery_action", None) == "cleanup":
                 stages = ("PREP", "HEAT", "HOME", "CLEANUP")
@@ -1558,6 +1565,11 @@ class FeatherControlsMixin:
             stages = ("PREP", "HOME", "MEASURE", "PROCESS", "DONE")
         else:
             stages = ("PREP", "HOME", "HEAT", "CLEAN", "LEVEL")
+
+        progress_key = (self.calibration_kind, stages)
+        if getattr(self, "calibration_progress_key", None) != progress_key:
+            self.calibration_progress_key = progress_key
+            self.calibration_seen_phases = set()
 
         phase = stages[0]
         if self.calibration_kind == "recovery" and (
@@ -1585,7 +1597,9 @@ class FeatherControlsMixin:
             phase = "PROBE"
         elif "LEVEL" in text:
             phase = "LEVEL"
-        elif any(marker in text for marker in ("CLEAN", "COOL")):
+        elif "COOL" in text:
+            phase = "HEAT"
+        elif "CLEAN" in text:
             phase = "CLEAN"
         elif "DONE!" in text and "CLEAN" in stages:
             phase = "CLEAN"
@@ -1595,7 +1609,10 @@ class FeatherControlsMixin:
             phase = "HEAT"
         elif any(marker in text for marker in ("PREP", "START")):
             phase = "PREP"
-        current = stages.index(phase) if phase in stages else 0
+        if phase not in stages:
+            phase = stages[0]
+        current = stages.index(phase)
+        self.calibration_seen_phases.add(phase)
 
         left, right, gap = 55, 745, 12
         width = (right - left - gap * (len(stages) - 1)) // len(stages)
@@ -1603,15 +1620,26 @@ class FeatherControlsMixin:
         for position, stage in enumerate(stages):
             x = left + position * (width + gap)
             if position == current:
-                color = ThemeColor.SECONDARY
-            elif position < current:
+                border = ThemeColor.SECONDARY
+                background = ThemeColor.SECONDARY_DARK
+                color = ThemeColor.BRIGHT
+            elif stage in self.calibration_seen_phases:
+                border = ThemeColor.PRIMARY
+                background = ThemeColor.PANEL
                 color = ThemeColor.PRIMARY
+            elif position < current:
+                border = ThemeColor.DIM
+                background = ThemeColor.PANEL
+                color = ThemeColor.DIM
             else:
-                color = ThemeColor.MUTED
-            commands += [self.renderer.fill(x, 225, width, 38, ThemeColor.PANEL),
-                         self.renderer.stroke(x, 225, width, 38, color, 2),
-                         self.renderer.text(x + width // 2, 244, stage, color,
-                                            "JetBrainsMono 8pt", "center", "middle")]
+                border = ThemeColor.BORDER
+                background = ThemeColor.PANEL
+                color = ThemeColor.TEXT
+            commands += [self.renderer.fill(x, 225, width, 38, background),
+                         self.renderer.stroke(x, 225, width, 38, border, 2),
+                         self.renderer.text(
+                             x + width // 2, 244, stage, color,
+                             "JetBrainsMono 8pt", "center", "middle")]
         return commands
 
     def _run_calibration(self, eventtime):

@@ -122,7 +122,7 @@ Feather stores the selected material in `mod_params` as `current_material`. Sele
 
 ### How operation status reaches Feather
 
-Feather reads `context_path`, `current_state`, and cancellation metadata directly from `operation_context`. Managed macros publish compact type/state transitions, so nested operations automatically render their full path without caller-provided status strings. `FEATHER_PRINT_STATUS` remains only as an internal compatibility fallback for older, unmigrated workflows and is not a slicer contract. Continue using normal `START_PRINT`, `PAUSE`, `RESUME`, and `CANCEL_PRINT` flows.
+Feather reads `context_path`, `current_state`, cancellation metadata, and the snapshot revision directly from `operation_context`. Managed macros publish compact type/state transitions, so nested operations automatically render their full path without caller-provided status strings. Continue using normal `START_PRINT`, `PAUSE`, `RESUME`, and `CANCEL_PRINT` flows.
 
 ### Extending Feather safely
 

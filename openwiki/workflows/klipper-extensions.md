@@ -16,7 +16,7 @@ The normal shared configuration, [`macros/base.cfg`](../../macros/base.cfg), inc
 | `md5_check` | `base.cfg` | `CHECK_MD5` | Checks a slicer-written G-code checksum before a print and cancels corrupt jobs. |
 | `tone_player` | `base.cfg` | `TONE`; macro wrappers `M300`, `BEEP`, `ALARM` | Plays PWM audio sequences through the printer’s audio hardware. |
 | `resurrection` | `headless.cfg` | `RESURRECT`, `RESURRECT_ABORT` | Optional power-loss state capture and assisted print resume. |
-| `feather_screen` | `feather.cfg` | `FEATHER_ABORT`; `FEATHER_PRINT_STATUS` compatibility bridge | Drives the minimal Feather display/status UI. |
+| `feather_screen` | `feather.cfg` | `FEATHER_ABORT` | Drives the minimal Feather display/status UI. |
 
 `operation_context` keeps the context path and current state separate in Klipper status. Metadata and cleanup are registered once per context type. Nested operations suspend and restore their caller automatically; managed waits temporarily replace only the current state. Each type has a `cancel_mode`: ordinary `interruptible` work stops at the next managed boundary, `cancelable` also defines an explicit cleanup domain, and `non_interruptible` work permits only the emergency `M112` path. Command errors, restart, shutdown, and disconnect clear the stack synchronously. Invalid manual operations report `!!` warnings without stopping G-code.
 
@@ -103,13 +103,13 @@ so the same macros remain compatible when the extension is absent or older.
 
 [`feather_screen.py`](../../.py/klipper/plugins/feather_screen.py) is loaded only in the Feather configuration (`SET_MOD PARAM=display VALUE=FEATHER`). It starts the bundled `typer` renderer, sends drawing commands through `/tmp/typer`, and receives named touch actions through `/tmp/feather-events`. The plugin owns the UI state machine and validates printer state before starting files, invoking pause/resume/cancel macros, moving homed axes, controlling heaters/fan, or starting an asynchronous network operation.
 
-Its only registered command is:
+Its operator-facing registered command is:
 
 ```gcode
-FEATHER_PRINT_STATUS S="PREPARING..."
+FEATHER_ABORT
 ```
 
-`FEATHER_PRINT_STATUS` remains a compatibility bridge for workflows not yet migrated to operation contexts. New managed workflows should publish `_CONTEXT_BEGIN TYPE=...` and `_CONTEXT_STATE` instead of duplicating UI strings. Interactive controls use the normal print and movement paths; generic cancellation requests are resolved by `operation_context`. See [Screen modes and Feather](screens-and-feather.md) for the architecture and safety gates.
+Managed workflows publish `_CONTEXT_BEGIN TYPE=...` and `_CONTEXT_STATE`; Feather observes the structured snapshot and its revision during the normal update cycle. Interactive controls use the normal print and movement paths, and generic cancellation requests are resolved by `operation_context`. See [Screen modes and Feather](screens-and-feather.md) for the architecture and safety gates.
 
 ## Change and validation guidance
 

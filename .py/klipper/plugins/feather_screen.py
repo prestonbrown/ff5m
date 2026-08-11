@@ -218,7 +218,6 @@ class FeatherScreen(FeatherPagesMixin, FeatherControlsMixin):
         self.home_during_print = False
         self.busy_message = None
         self.busy_phase = 0
-        self.print_status_text = ""
         self.toast_until = 0.0
         self.toast_message = ""
 
@@ -297,7 +296,6 @@ class FeatherScreen(FeatherPagesMixin, FeatherControlsMixin):
         self.printer.register_event_handler("klippy:ready", self._init)
         self.printer.register_event_handler("klippy:shutdown", self._shutdown)
         self.printer.register_event_handler("klippy:disconnect", self._disconnect)
-        self.gcode.register_command("FEATHER_PRINT_STATUS", self.cmd_FEATHER_PRINT_STATUS)
         self.gcode.register_command(
             "FEATHER_ABORT", self.cmd_FEATHER_ABORT,
             desc=self.cmd_FEATHER_ABORT_help)
@@ -589,15 +587,6 @@ class FeatherScreen(FeatherPagesMixin, FeatherControlsMixin):
             wait.variables = dict(getattr(wait, "variables", {}))
             wait.variables["active"] = False
             wait.variables["cancel"] = True
-
-    def cmd_FEATHER_PRINT_STATUS(self, gcmd):
-        status = gcmd.get("S")
-        self.print_status_text = status
-        if self.page in (Page.PRINTING, Page.PAUSED):
-            operation = self._operation_context_text(
-                self.reactor.monotonic())
-            self._draw_print_status(operation or status)
-        self._notify_features("on_print_status", status)
 
     def get_status(self, eventtime):
         status = self.renderer.get_status()
@@ -1267,8 +1256,9 @@ class FeatherScreen(FeatherPagesMixin, FeatherControlsMixin):
             "revision": int(status.get("revision", 0)),
         }
 
-    def _operation_context_text(self, eventtime=None):
-        status = self._operation_context_status(eventtime)
+    def _operation_context_text(self, eventtime=None, status=None):
+        if status is None:
+            status = self._operation_context_status(eventtime)
         parts = [str(name).strip().upper()
                  for name in status["context_path"] if str(name).strip()]
         state = status["current_state"]
@@ -1276,9 +1266,18 @@ class FeatherScreen(FeatherPagesMixin, FeatherControlsMixin):
             parts.append(str(state).strip().upper())
         return " -> ".join(parts)
 
-    def _display_status_text(self, eventtime=None):
-        return (self._operation_context_text(eventtime)
-                or str(getattr(self, "print_status_text", "")))
+    def _display_status_text(self, eventtime=None, status=None):
+        if status is None:
+            status = self._operation_context_status(eventtime)
+        if "print" in status["context_types"]:
+            operation = self._operation_context_text(status=status)
+            if operation:
+                return operation
+        return {
+            PrintState.PREPARING: "PREPARING",
+            PrintState.PAUSED: "PAUSED",
+            PrintState.PRINTING: "PRINTING",
+        }.get(getattr(self, "print_state", None), "PRINTING")
 
     def _build_safety_registry(self):
         registry = SafetyRegistry(excluded_routes=(Page.IDLE_HOME,))
@@ -1730,6 +1729,7 @@ class FeatherScreen(FeatherPagesMixin, FeatherControlsMixin):
         if new_state != self.print_state:
             self._change_print_state(new_state, state)
         self._poll_usb_storage(eventtime)
+        self._update_operation_context(eventtime)
         if manager is not None:
             manager.update(eventtime)
         self._refresh_emergency_stop(eventtime)
@@ -1767,7 +1767,6 @@ class FeatherScreen(FeatherPagesMixin, FeatherControlsMixin):
             self.busy_phase = (self.busy_phase + 1) % 5
             self.renderer.loader(self.busy_message, self.busy_phase)
         elif self.page in (Page.PRINTING, Page.PAUSED):
-            self._update_operation_context(eventtime)
             self._update_print_progress(eventtime)
         elif (self.page == Page.CANCEL_CONFIRM
               and getattr(self, "cancel_mode", None) == "pending"):

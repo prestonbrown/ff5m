@@ -490,8 +490,7 @@ class Resurrector:
                 self.gcode.run_script_from_command(
                     "_CONTEXT_RESET\n"
                     "TURN_OFF_HEATERS\n"
-                    "M106 P1 S0\n"
-                    "_PRINT_STATUS S='RECOVERY FAILED'")
+                    "M106 P1 S0")
             except Exception:
                 logging.exception(
                     "[resurrection] Failed to apply recovery cleanup")
@@ -520,11 +519,15 @@ class Resurrector:
             gcmd.respond_raw(f"!! The printer isn’t in a resurrection state!")
             return
 
-        self.gcode.run_script_from_command("_PRINT_STATUS S='RESURRECTING...'")
+        self.gcode.run_script_from_command("\n".join([
+            '_CONTEXT_BEGIN TYPE=recovery',
+            '_CONTEXT_STATE NAME="LOADING STATE"',
+        ]))
         gcmd.respond_raw("// action:prompt_end")
 
         state = self._load_resurrection_state(gcmd)
         if state is None:
+            self.gcode.run_script_from_command("_CONTEXT_RESET")
             return
 
         mesh_name = state["mesh"]
@@ -535,15 +538,12 @@ class Resurrector:
                 mesh_name = 'auto'
             else:
                 gcmd.respond_raw(f"!! Failed to resurrect. Bed mesh missing: {mesh_name!r}")
+                self.gcode.run_script_from_command("_CONTEXT_RESET")
                 return
 
         self._change_state(ResurrectorState.LOADING)
         file_loaded = False
         try:
-            self.gcode.run_script_from_command("\n".join([
-                '_CONTEXT_BEGIN TYPE=recovery',
-                '_CONTEXT_STATE NAME="LOADING STATE"',
-            ]))
             parsed_state = self._load_state(state)
             if self.state == ResurrectorState.DESTROYED:
                 return
@@ -566,8 +566,7 @@ class Resurrector:
                 "M106 P1 S255",
                 "_WAIT_TEMPERATURE CMD=M104 VALUE=%s"
                 % (_format_number(extruder_temp),),
-                "_CONTEXT_STATE NAME=HOMING",
-                "G28",
+                "_HOME_IF_NEEDED",
                 "M400",
                 "LOAD_CELL_TARE",
                 "G92 E0",
@@ -624,25 +623,34 @@ class Resurrector:
             gcmd.respond_raw(f"!! The printer isn’t in a resurrection state!")
             return
 
+        self.gcode.run_script_from_command("\n".join([
+            '_CONTEXT_BEGIN TYPE=recovery',
+            '_CONTEXT_STATE NAME="LOADING STATE"',
+        ]))
         gcmd.respond_raw("// action:prompt_end")
         state = self._load_resurrection_state(gcmd)
         if state is None:
+            self.gcode.run_script_from_command("_CONTEXT_RESET")
             return
 
-        self.gcode.run_script_from_command("\n".join([
-            '_CONTEXT_BEGIN TYPE=recovery',
-            '_CONTEXT_STATE NAME=PREPARING',
-            f"_WAIT_TEMPERATURE CMD=M140 VALUE={state['bed_temp']} BELOW=2 ABOVE=3",
-            f"_WAIT_TEMPERATURE CMD=M104 VALUE={state['extruder_temp']}",
+        try:
+            self.gcode.run_script_from_command("\n".join([
+                '_CONTEXT_STATE NAME=PREPARING',
+                f"_WAIT_TEMPERATURE CMD=M140 VALUE={state['bed_temp']} BELOW=2 ABOVE=3",
+                f"_WAIT_TEMPERATURE CMD=M104 VALUE={state['extruder_temp']}",
 
-            "_CONTEXT_STATE NAME=HOMING",
-            f"G28",
-            f"M400",
+                "_HOME_IF_NEEDED",
+                f"M400",
 
-            "_CONTEXT_STATE NAME=FINISHING",
-            f"TURN_OFF_HEATERS",
-            f"_CONTEXT_END",
-        ]))
+                "_CONTEXT_STATE NAME=FINISHING",
+                f"TURN_OFF_HEATERS",
+                f"_CONTEXT_END",
+            ]))
+        except Exception as error:
+            if self.state != ResurrectorState.DESTROYED:
+                self._rollback_recovery(
+                    gcmd, str(error) or error.__class__.__name__)
+            return
 
         self._clear(self.reactor.monotonic())
         self._change_state(ResurrectorState.IDLE)

@@ -76,7 +76,8 @@ class UITestRun:
         self.started_at = None
         self.snapshot = None
         self.finalizing = False
-        self._last_stage_status = None
+        self._last_stage_revision = -1
+        self._last_stage_signature = None
         self.calibration_stages = []
         self.test_results = {}
         self.renderer_dropped = 0
@@ -106,17 +107,29 @@ class UITestRun:
         return False
 
     def update(self, eventtime):
-        pass
-
-    def on_print_status(self, status):
-        status = str(status)
+        operation = self.host._operation_context_status(eventtime)
+        revision = int(operation.get("revision", 0))
+        if revision == self._last_stage_revision:
+            return
+        self._last_stage_revision = revision
+        signature = (
+            tuple(operation.get("context_types", ())),
+            tuple(operation.get("context_path", ())),
+            operation.get("current_state"),
+        )
         if (not self.running or self.finalizing
-                or status == self._last_stage_status
+                or signature == self._last_stage_signature
                 or self.phase not in ("screws", "mesh", "z")):
             return
-        self._last_stage_status = status
+        self._last_stage_signature = signature
+        status = self.host._operation_context_text(status=operation)
+        if not status:
+            status = "IDLE"
         self.calibration_stages.append({
             "time": time.time(), "phase": self.phase, "status": status,
+            "context_types": signature[0],
+            "context_path": signature[1],
+            "current_state": signature[2],
         })
         self.capture_number += 1
         number = self.capture_number
@@ -234,7 +247,8 @@ class UITestRun:
             self._attach_context_recorder()
             self.running = True
             self.finalizing = False
-            self._last_stage_status = None
+            self._last_stage_revision = -1
+            self._last_stage_signature = None
             self._event("run started suite=%s material=%s" %
                         (suite, self.material or "n/a"))
             gcmd.respond_info(

@@ -158,6 +158,7 @@ class OperationContextManagerTest(unittest.TestCase):
         commands = (
             ("_CONTEXT_BEGIN", {"TYPE": "bed_screws"}),
             ("_CONTEXT_STATE", {"NAME": "HOMING"}),
+            ("_CONTEXT_STATE", {"NAME": "HEATING"}),
             ("_CONTEXT_STATE", {"NAME": "PROBING"}),
             ("_CONTEXT_END", {}),
         )

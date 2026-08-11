@@ -147,7 +147,10 @@ def dashboard_job(host, eventtime):
         progress_value = 0.0
         elapsed = stats.get("print_duration")
         remaining = None
-    detail = getattr(host, "print_status_text", "") or label
+    operation = host._operation_context_status(eventtime)
+    detail = (host._operation_context_text(status=operation)
+              if "print" in operation.get("context_types", ()) else label)
+    detail = detail or label
     return DashboardJob(
         True, label, filename, int(progress_value * 100),
         host._clock_duration(elapsed), host._clock_duration(remaining), detail)

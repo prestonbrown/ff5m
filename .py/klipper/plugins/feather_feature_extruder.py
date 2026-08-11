@@ -52,11 +52,6 @@ class ExtruderCalibrationFeature(FeatherExtruderCalibrationMixin,
     def update(self, eventtime):
         self._poll_extruder_calibration(eventtime)
 
-    def on_print_status(self, status):
-        if self.extruder_calibration.phase == "cold_pull":
-            self._poll_extruder_calibration(
-                self.reactor.monotonic(), force=True)
-
     def safety_armed_reasons(self, page, eventtime):
         return (("extruder-controls",)
                 if page == Page.EXTRUDER_CALIBRATION else ())

@@ -434,12 +434,6 @@ validation, and persistent override examples.
     - `WHITE` (float, required): Brightness (0 to 1).
   - **Defaults**: Skips if `disable_screen_led` is true for chamber LED.
 
-- **_PRINT_STATUS**
-  - **Description**: Logs the current printer state.
-  - **Parameters**:
-    - `S` (string, required): State message.
-  - **Defaults**: Logs to console with "//" prefix.
-
 - **_ENSURE_SERVICES_STARTED**
   - **Description**: Ensures services like camera and SSH are running.
   - **Parameters**: None.

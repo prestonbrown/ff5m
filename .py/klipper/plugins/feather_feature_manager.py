@@ -184,14 +184,6 @@ class FeatureHostProxy:
     def previous_page(self, value):
         self._host.previous_page = value
 
-    @property
-    def print_status_text(self):
-        return self._host.print_status_text
-
-    @print_status_text.setter
-    def print_status_text(self, value):
-        self._host.print_status_text = value
-
     def __getattr__(self, name):
         return getattr(self._host, name)
 
@@ -211,9 +203,6 @@ class FeatureHostProxy:
         return False
 
     def update(self, eventtime):
-        pass
-
-    def on_print_status(self, status):
         pass
 
     def on_gcode_output(self, message):
