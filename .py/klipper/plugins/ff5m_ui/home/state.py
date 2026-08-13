@@ -86,11 +86,20 @@ def collect_dashboard(host, eventtime, clock=None):
     toolhead = host.toolhead.get_status(eventtime)
     homed = str(toolhead.get("homed_axes", "")).upper()
     mode = host.network_status.get("mode") or "OFFLINE"
+    connection_state = (host.network_status.get("state") or
+                        ("CONNECTED" if host.network_status.get("ip") else
+                         "DISCONNECTED")).upper()
     ssid = host.network_status.get("ssid") or ""
-    address = (host.network_status.get("ip")
-               or host._read_text("/tmp/net_ip") or "NO LINK")
-    network_name = "%s%s" % (
-        mode.upper(), " / " + ssid if ssid else "")
+    address = host.network_status.get("ip") or "NO LINK"
+    if connection_state == "CONNECTED":
+        if mode.upper() == "WIFI" and ssid:
+            network_name = "Wi-Fi / %s" % ssid
+        elif mode.upper() == "ETHERNET":
+            network_name = "ETHERNET"
+        else:
+            network_name = mode.title()
+    else:
+        network_name = connection_state.title()
     clock_value = clock() if clock is not None else time.strftime("%H:%M")
     return DashboardState(
         nozzle=round(extruder["temperature"]),

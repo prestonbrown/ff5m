@@ -2,7 +2,7 @@
 
 ## Mod's initialization script
 ##
-## Copyright (C) 2025, Alexander K <https://github.com/drA1ex>
+## Copyright (C) 2025-2026, Alexander K <https://github.com/drA1ex>
 ##
 ## This file may be distributed under the terms of the GNU GPLv3 license
 
@@ -69,6 +69,7 @@ initialize() {
     rotate_logs "/data/logFiles/boot.log"
     rotate_logs "/data/logFiles/ssh.log"
     rotate_logs "/data/logFiles/wifi.log"
+    rotate_logs "/data/logFiles/netd.log"
 
     sync
     
@@ -80,6 +81,9 @@ initialize() {
 
     echo "// Update links..."
 
+    # The network service wrapper was removed; clean an older installation's
+    # symlink so init cannot try to invoke a stale second networking path.
+    rm -f /etc/init.d/S50znetwork
     ln -fs /opt/config/mod/.shell/S55boot /etc/init.d/
     ln -fs /opt/config/mod/.shell/S60dropbear /etc/init.d/
     ln -fs /opt/config/mod/.shell/S98camera /etc/init.d/

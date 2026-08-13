@@ -179,8 +179,9 @@ SSH connection issues may arise because:
 
 ### The mod isn’t loading and is stuck at the network connection step.
 
-This can happen when you are using the Feather screen, and the mod cannot connect to the network.  
-Since the mod requires a network connection to function, it will keep attempting to connect until successful.
+On the **Stock Screen**, the boot workflow can wait for its configured network and eventually return to the stock application if the mod cannot establish it. The troubleshooting below remains applicable to that workflow.
+
+The **Feather Screen** does not wait for networking before loading. Its dashboard shows **CONNECTING** while the saved startup connection is active. Open **Network** to keep waiting or select **CANCEL & CHOOSE** and connect to a different Wi-Fi network. If the attempt has already ended, Feather remains usable offline and allows a new connection from the Network page.
 
 Printers are often metal-shielded, meaning Wi-Fi signals may struggle to reach the antenna.  
 Consider switching to a 2.4GHz Wi-Fi network. You can do this from the stock screen or by manually editing the `/etc/wpa_supplicant.conf` configuration file by adding `freq_list=2412 2417 2422 2427 2432 2437 2442 2447 2452 2457 2462` to the network section, example below.
@@ -194,17 +195,15 @@ network={
 }
 ```
 
-If the mod still cannot connect within 5 minutes, the stock screen will load instead.
+In the blocking Stock workflow, the stock screen loads if the mod still cannot connect within the configured retry period.
 
 If the mod doesn’t load at all, use [screen-mode recovery](SCREEN.md#switching-to-feather-screen) to switch back to the original stock screen.
 
 ### Why did the Wi-Fi credentials get forgotten?
 
-This isn’t a case of forgotten Wi-Fi credentials. They’re saved and preserved after every boot.
+On the **Stock Screen**, this is not a case of forgotten credentials: they are saved and preserved after every boot. The actual issue is usually the connection. The Stock connection menu does not reconnect a known network directly and may ask for its password again. Disable and re-enable Wi-Fi to make Stock reconnect with the saved credentials.
 
-The actual issue is with the connection - the Wi-Fi module on the Flashforge is weak. Sometimes, the printer can’t connect in time, and the connection menu doesn’t support reconnecting to known networks. Instead, it always tries to establish a new connection, which is why your credentials don’t auto-fill.
-
-To reconnect, you’ll need to disable Wi-Fi and then enable it again. This will force the printer to connect to the last known network with the saved credentials.
+The **Feather Screen** behaves differently. A saved network is marked in its scan list and reconnects without asking for the password. Use **RESET PASSWORD** when the credential really has changed.
 
 ---
 

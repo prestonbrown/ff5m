@@ -2310,15 +2310,6 @@ class ControllerSafetyTest(unittest.TestCase):
         controller.print_state = FEATHER.PrintState.PREPARING
         self.assertFalse(controller._live_z_adjust_allowed(0))
 
-    def test_network_operation_timeout_terminates_helper(self):
-        controller = ScenarioController.__new__(ScenarioController)
-        controller.network_process = type("Process", (), {"poll": lambda self: None})()
-        controller.network_deadline = 10
-        messages = []
-        controller._cancel_network_process = messages.append
-        controller._poll_network_process(11)
-        self.assertEqual(len(messages), 1)
-
     def test_mesh_uses_auto_profile_and_selected_preheat(self):
         controller = ScenarioController.__new__(ScenarioController)
         controller.calibration_kind = "mesh"

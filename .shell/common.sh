@@ -2,7 +2,7 @@
 
 ## Mod's common variables and functions
 ##
-## Copyright (C) 2025, Alexander K <https://github.com/drA1ex>
+## Copyright (C) 2025-2026, Alexander K <https://github.com/drA1ex>
 ##
 ## This file may be distributed under the terms of the GNU GPLv3 license
 
@@ -18,7 +18,6 @@ INIT_FLAG="/tmp/init_finished_f"
 NOT_FIRST_LAUNCH_F="/tmp/not_first_launch_f"
 CUSTOM_BOOT_F="/tmp/custom_boot_f"
 WIFI_CONNECTED_F="/tmp/wifi_connected_f"
-ETHERNET_CONNECTED_F="/tmp/ethernet_connected_f"
 CAMERA_F="/tmp/camera_f"
 NET_IP_F="/tmp/net_ip"
 
@@ -87,7 +86,7 @@ message() {
     echo "RESPOND PREFIX='$prefix' MSG='$text'" > /tmp/printer
 }
 
-command() {
+printer_command() {
     local value="$1"
     
     echo "RESPOND TYPE=command MSG='$value'" > /tmp/printer

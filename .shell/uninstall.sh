@@ -2,7 +2,7 @@
 
 ## Mod's uninstall script
 ##
-## Copyright (C) 2025, Alexander K <https://github.com/drA1ex>
+## Copyright (C) 2025-2026, Alexander K <https://github.com/drA1ex>
 ##
 ## This file may be distributed under the terms of the GNU GPLv3 license
 
@@ -103,6 +103,7 @@ uninstall() {
     
     rm -f /etc/init.d/S00fix
     rm -f /etc/init.d/S00init
+    rm -f /etc/init.d/S50znetwork
     rm -f /etc/init.d/S55boot
     rm -f /etc/init.d/S99root
     rm -f /etc/init.d/S99moon

@@ -31,9 +31,7 @@ from ui import (
     parse_render_receipt,
 )
 from ff5m_ui.move import runtime as move_ui
-from feather_screen_pages import (
-        FeatherPagesMixin, FILE_ROWS,
-        NETWORK_HELPER, NETWORK_TIMEOUTS)
+from feather_screen_pages import FeatherPagesMixin, FILE_ROWS
 from feather_files import (
         DEFAULT_HISTORY_PATH, FileScanWorker, PrintHistory,
         UsbStorageMonitor)
@@ -80,7 +78,8 @@ EXACT_ACTIONS = {
     Page.NETWORK_HOME: ("nav.back", "net.scan", "net.ethernet", "net.retry"),
     Page.WIFI_SCAN: ("nav.back", "net.prev", "net.next", "net.rescan"),
     Page.WIFI_PASSWORD: ("nav.back", "net.connect", "net.password.toggle"),
-    Page.NETWORK_PROGRESS: ("net.cancel",),
+    Page.NETWORK_PROGRESS: (
+        "net.cancel", "net.keep", "net.startup.cancel"),
     Page.RECOVERY_PROMPT: (
         "recovery.restore", "recovery.cleanup", "recovery.later"),
     Page.RECOVERY_CONFIRM: ("nav.back", "recovery.confirm"),
@@ -254,21 +253,7 @@ class FeatherScreen(FeatherPagesMixin, FeatherControlsMixin):
         self.weight_sensor = None
         self.chamber_light = None
 
-        self.network_process = None
-        self.network_stopping = []
-        self.network_credentials = None
-        self.network_operation = None
-        self.network_return_page = Page.NETWORK_HOME
-        self.network_parent_page = Page.MAIN_MENU
-        self.networks = []
-        self.network_page = 0
-        self.selected_network = None
-        self.password = ""
-        self.keyboard_shift = False
-        self.keyboard_symbols = False
-        self.password_visible = False
-        self.network_deadline = 0.0
-        self.network_status = {"mode": "OFFLINE", "ssid": "", "signal": "", "ip": ""}
+        self._init_network_ui()
         self.filament_material = "n/a"
         self.filament_from_pause = False
         self.filament_original_target = 0.0
@@ -284,6 +269,7 @@ class FeatherScreen(FeatherPagesMixin, FeatherControlsMixin):
 
         self.message = ""
         self.message_return = Page.IDLE_HOME
+        self.message_actions = (("message.ok", "OK", "enabled"),)
         self.error_message = ""
         self.error_category = ""
         self.error_recovery = None
@@ -526,7 +512,7 @@ class FeatherScreen(FeatherPagesMixin, FeatherControlsMixin):
             self._show_page(Page.RECOVERY_PROMPT)
         else:
             self._show_page(Page.IDLE_HOME)
-        self._start_network_status_refresh()
+        self._initialize_network_monitoring()
         self.timer = self.reactor.register_timer(self._update, self.reactor.NOW)
 
     def _shutdown(self):
@@ -573,20 +559,7 @@ class FeatherScreen(FeatherPagesMixin, FeatherControlsMixin):
         if self.timer is not None:
             self.reactor.unregister_timer(self.timer)
         self.timer = None
-        if self.network_process is not None:
-            self._retire_network_process(self.network_process)
-            self.network_process = None
-        for process, _deadline, group_id in self.network_stopping:
-            if group_id is not None:
-                try:
-                    os.killpg(group_id, signal.SIGKILL)
-                except OSError:
-                    pass
-            elif process.poll() is None:
-                killer = getattr(process, "kill", None)
-                if killer is not None:
-                    killer()
-        self.network_stopping = []
+        self._stop_network_client()
         if self.usb_storage is not None:
             self.usb_storage.stop()
             self.usb_storage = None
@@ -596,7 +569,6 @@ class FeatherScreen(FeatherPagesMixin, FeatherControlsMixin):
             self.file_scan_loading = False
             file_scan_worker.stop()
             self.file_scan_worker = None
-        self._cleanup_network_credentials()
         self.pending_action = None
         self.cancel_requested = False
         self.cancel_waiting_for_heat = False
@@ -1040,7 +1012,7 @@ class FeatherScreen(FeatherPagesMixin, FeatherControlsMixin):
                 self._show_page(Page.SETTINGS)
             elif action == "nav.network":
                 self.network_parent_page = self.page
-                self._show_page(Page.NETWORK_HOME)
+                self._open_network_page()
             elif action == "nav.job":
                 stats = self.print_stats.get_status(
                     self.reactor.monotonic()).get("state")
@@ -1084,6 +1056,11 @@ class FeatherScreen(FeatherPagesMixin, FeatherControlsMixin):
                 raise
 
     def _action_allowed(self, page, action):
+        if page == Page.MESSAGE and action == "net.reset.saved":
+            return any(
+                item[0] == action
+                for item in getattr(self, "message_actions", ()))
+
         if action in EXACT_ACTIONS.get(page, ()):
             return True
         return ((page == Page.FILE_BROWSER and action.startswith("file.item"))
@@ -1575,20 +1552,23 @@ class FeatherScreen(FeatherPagesMixin, FeatherControlsMixin):
         self.toast_message = str(message)
         self.renderer.toast(self.toast_message)
 
-    def _show_message(self, message, return_page):
+    def _show_message(self, message, return_page, actions=None):
         recovery = self._classify_error(message)
         if recovery is not None:
             self._show_error(message, "runtime", recovery)
             return
         self.message = str(message)
         self.message_return = return_page
+        self.message_actions = (
+            actions if actions is not None
+            else (("message.ok", "OK", "enabled"),))
         self._show_page(Page.MESSAGE)
 
     def _render_message(self):
         commands = self.renderer.begin_page("Message")
         commands += self.renderer.dialog(
             "Message", (),
-            (("message.ok", "OK", "enabled"),),
+            self.message_actions,
             x=90, y=95, width=620, height=300, tone="info")
         commands.append(self.renderer.text(
             400, 173, self.message, ThemeColor.TEXT, "JetBrainsMono 8pt", "center",
@@ -1723,8 +1703,7 @@ class FeatherScreen(FeatherPagesMixin, FeatherControlsMixin):
             logging.info("[feather_screen] color theme changed to %s",
                          self.renderer.theme_name)
             self._show_page(self.page)
-        self._reap_network_processes(eventtime)
-        self._poll_network_process(eventtime)
+        self._service_network(eventtime)
         if not self.dimmed and eventtime - self.last_touch_time >= self.dim_timeout:
             self.dimmed = True
             logging.info("[feather_screen] dimming display after %.1fs idle",
@@ -1811,7 +1790,7 @@ class FeatherScreen(FeatherPagesMixin, FeatherControlsMixin):
 
         extruder = self.extruder.get_status(eventtime)
         bed = self.heater_bed.get_status(eventtime)
-        network = self.network_status.get("ip") or self._read_text("/tmp/net_ip") or "Offline"
+        network = self.network_status.get("ip") or "Offline"
         self.renderer.footer(extruder["temperature"], extruder["target"],
                              bed["temperature"], bed["target"],
                              network, state.upper())
@@ -1857,8 +1836,12 @@ class FeatherScreen(FeatherPagesMixin, FeatherControlsMixin):
             "on_print_state_changed", old_state, new_state, stats_state)
         if (new_state in (PrintState.PREPARING, PrintState.PRINTING,
                           PrintState.PAUSED)
-                and getattr(self, "network_process", None) is not None):
-            self._stop_network_process()
+                and getattr(self, "network_operation", None) is not None):
+            # A print starting mid-attempt cancels it, but the rollback is the
+            # daemon's: it owns the candidate netblock and the incumbent. The
+            # subscription itself stays up so the home page keeps rendering the
+            # link while printing.
+            self._cancel_network_operation()
         if self.debug:
             logging.info("[feather_screen] %s -> %s", old_state.name, new_state.name)
         if new_state in (PrintState.PREPARING, PrintState.PRINTING):
@@ -1906,16 +1889,6 @@ class FeatherScreen(FeatherPagesMixin, FeatherControlsMixin):
         state = self.print_stats.get_status(self.reactor.monotonic())["state"]
         if state in ("printing", "paused") or self.virtual_sdcard.is_active():
             raise RuntimeError("This action is available only while idle")
-
-    def _network_status_text(self):
-        if os.path.exists("/tmp/ethernet_connected_f"):
-            prefix = "Ethernet"
-        elif os.path.exists("/tmp/wifi_connected_f"):
-            prefix = "Wi-Fi"
-        else:
-            return "Offline"
-        ip = self._read_text("/tmp/net_ip")
-        return prefix + (" - " + ip if ip else "")
 
     def _get_time_estimation_str(self, eventtime):
         duration, remaining = self._print_time_values(eventtime)

@@ -22,6 +22,7 @@ SPEC = importlib.util.spec_from_file_location("feather_screen", MODULE_PATH)
 FEATHER = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(FEATHER)
 UI = __import__("ui")
+NETWORK_PROTOCOL = __import__("feather_netd_protocol")
 from ff5m_ui.move import runtime as MOVE_LAYOUT
 from ff5m_ui.z_offset import runtime as Z_OFFSET_LAYOUT
 from feather_feature_z import ZCalibrationFeature
@@ -224,12 +225,6 @@ class FeatherUtilitiesTest(unittest.TestCase):
         self.assertEqual(entry["size"], 1024)
         with self.assertRaises(KeyError):
             _value = entry["unknown"]
-
-
-    def test_network_helper_includes_stock_sbin_paths(self):
-        helper = (pathlib.Path(__file__).parents[1] / ".shell" / "commands" /
-                  "znetwork.sh").read_text(encoding="utf-8")
-        self.assertIn("PATH=/sbin:/usr/sbin:/bin:/usr/bin", helper)
 
     def test_renderer_escapes_untrusted_text(self):
         quoted = FEATHER.FeatherRenderer.quote('file "one"\\two\nnext')
@@ -458,15 +453,30 @@ class FeatherUtilitiesTest(unittest.TestCase):
         self.assertTrue(allowed(
             FEATHER.Page.WIFI_PASSWORD, "keyboard.backspace"))
         self.assertFalse(allowed(
+            FEATHER.Page.WIFI_SCAN, "net.reset.saved"))
+        self.assertFalse(allowed(
+            FEATHER.Page.MESSAGE, "net.reset.saved"))
+        controller.message_actions = (
+            ("message.ok", "CANCEL", "enabled"),
+            ("net.reset.saved", "RESET PASSWORD", "warning"),
+        )
+        self.assertTrue(allowed(
+            FEATHER.Page.MESSAGE, "net.reset.saved"))
+        self.assertFalse(allowed(
             FEATHER.Page.MOD_SETTINGS, "keyboard.key.hash"))
 
         self.assertFalse(allowed(FEATHER.Page.MOD_SETTINGS, "mod.save"))
 
     def test_network_status_parser_is_bounded_to_public_fields(self):
+        # Unknown keys must be silently dropped; only SNAPSHOT_KEYS survive.
+        # SSIDs travel as base64 on the wire; STATE= is published explicitly.
+        ssid = NETWORK_PROTOCOL.encode_field("Workshop")
         parsed = FEATHER.FeatherScreen.parse_network_status(
-            "MODE=WIFI\nSSID=Workshop\nSIGNAL=-54\nIP=192.168.2.10\nSECRET=no\n")
-        self.assertEqual(parsed, {"mode": "WIFI", "ssid": "Workshop",
-                                  "signal": "-54", "ip": "192.168.2.10"})
+            "MODE=WIFI\nSTATE=CONNECTED\nSSID=%s\nSIGNAL=-54\nIP=192.168.2.10\nSECRET=no\n" % ssid)
+        self.assertEqual(parsed, {"mode": "WIFI", "state": "CONNECTED",
+                                  "ssid": "Workshop", "signal": "-54",
+                                  "ip": "192.168.2.10", "reason": "",
+                                  "progress": "", "attempt": ""})
 
     def test_material_setting_defaults_to_na_and_is_persisted(self):
         declaration = json.loads((pathlib.Path(__file__).parents[1] /
@@ -1583,6 +1593,7 @@ class RendererStateTest(unittest.TestCase):
         controller.network_page = 0
         controller._render_wifi_scan()
         wifi_buttons = dict(controller.renderer._buttons)
+        self.assertNotIn("net.reset.saved", wifi_buttons)
 
         controller.selected_network = {"ssid": "Workshop"}
         controller.password = "secret123"
