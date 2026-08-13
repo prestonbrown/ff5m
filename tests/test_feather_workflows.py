@@ -2700,6 +2700,22 @@ class NetworkWorkflowTest(unittest.TestCase):
     the screen.
     """
 
+    def test_network_home_explains_that_daemon_is_unavailable(self):
+        controller = base_controller()
+        controller.renderer = FEATHER.FeatherRenderer()
+        batches = []
+        controller.renderer.send = batches.append
+
+        controller._render_network_home()
+
+        self.assertIn("Network daemon unavailable", "\n".join(batches[-1]))
+
+        attach_network(controller)
+        controller._render_network_home()
+
+        self.assertNotIn(
+            "Network daemon unavailable", "\n".join(batches[-1]))
+
     def test_pushed_snapshot_repaints_the_open_network_page(self):
         controller = base_controller()
         controller.page = FEATHER.Page.NETWORK_HOME
@@ -3149,6 +3165,10 @@ class NetworkWorkflowTest(unittest.TestCase):
             "CONNECT_WIFI ssid=%s" % NETWORK_PROTOCOL.encode_field("Workshop"),
             "GET",
         ])
+        self.assertTrue(sock.closed)
+        self.assertFalse(controller.network_client.connected)
+        self.assertEqual(controller.network_status,
+                         NETWORK_PROTOCOL.blank_status())
 
     def test_wifi_credentials_travel_on_the_socket_and_never_reach_argv(self):
         controller = base_controller()
@@ -3231,6 +3251,26 @@ class NetworkWorkflowTest(unittest.TestCase):
 
         self.assertIs(controller.selected_network, failed)
         self.assertEqual(pages, [FEATHER.Page.WIFI_PASSWORD])
+
+    def test_wrong_unsaved_password_does_not_offer_reset(self):
+        controller = base_controller()
+        controller.selected_network = {
+            "ssid": "New", "signal": -45, "frequency": 5180,
+            "saved": False}
+        controller.network_operation = "wifi"
+        controller.network_return_page = FEATHER.Page.WIFI_SCAN
+        messages = []
+        controller._show_message = (
+            lambda message, page, actions=None:
+            messages.append((message, page, actions)))
+        attach_network(controller, ["ERR WRONG_KEY\n"])
+
+        controller.network_client._on_readable(100)
+
+        self.assertEqual(messages, [
+            ("Wrong Wi-Fi password", FEATHER.Page.WIFI_SCAN, None)])
+        with self.assertRaisesRegex(RuntimeError, "No saved Wi-Fi password"):
+            controller._handle_network_action("net.reset.saved")
 
     def test_status_block_still_parses_for_the_shared_callers(self):
         # The daemon snapshot is a version-tolerant wire contract: known keys

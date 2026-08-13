@@ -99,6 +99,8 @@ class FeatherNetworkPagesMixin:
         if status.get("ssid"):
             lines.append("SSID: %s   Signal: %s dBm" %
                          (status["ssid"], status.get("signal") or "?"))
+        if not self._network_available():
+            lines.append("Network daemon unavailable")
         lines.append("IP: %s" % (status.get("ip") or "Offline"))
         for index, line in enumerate(lines):
             commands.append(self.renderer.text(
@@ -155,8 +157,9 @@ class FeatherNetworkPagesMixin:
                 else:
                     self._show_page(Page.WIFI_PASSWORD)
         elif action == "net.reset.saved":
-            if self.selected_network is None:
-                raise RuntimeError("No Wi-Fi network is selected")
+            if (self.selected_network is None
+                    or not self.selected_network.get("saved")):
+                raise RuntimeError("No saved Wi-Fi password is selected")
             self.password = ""
             self.keyboard_shift = self.keyboard_symbols = False
             self._show_page(Page.WIFI_PASSWORD)
@@ -247,6 +250,7 @@ class FeatherNetworkPagesMixin:
                             self.network_operation)
             self._finish_network_operation(
                 "Network service stopped responding", eventtime)
+            self.network_client.mark_unresponsive(eventtime)
 
     def _stop_network_client(self):
         """Stop IPC observation; never translate socket close into CANCEL."""
@@ -334,7 +338,8 @@ class FeatherNetworkPagesMixin:
         if error is not None:
             if (reason == "WRONG_KEY"
                     and operation in ("wifi", "wifi-saved")
-                    and self.selected_network is not None):
+                    and self.selected_network is not None
+                    and self.selected_network.get("saved")):
                 self._show_message(error, return_page, (
                     ("message.ok", "CANCEL", "enabled"),
                     ("net.reset.saved", "RESET PASSWORD", "warning"),

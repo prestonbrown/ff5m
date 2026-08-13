@@ -61,6 +61,13 @@ class NetworkClient:
         self._unregister_fd()
         self._transport.close()
 
+    def mark_unresponsive(self, eventtime):
+        """Discard an unresponsive socket and retry through a fresh one."""
+        self._unregister_fd()
+        self._transport.close()
+        self._next_retry = eventtime + RETRY_INTERVAL
+        self._set_unavailable(eventtime)
+
     def get_state(self):
         return self._send("GET")
 
