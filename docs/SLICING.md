@@ -44,14 +44,14 @@ Forge-X connects to the printer through Moonraker, so OrcaSlicer should be confi
 To connect OrcaSlicer to the printer, open the **Physical Printer** settings and use the Moonraker endpoint:
 
 ```text
-Host type: moonraker / klipper / klipper (via moonraker)
+Host type: Octo/Klipper
 Hostname, IP or URL: http://<printer_ip>:7125
 ```
 
 In older OrcaSlicer versions, or depending on the build, the same connection type may be listed as:
 
 ```text
-Host type: Octo/Klipper
+Host type: moonraker / klipper / klipper (via moonraker)
 ```
 
 This is also valid for Klipper printers that are accessed through Moonraker.
