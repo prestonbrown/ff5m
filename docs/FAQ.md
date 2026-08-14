@@ -181,7 +181,7 @@ SSH connection issues may arise because:
 
 On the **Stock Screen**, the boot workflow can wait for its configured network and eventually return to the stock application if the mod cannot establish it. The troubleshooting below remains applicable to that workflow.
 
-The **Feather Screen** does not wait for networking before loading. Its dashboard shows **CONNECTING** while the saved startup connection is active. Open **Network** to keep waiting or select **CANCEL & CHOOSE** and connect to a different Wi-Fi network. If the attempt has already ended, Feather remains usable offline and allows a new connection from the Network page.
+The **Feather Screen** does not wait for networking before loading. Its dashboard shows **CONNECTING** while the saved connection is being restored. Open **Network** to see the current connection step. You can keep waiting or press **CANCEL** to remain offline and return to the Network page. If the attempt has already ended, Feather remains usable offline and allows a new Wi-Fi or Ethernet connection.
 
 Printers are often metal-shielded, meaning Wi-Fi signals may struggle to reach the antenna.  
 Consider switching to a 2.4GHz Wi-Fi network. You can do this from the stock screen or by manually editing the `/etc/wpa_supplicant.conf` configuration file by adding `freq_list=2412 2417 2422 2427 2432 2437 2442 2447 2452 2457 2462` to the network section, example below.

@@ -218,7 +218,6 @@ def base_controller(state="idle"):
     controller.network_deadline = 0.0
     controller.network_probe_pending = False
     controller.network_cancel_pending = False
-    controller.network_after_cancel = None
     controller.networks = []
     controller.network_page = 0
     controller.selected_network = None
@@ -2700,6 +2699,27 @@ class NetworkWorkflowTest(unittest.TestCase):
     the screen.
     """
 
+    def test_dashboard_network_card_uses_connection_aware_route(self):
+        controller = base_controller()
+        controller.page = FEATHER.Page.IDLE_HOME
+        controller.network_status.update({
+            "mode": "WIFI", "state": "CONNECTING", "ssid": "Workshop",
+            "progress": "RECOVERY"})
+        pages = []
+        controller._show_page = pages.append
+
+        action = controller._resolve_semantic_ui_action("nav.network")
+        controller._dispatch_semantic_ui_action(action)
+
+        self.assertEqual(controller.network_parent_page, FEATHER.Page.IDLE_HOME)
+        self.assertEqual(pages, [FEATHER.Page.NETWORK_PROGRESS])
+
+        controller.network_status["state"] = "DISCONNECTED"
+        pages.clear()
+        controller._dispatch_semantic_ui_action(action)
+
+        self.assertEqual(pages, [FEATHER.Page.NETWORK_HOME])
+
     def test_network_home_explains_that_daemon_is_unavailable(self):
         controller = base_controller()
         controller.renderer = FEATHER.FeatherRenderer()
@@ -2796,6 +2816,38 @@ class NetworkWorkflowTest(unittest.TestCase):
         self.assertEqual(pages, [FEATHER.Page.NETWORK_PROGRESS])
         self.assertIsNone(controller.network_operation)
         self.assertEqual(sock.sent, [])
+
+    def test_reconnect_replaces_disabled_home_with_cancelable_progress(self):
+        controller = base_controller()
+        controller.page = FEATHER.Page.NETWORK_HOME
+        controller._render_network_home = lambda: None
+        controller._render_network_progress = lambda: None
+        pages = []
+
+        def show_page(page):
+            controller.page = page
+            pages.append(page)
+
+        controller._show_page = show_page
+        sock = attach_network(controller, [
+            "MODE=WIFI\nSTATE=CONNECTING\nPROGRESS=RECOVERY\n"])
+        controller.network_client._on_readable(100)
+
+        self.assertEqual(pages, [FEATHER.Page.NETWORK_PROGRESS])
+        self.assertIsNone(controller.network_operation)
+
+        controller._handle_network_action("net.cancel")
+        self.assertEqual(sock.sent, ["CANCEL"])
+        self.assertTrue(controller.network_cancel_pending)
+
+        sock.pending.append(
+            "STATE=DISCONNECTED\nREASON=CANCELLED\nOK CANCELLED\n")
+        controller.network_client._on_readable(101)
+
+        self.assertEqual(pages, [
+            FEATHER.Page.NETWORK_PROGRESS, FEATHER.Page.NETWORK_HOME])
+        self.assertEqual(sock.sent, ["CANCEL"])
+        self.assertFalse(controller.network_cancel_pending)
 
     def test_progress_page_names_the_phase_the_daemon_published(self):
         controller = base_controller()

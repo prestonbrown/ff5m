@@ -561,7 +561,7 @@ class FeatherControlsMixin:
             return
         if route == HomeRoute.NETWORK:
             self.network_parent_page = self.page
-            self._show_page(Page.NETWORK_HOME)
+            self._open_network_page()
             return
         if route == HomeRoute.JOB:
             stats = self.print_stats.get_status(

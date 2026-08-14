@@ -81,7 +81,6 @@ class FeatherNetworkPagesMixin:
         self.network_deadline = 0.0
         self.network_probe_pending = False
         self.network_cancel_pending = False
-        self.network_after_cancel = None
         self.networks = []
         self.network_page = 0
         self.selected_network = None
@@ -170,15 +169,6 @@ class FeatherNetworkPagesMixin:
         elif action == "net.keep":
             self._show_page(getattr(
                 self, "network_parent_page", Page.IDLE_HOME))
-        elif action == "net.startup.cancel":
-            # CANCEL and SCAN are separate daemon commands. The scan starts only
-            # after CANCEL's reply, so the two terminal replies cannot be mixed.
-            if not self._network_busy():
-                self._show_page(Page.NETWORK_HOME)
-                return
-            self.network_after_cancel = "scan"
-            if not self._cancel_network_operation():
-                self.network_after_cancel = None
         elif action == "net.password.toggle":
             self.password_visible = not self.password_visible
             self._render_keyboard()
@@ -260,7 +250,6 @@ class FeatherNetworkPagesMixin:
         self.network_deadline = 0.0
         self.network_probe_pending = False
         self.network_cancel_pending = False
-        self.network_after_cancel = None
 
     def _repaint_network(self, eventtime):
         if self.page == Page.NETWORK_HOME:
@@ -288,6 +277,16 @@ class FeatherNetworkPagesMixin:
 
         if kind == "snapshot":
             if value:
+                if (self.page == Page.NETWORK_HOME
+                        and self.network_status.get("state") == "CONNECTING"):
+                    self._show_page(Page.NETWORK_PROGRESS)
+                    return
+                if (self.page == Page.NETWORK_PROGRESS
+                        and self.network_operation is None
+                        and not self.network_cancel_pending
+                        and self.network_status.get("state") != "CONNECTING"):
+                    self._show_page(Page.NETWORK_HOME)
+                    return
                 self._repaint_network(eventtime)
             return
 
@@ -303,23 +302,25 @@ class FeatherNetworkPagesMixin:
                 self.network_probe_pending = False
                 self.network_deadline = eventtime + NETWORK_WATCHDOG
                 return
+            cancelled_daemon_operation = (
+                self.network_cancel_pending
+                and self.network_operation is None)
             self.network_cancel_pending = False
-            after_cancel = self.network_after_cancel
-            if after_cancel is not None:
-                self.network_after_cancel = None
-                if after_cancel == "scan":
-                    self._start_scan()
+            if cancelled_daemon_operation:
+                self._show_page(Page.NETWORK_HOME)
                 return
             self._finish_network_operation(None, eventtime)
             return
 
         if kind == "error":
+            cancelled_daemon_operation = (
+                self.network_cancel_pending
+                and self.network_operation is None)
             self.network_cancel_pending = False
-            if self.network_after_cancel is not None:
-                self.network_after_cancel = None
+            if cancelled_daemon_operation:
                 self._show_message(
                     NETWORK_ERRORS.get(value, "Network operation failed"),
-                    Page.NETWORK_HOME)
+                    Page.NETWORK_PROGRESS)
                 return
             self._finish_network_operation(
                 NETWORK_ERRORS.get(value, "Network operation failed"),
@@ -401,9 +402,8 @@ class FeatherNetworkPagesMixin:
             commands += self.renderer.button(
                 "net.keep", 80, 340, 290, 70, "KEEP WAITING")
             commands += self.renderer.button(
-                "net.startup.cancel", 430, 340, 290, 70,
-                "CANCEL & CHOOSE", state="danger",
-                font="JetBrainsMono Bold 7pt")
+                "net.cancel", 430, 340, 290, 70, "CANCEL",
+                state="disabled" if self.network_cancel_pending else "danger")
         else:
             commands += self.renderer.button(
                 "net.cancel", 270, 340, 260, 70,

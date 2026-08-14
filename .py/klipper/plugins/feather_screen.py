@@ -78,8 +78,7 @@ EXACT_ACTIONS = {
     Page.NETWORK_HOME: ("nav.back", "net.scan", "net.ethernet", "net.retry"),
     Page.WIFI_SCAN: ("nav.back", "net.prev", "net.next", "net.rescan"),
     Page.WIFI_PASSWORD: ("nav.back", "net.connect", "net.password.toggle"),
-    Page.NETWORK_PROGRESS: (
-        "net.cancel", "net.keep", "net.startup.cancel"),
+    Page.NETWORK_PROGRESS: ("net.cancel", "net.keep"),
     Page.RECOVERY_PROMPT: (
         "recovery.restore", "recovery.cleanup", "recovery.later"),
     Page.RECOVERY_CONFIRM: ("nav.back", "recovery.confirm"),
