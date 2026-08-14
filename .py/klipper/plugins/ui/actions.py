@@ -105,6 +105,20 @@ class Back(Action):
 
 
 @dataclass(frozen=True)
+class DismissToast(Action):
+    """Dismiss the framework-owned transient toast overlay."""
+
+    kind = "dismiss_toast"
+
+    @property
+    def wire_id(self):
+        return "global.toast.dismiss"
+
+    def as_dict(self):
+        return {"kind": self.kind}
+
+
+@dataclass(frozen=True)
 class Replace(Action):
     target: PageKey
     kind = "replace"

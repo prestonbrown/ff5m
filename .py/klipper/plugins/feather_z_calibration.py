@@ -8,7 +8,8 @@ from collections import OrderedDict
 from decimal import Decimal, ROUND_HALF_UP
 import logging
 
-from ui import Page, PrintState
+from ff5m_ui.screen import ScreenPage
+from ff5m_ui.print_state import PrintState
 from ff5m_ui.z_offset import runtime as z_offset_ui
 from ff5m_ui.z_offset.constants import PAPER_DEFAULT_STEP
 
@@ -434,12 +435,12 @@ class FeatherZCalibrationMixin:
                 self._restore_z_mesh(mesh_object, mesh_profile)
                 self.z_calibration.clear()
             raise
-        self._show_page(Page.SAFE_Z_BRIEFING)
+        self._show_page(ScreenPage.SAFE_Z_BRIEFING)
 
     def _start_z_calibration_preparation(self):
         self.calibration_starting_text = "STARTING..."
         self._reset_calibration_progress()
-        self._show_page(Page.CALIBRATION_PROGRESS)
+        self._show_page(ScreenPage.CALIBRATION_PROGRESS)
         self.reactor.register_callback(self._run_z_calibration_preparation)
 
     def _z_preparation_command(self):
@@ -475,7 +476,7 @@ class FeatherZCalibrationMixin:
             self._run_script(self._z_preparation_command())
             self.z_calibration.prepared = True
             self._begin_z_weight_gauge()
-            self._show_page(Page.Z_OFFSET_SUMMARY)
+            self._show_page(ScreenPage.Z_OFFSET_SUMMARY)
             return
         except Exception as exc:
             if getattr(self, "shutdown_active", False):
@@ -494,17 +495,17 @@ class FeatherZCalibrationMixin:
                 if cancelled:
                     self._show_message(
                         "Z-offset heating cancelled",
-                        Page.CALIBRATION_HOME)
+                        ScreenPage.CALIBRATION_HOME)
                 else:
                     self._show_message(
                         self.calibration_error or
                         "Z-offset preparation failed",
-                        Page.CALIBRATION_HOME)
+                        ScreenPage.CALIBRATION_HOME)
 
     def _choose_z_zone(self, key):
         self._require_idle()
         self.z_calibration.choose_zone(key)
-        self._show_page(Page.Z_OFFSET_PAPER_BRIEFING)
+        self._show_page(ScreenPage.Z_OFFSET_PAPER_BRIEFING)
 
     def _begin_safe_z_calibration(self, preserve_result=False):
         self._require_idle()
@@ -526,11 +527,11 @@ class FeatherZCalibrationMixin:
                 session.safe_z_candidate)
         self._run_blocking_gcode(
             "\n".join(commands), "POSITIONING HEAD...")
-        self._show_page(Page.SAFE_Z_CALIBRATION)
+        self._show_page(ScreenPage.SAFE_Z_CALIBRATION)
 
     def _continue_after_safe_z(self):
         if self.z_calibration.prepared:
-            self._show_page(Page.Z_OFFSET_SUMMARY)
+            self._show_page(ScreenPage.Z_OFFSET_SUMMARY)
             return
         self._start_z_calibration_preparation()
 
@@ -577,7 +578,7 @@ class FeatherZCalibrationMixin:
     def _enter_z_zone(self):
         point = ZONE_BY_KEY[self.z_calibration.zone]
         self._move_z_offset_head(point[2], point[3])
-        self._show_page(Page.Z_OFFSET_PAPER)
+        self._show_page(ScreenPage.Z_OFFSET_PAPER)
 
     def _probe_z_zone(self):
         session = self.z_calibration
@@ -644,7 +645,7 @@ class FeatherZCalibrationMixin:
         result = self.z_calibration.accept()
         self._run_blocking_gcode(
             self._safe_z_move_command(), "LIFTING Z...")
-        self._show_page(Page.Z_OFFSET_SUMMARY)
+        self._show_page(ScreenPage.Z_OFFSET_SUMMARY)
         self._toast("Zone accepted %+.3f mm" % result)
 
     def _finish_z_calibration(self, saved_offset):
@@ -693,9 +694,9 @@ class FeatherZCalibrationMixin:
         if value is None:
             raise RuntimeError("Measure and select a Z-offset result first")
         self._finish_z_calibration(value)
-        self._show_page(Page.CALIBRATION_HOME)
+        self._show_page(ScreenPage.CALIBRATION_HOME)
         self._toast("Z offset saved %+.3f mm" % value)
 
     def _cancel_z_calibration(self):
         self._finish_z_calibration(None)
-        self._show_page(Page.CALIBRATION_HOME)
+        self._show_page(ScreenPage.CALIBRATION_HOME)

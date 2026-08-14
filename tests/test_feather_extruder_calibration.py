@@ -364,8 +364,8 @@ def calibration_controller(path=None):
     controller.extruder_calibration = EXTRUDER_CAL.ExtruderCalibrationSession(
         path or EXTRUDER_CAL.USER_CFG_PATH)
     controller.extruder_calibration.begin(4.38)
-    controller.page = FEATHER.Page.EXTRUDER_CALIBRATION
-    controller.previous_page = FEATHER.Page.CALIBRATION_HOME
+    controller.page = FEATHER.ScreenPage.EXTRUDER_CALIBRATION
+    controller.previous_page = FEATHER.ScreenPage.CALIBRATION_HOME
     controller.print_state = FEATHER.PrintState.IDLE
     controller.command_depth = 0
     controller.busy_message = None
@@ -377,7 +377,7 @@ def calibration_controller(path=None):
             "cancel_available": False, "cancel_pending": False,
             "cancel_request_id": None, "cancel_target_name": None,
             "cancel_target_mode": None, "cancel_blocker_name": None})
-    controller.operation_cancel_return_page = FEATHER.Page.IDLE_HOME
+    controller.operation_cancel_return_page = FEATHER.ScreenPage.IDLE_HOME
     controller.operation_cancel_on_accept = None
     controller.operation_cancel_on_clear = None
     controller.operation_cancel_request_id = None
@@ -463,7 +463,7 @@ class ExtruderCalibrationControllerTest(unittest.TestCase):
 
         controller._open_cold_pull_cancel()
 
-        self.assertEqual(opened[0][0], FEATHER.Page.EXTRUDER_CALIBRATION)
+        self.assertEqual(opened[0][0], FEATHER.ScreenPage.EXTRUDER_CALIBRATION)
         opened[0][1]({"accepted": True})
         self.assertTrue(session.cold_pull_cancel_requested)
         self.assertTrue(session.cold_pull_cancel_dispatched)
@@ -479,7 +479,7 @@ class ExtruderCalibrationControllerTest(unittest.TestCase):
         session = controller.extruder_calibration
         session.phase = "cold_pull"
         session.cold_pull_material = "PLA"
-        controller.page = FEATHER.Page.CANCEL_CONFIRM
+        controller.page = FEATHER.ScreenPage.CANCEL_CONFIRM
         controller.operation_context = types.SimpleNamespace(
             get_status=lambda eventtime: {
                 "context_path": ("Cold Pull",),
@@ -492,7 +492,7 @@ class ExtruderCalibrationControllerTest(unittest.TestCase):
         controller._poll_cold_pull_progress(10.0, force=True)
 
         self.assertEqual(batches, [])
-        self.assertEqual(controller.page, FEATHER.Page.CANCEL_CONFIRM)
+        self.assertEqual(controller.page, FEATHER.ScreenPage.CANCEL_CONFIRM)
 
     def test_cold_pull_runs_on_its_feature_page_without_blocking_loader(self):
         controller = calibration_controller()
@@ -551,7 +551,7 @@ class ExtruderCalibrationControllerTest(unittest.TestCase):
         self.assertFalse(session.cold_pull_cancel_dispatched)
         self.assertIsNone(controller.cancel_mode)
         self.assertIsNone(controller.operation_cancel_request_id)
-        self.assertEqual(pages, [FEATHER.Page.EXTRUDER_CALIBRATION])
+        self.assertEqual(pages, [FEATHER.ScreenPage.EXTRUDER_CALIBRATION])
 
     def test_extruder_feature_routes_page_cancel_as_immediate_action(self):
         from feather_feature_extruder import ExtruderCalibrationFeature
@@ -564,7 +564,7 @@ class ExtruderCalibrationControllerTest(unittest.TestCase):
             lambda: calls.append("cancel"))
 
         handled = feature.handle_immediate_action(
-            FEATHER.Page.EXTRUDER_CALIBRATION,
+            FEATHER.ScreenPage.EXTRUDER_CALIBRATION,
             "extruder.coldpull.cancel")
 
         self.assertTrue(handled)
@@ -603,7 +603,7 @@ class ExtruderCalibrationControllerTest(unittest.TestCase):
 
         self.assertEqual(moves, [50])
         self.assertEqual(session.phase, "mark_first")
-        self.assertEqual(pages, [FEATHER.Page.EXTRUDER_CALIBRATION])
+        self.assertEqual(pages, [FEATHER.ScreenPage.EXTRUDER_CALIBRATION])
 
     def test_unload_uses_safe_base_then_offers_optional_extra_retract(self):
         controller = calibration_controller()
@@ -622,8 +622,8 @@ class ExtruderCalibrationControllerTest(unittest.TestCase):
         self.assertEqual(session.phase, "measure_ready")
         self.assertEqual(
             pages,
-            [FEATHER.Page.EXTRUDER_CALIBRATION,
-             FEATHER.Page.EXTRUDER_CALIBRATION])
+            [FEATHER.ScreenPage.EXTRUDER_CALIBRATION,
+             FEATHER.ScreenPage.EXTRUDER_CALIBRATION])
 
     def test_measurement_input_opens_only_after_filament_is_free(self):
         controller = calibration_controller()
@@ -636,7 +636,7 @@ class ExtruderCalibrationControllerTest(unittest.TestCase):
             "extruder.measure_ready")
 
         self.assertEqual(session.phase, "input")
-        self.assertEqual(pages, [FEATHER.Page.EXTRUDER_CALIBRATION])
+        self.assertEqual(pages, [FEATHER.ScreenPage.EXTRUDER_CALIBRATION])
 
     def test_measurement_uses_shared_decimal_keypad_constraints(self):
         controller = calibration_controller()
@@ -688,7 +688,7 @@ class ExtruderCalibrationControllerTest(unittest.TestCase):
         self.assertFalse(
             controller.extruder_calibration.cooling_fan_active)
         self.assertEqual(controller.extruder_calibration.phase, "remove")
-        self.assertEqual(pages, [FEATHER.Page.EXTRUDER_CALIBRATION])
+        self.assertEqual(pages, [FEATHER.ScreenPage.EXTRUDER_CALIBRATION])
 
     def test_cooling_publishes_terminal_state_before_yielding_beep(self):
         controller = calibration_controller()
@@ -731,7 +731,7 @@ class ExtruderCalibrationControllerTest(unittest.TestCase):
         self.assertTrue(controller.extruder_calibration.cooling_fan_active)
         self.assertEqual(controller.extruder_calibration.phase, "cooling")
         self.assertIn("M104 S0\nG28", blocking[0][0])
-        self.assertEqual(pages, [FEATHER.Page.EXTRUDER_CALIBRATION])
+        self.assertEqual(pages, [FEATHER.ScreenPage.EXTRUDER_CALIBRATION])
 
     def test_cancel_stops_calibration_fan(self):
         controller = calibration_controller()
@@ -761,7 +761,7 @@ class ExtruderCalibrationControllerTest(unittest.TestCase):
 
         self.assertEqual(runtime, [4.38])
         self.assertFalse(session.active)
-        self.assertEqual(pages, [FEATHER.Page.CALIBRATION_HOME])
+        self.assertEqual(pages, [FEATHER.ScreenPage.CALIBRATION_HOME])
 
     def test_exit_warning_returns_to_the_exact_interrupted_step(self):
         controller = calibration_controller()
@@ -798,7 +798,7 @@ class ExtruderCalibrationControllerTest(unittest.TestCase):
             self.assertEqual(runtime, [4.292])
             self.assertTrue(session.saved)
             self.assertEqual(session.phase, "saved")
-            self.assertEqual(pages, [FEATHER.Page.EXTRUDER_CALIBRATION])
+            self.assertEqual(pages, [FEATHER.ScreenPage.EXTRUDER_CALIBRATION])
 
     def test_runtime_apply_failure_keeps_saved_file_and_shows_recovery(self):
         with tempfile.TemporaryDirectory() as directory:

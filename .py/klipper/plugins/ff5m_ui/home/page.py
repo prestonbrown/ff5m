@@ -6,12 +6,13 @@
 
 from enum import Enum
 
-from ui import Page, ThemeColor, ThemeRole
+from ui import ThemeColor, ThemeRole
 from ui.bindings import bind, derived
 from ui.components import Button, Fill, Hitbox, Panel, Text
 from ui.layout import Overlay, PageTree, Rect
 
 from ..keys import AppPage
+from ..screen import ScreenPage
 from .actions import FILAMENT, HEAT, JOB, LAST_JOB, MENU, MOVE, NETWORK
 from .state import HomeState, collect_dashboard, dashboard_values
 
@@ -242,7 +243,7 @@ def render(host):
 
 
 def update(host, eventtime):
-    if host.page != Page.IDLE_HOME:
+    if host.page != ScreenPage.IDLE_HOME:
         return
     current = collect_dashboard(host, eventtime)
     if current == host._last_dashboard:

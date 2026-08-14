@@ -17,7 +17,8 @@ import feather_netd_protocol as protocol
 import feather_network
 from feather_keyboard import TEXT_KEYBOARD, is_keyboard_action
 from feather_pagination import Pagination
-from ui import Page, ThemeColor
+from ui import ThemeColor
+from ff5m_ui.screen import ScreenPage
 
 
 NETWORK_ROWS = 5
@@ -76,8 +77,8 @@ class FeatherNetworkPagesMixin:
         # independently synchronized UI representation.
         self.network_status = self.network_client.status
         self.network_operation = None
-        self.network_return_page = Page.NETWORK_HOME
-        self.network_parent_page = Page.MAIN_MENU
+        self.network_return_page = ScreenPage.NETWORK_HOME
+        self.network_parent_page = ScreenPage.MAIN_MENU
         self.network_deadline = 0.0
         self.network_probe_pending = False
         self.network_cancel_pending = False
@@ -124,10 +125,10 @@ class FeatherNetworkPagesMixin:
         # UI does not reconstruct operation ownership from marker files.
         if self._network_busy():
             self.network_operation = None
-            self._show_page(Page.NETWORK_PROGRESS)
+            self._show_page(ScreenPage.NETWORK_PROGRESS)
             return
         self._request_network_snapshot()
-        self._show_page(Page.NETWORK_HOME)
+        self._show_page(ScreenPage.NETWORK_HOME)
 
     def _handle_network_action(self, action):
         if action in ("net.scan", "net.rescan"):
@@ -149,21 +150,21 @@ class FeatherNetworkPagesMixin:
                 if self.selected_network.get("saved"):
                     self._connect_saved_wifi()
                 else:
-                    self._show_page(Page.WIFI_PASSWORD)
+                    self._show_page(ScreenPage.WIFI_PASSWORD)
         elif action == "net.reset.saved":
             if (self.selected_network is None
                     or not self.selected_network.get("saved")):
                 raise RuntimeError("No saved Wi-Fi password is selected")
             self.password = ""
             self.keyboard_shift = self.keyboard_symbols = False
-            self._show_page(Page.WIFI_PASSWORD)
+            self._show_page(ScreenPage.WIFI_PASSWORD)
         elif action == "net.connect":
             self._connect_wifi()
         elif action == "net.cancel":
             self._cancel_network_operation()
         elif action == "net.keep":
             self._show_page(getattr(
-                self, "network_parent_page", Page.IDLE_HOME))
+                self, "network_parent_page", ScreenPage.IDLE_HOME))
         elif action == "net.password.toggle":
             self.password_visible = not self.password_visible
             self._render_keyboard()
@@ -180,7 +181,7 @@ class FeatherNetworkPagesMixin:
         self.network_return_page = return_page
         self.network_deadline = self.reactor.monotonic() + NETWORK_WATCHDOG
         self.network_probe_pending = False
-        self._show_page(Page.NETWORK_PROGRESS)
+        self._show_page(ScreenPage.NETWORK_PROGRESS)
 
     def _require_network_ready(self):
         if self.network_operation is not None:
@@ -193,13 +194,13 @@ class FeatherNetworkPagesMixin:
         self.networks = []
         if not self.network_client.scan():
             raise RuntimeError("Network service is unavailable")
-        self._begin_network_operation("scan", Page.NETWORK_HOME)
+        self._begin_network_operation("scan", ScreenPage.NETWORK_HOME)
 
     def _start_ethernet(self):
         self._require_network_ready()
         if not self.network_client.use_ethernet():
             raise RuntimeError("Network service is unavailable")
-        self._begin_network_operation("ethernet", Page.NETWORK_HOME)
+        self._begin_network_operation("ethernet", ScreenPage.NETWORK_HOME)
 
     def _network_available(self):
         return self.network_client is not None and self.network_client.connected
@@ -247,11 +248,11 @@ class FeatherNetworkPagesMixin:
         self.network_cancel_pending = False
 
     def _repaint_network(self, eventtime):
-        if self.page == Page.NETWORK_HOME:
+        if self.page == ScreenPage.NETWORK_HOME:
             self._render_network_home()
-        elif self.page == Page.NETWORK_PROGRESS:
+        elif self.page == ScreenPage.NETWORK_PROGRESS:
             self._render_network_progress()
-        elif self.page == Page.IDLE_HOME:
+        elif self.page == ScreenPage.IDLE_HOME:
             self._update_dashboard(eventtime)
 
     def _on_network_event(self, kind, value, eventtime):
@@ -272,15 +273,15 @@ class FeatherNetworkPagesMixin:
 
         if kind == "snapshot":
             if value:
-                if (self.page == Page.NETWORK_HOME
+                if (self.page == ScreenPage.NETWORK_HOME
                         and self.network_status.get("state") == "CONNECTING"):
-                    self._show_page(Page.NETWORK_PROGRESS)
+                    self._show_page(ScreenPage.NETWORK_PROGRESS)
                     return
-                if (self.page == Page.NETWORK_PROGRESS
+                if (self.page == ScreenPage.NETWORK_PROGRESS
                         and self.network_operation is None
                         and not self.network_cancel_pending
                         and self.network_status.get("state") != "CONNECTING"):
-                    self._show_page(Page.NETWORK_HOME)
+                    self._show_page(ScreenPage.NETWORK_HOME)
                     return
                 self._repaint_network(eventtime)
             return
@@ -302,7 +303,7 @@ class FeatherNetworkPagesMixin:
                 and self.network_operation is None)
             self.network_cancel_pending = False
             if cancelled_daemon_operation:
-                self._show_page(Page.NETWORK_HOME)
+                self._show_page(ScreenPage.NETWORK_HOME)
                 return
             self._finish_network_operation(None, eventtime)
             return
@@ -315,7 +316,7 @@ class FeatherNetworkPagesMixin:
             if cancelled_daemon_operation:
                 self._show_message(
                     NETWORK_ERRORS.get(value, "Network operation failed"),
-                    Page.NETWORK_PROGRESS)
+                    ScreenPage.NETWORK_PROGRESS)
                 return
             self._finish_network_operation(
                 NETWORK_ERRORS.get(value, "Network operation failed"),
@@ -347,10 +348,10 @@ class FeatherNetworkPagesMixin:
         if operation == "scan":
             self.networks.sort(key=lambda entry: -entry["signal"])
             self.network_page = 0
-            self._show_page(Page.WIFI_SCAN)
+            self._show_page(ScreenPage.WIFI_SCAN)
             return
 
-        self._show_page(Page.NETWORK_HOME)
+        self._show_page(ScreenPage.NETWORK_HOME)
         if self.network_status.get("state") == "CONNECTED":
             self._toast("Network connected")
 
@@ -498,11 +499,11 @@ class FeatherNetworkPagesMixin:
         if not self.network_client.connect_wifi(
                 self.selected_network["ssid"], password):
             raise RuntimeError("Network service is unavailable")
-        self._begin_network_operation("wifi", Page.WIFI_SCAN)
+        self._begin_network_operation("wifi", ScreenPage.WIFI_SCAN)
 
     def _connect_saved_wifi(self):
         self._require_network_ready()
         if not self.network_client.connect_wifi(
                 self.selected_network["ssid"]):
             raise RuntimeError("Network service is unavailable")
-        self._begin_network_operation("wifi-saved", Page.WIFI_SCAN)
+        self._begin_network_operation("wifi-saved", ScreenPage.WIFI_SCAN)

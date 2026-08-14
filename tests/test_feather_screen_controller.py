@@ -71,7 +71,7 @@ class ControllerSafetyTest(unittest.TestCase):
 
     def test_home_semantic_route_preserves_existing_navigation(self):
         controller = ScenarioController.__new__(ScenarioController)
-        controller.page = FEATHER.Page.IDLE_HOME
+        controller.page = FEATHER.ScreenPage.IDLE_HOME
         controller._cancel_delayed_tasks = lambda: None
         shown = []
         controller._show_page = shown.append
@@ -79,12 +79,39 @@ class ControllerSafetyTest(unittest.TestCase):
         action = controller._resolve_semantic_ui_action("nav.heat")
         controller._dispatch_semantic_ui_action(action)
 
-        self.assertEqual(controller.heat_return_page, FEATHER.Page.IDLE_HOME)
-        self.assertEqual(shown, [FEATHER.Page.CONTROL_HEAT])
+        self.assertEqual(controller.heat_return_page, FEATHER.ScreenPage.IDLE_HOME)
+        self.assertEqual(shown, [FEATHER.ScreenPage.CONTROL_HEAT])
+
+    def test_declarative_navigation_rejects_non_controller_page_ids(self):
+        controller = ScenarioController.__new__(ScenarioController)
+        controller._show_page = mock.Mock()
+
+        with self.assertRaisesRegex(KeyError, "Unsupported application page"):
+            controller._navigate_app_page(AppPage.HOME)
+
+        controller._show_page.assert_not_called()
+
+    def test_declarative_navigation_accepts_move_mode_route(self):
+        controller = ScenarioController.__new__(ScenarioController)
+        controller.move_mode = "joystick"
+        controller._stop_joystick = mock.Mock()
+        controller._render_move = mock.Mock()
+
+        controller._navigate_app_page(AppPage.MOVE_STEP)
+
+        self.assertEqual(controller.move_mode, "step")
+        controller._stop_joystick.assert_called_once_with()
+        controller._render_move.assert_called_once_with()
+
+    def test_screen_transition_rejects_declarative_page_identity(self):
+        controller = ScenarioController.__new__(ScenarioController)
+
+        with self.assertRaisesRegex(TypeError, "ScreenPage"):
+            controller._show_page(AppPage.HOME)
 
     def test_home_cards_register_navigation_without_icon_font(self):
         controller = ScenarioController.__new__(ScenarioController)
-        controller.page = FEATHER.Page.IDLE_HOME
+        controller.page = FEATHER.ScreenPage.IDLE_HOME
         controller.renderer = FEATHER.FeatherRenderer()
         controller.reactor = Reactor()
         controller.extruder = StatusObject(
@@ -171,46 +198,46 @@ class ControllerSafetyTest(unittest.TestCase):
 
     def test_every_page_routes_to_a_renderer(self):
         controller = ScenarioController.__new__(ScenarioController)
-        controller.page = FEATHER.Page.IDLE_HOME
+        controller.page = FEATHER.ScreenPage.IDLE_HOME
         called = []
         routes = {
-            FEATHER.Page.IDLE_HOME: "_render_home",
-            FEATHER.Page.MAIN_MENU: "_render_main_menu",
-            FEATHER.Page.CONTROL_HOME: "_render_control_home",
-            FEATHER.Page.FILE_BROWSER: "_render_file_browser",
-            FEATHER.Page.FILE_CONFIRM: "_render_file_confirm",
-            FEATHER.Page.PRINTING: "_render_print_page",
-            FEATHER.Page.PAUSED: "_render_print_page",
-            FEATHER.Page.CANCEL_CONFIRM: "_render_cancel_confirm",
-            FEATHER.Page.CONTROL_MOVE: "_render_move",
-            FEATHER.Page.CONTROL_HEAT: "_render_heat",
-            FEATHER.Page.CALIBRATION_HOME: "_render_calibration_home",
-            FEATHER.Page.CALIBRATION_GUIDE: "_render_calibration_guide",
-            FEATHER.Page.EXTRUDER_CALIBRATION:
+            FEATHER.ScreenPage.IDLE_HOME: "_render_home",
+            FEATHER.ScreenPage.MAIN_MENU: "_render_main_menu",
+            FEATHER.ScreenPage.CONTROL_HOME: "_render_control_home",
+            FEATHER.ScreenPage.FILE_BROWSER: "_render_file_browser",
+            FEATHER.ScreenPage.FILE_CONFIRM: "_render_file_confirm",
+            FEATHER.ScreenPage.PRINTING: "_render_print_page",
+            FEATHER.ScreenPage.PAUSED: "_render_print_page",
+            FEATHER.ScreenPage.CANCEL_CONFIRM: "_render_cancel_confirm",
+            FEATHER.ScreenPage.CONTROL_MOVE: "_render_move",
+            FEATHER.ScreenPage.CONTROL_HEAT: "_render_heat",
+            FEATHER.ScreenPage.CALIBRATION_HOME: "_render_calibration_home",
+            FEATHER.ScreenPage.CALIBRATION_GUIDE: "_render_calibration_guide",
+            FEATHER.ScreenPage.EXTRUDER_CALIBRATION:
                 "_render_extruder_calibration",
-            FEATHER.Page.CALIBRATION_Z: "_render_z_summary",
-            FEATHER.Page.Z_OFFSET_SUMMARY: "_render_z_summary",
-            FEATHER.Page.Z_OFFSET_PAPER_BRIEFING: "_render_z_paper_briefing",
-            FEATHER.Page.Z_OFFSET_PAPER: "_render_z_paper",
-            FEATHER.Page.SAFE_Z_BRIEFING: "_render_safe_z_briefing",
-            FEATHER.Page.SAFE_Z_CALIBRATION: "_render_safe_z",
-            FEATHER.Page.LIVE_Z_OFFSET: "_render_live_z_offset",
-            FEATHER.Page.CALIBRATION_CONFIRM: "_render_calibration_confirm",
-            FEATHER.Page.CALIBRATION_PROGRESS: "_render_calibration_progress",
-            FEATHER.Page.CALIBRATION_RESULT: "_render_calibration_result",
-            FEATHER.Page.SETTINGS: "_render_settings",
-            FEATHER.Page.MOD_SETTINGS: "_render_mod_settings",
-            FEATHER.Page.PARAMETER_OPTIONS: "_render_parameter_options",
-            FEATHER.Page.MOD_VALUE: "_render_mod_value",
-            FEATHER.Page.NETWORK_HOME: "_render_network_home",
-            FEATHER.Page.WIFI_SCAN: "_render_wifi_scan",
-            FEATHER.Page.WIFI_PASSWORD: "_render_keyboard",
-            FEATHER.Page.NETWORK_PROGRESS: "_render_network_progress",
-            FEATHER.Page.RECOVERY_PROMPT: "_render_recovery_prompt",
-            FEATHER.Page.RECOVERY_CONFIRM: "_render_recovery_confirm",
-            FEATHER.Page.ACTION_PROMPT: "_render_action_prompt",
-            FEATHER.Page.MESSAGE: "_render_message",
-            FEATHER.Page.ERROR: "_render_error",
+            FEATHER.ScreenPage.CALIBRATION_Z: "_render_z_summary",
+            FEATHER.ScreenPage.Z_OFFSET_SUMMARY: "_render_z_summary",
+            FEATHER.ScreenPage.Z_OFFSET_PAPER_BRIEFING: "_render_z_paper_briefing",
+            FEATHER.ScreenPage.Z_OFFSET_PAPER: "_render_z_paper",
+            FEATHER.ScreenPage.SAFE_Z_BRIEFING: "_render_safe_z_briefing",
+            FEATHER.ScreenPage.SAFE_Z_CALIBRATION: "_render_safe_z",
+            FEATHER.ScreenPage.LIVE_Z_OFFSET: "_render_live_z_offset",
+            FEATHER.ScreenPage.CALIBRATION_CONFIRM: "_render_calibration_confirm",
+            FEATHER.ScreenPage.CALIBRATION_PROGRESS: "_render_calibration_progress",
+            FEATHER.ScreenPage.CALIBRATION_RESULT: "_render_calibration_result",
+            FEATHER.ScreenPage.SETTINGS: "_render_settings",
+            FEATHER.ScreenPage.MOD_SETTINGS: "_render_mod_settings",
+            FEATHER.ScreenPage.PARAMETER_OPTIONS: "_render_parameter_options",
+            FEATHER.ScreenPage.MOD_VALUE: "_render_mod_value",
+            FEATHER.ScreenPage.NETWORK_HOME: "_render_network_home",
+            FEATHER.ScreenPage.WIFI_SCAN: "_render_wifi_scan",
+            FEATHER.ScreenPage.WIFI_PASSWORD: "_render_keyboard",
+            FEATHER.ScreenPage.NETWORK_PROGRESS: "_render_network_progress",
+            FEATHER.ScreenPage.RECOVERY_PROMPT: "_render_recovery_prompt",
+            FEATHER.ScreenPage.RECOVERY_CONFIRM: "_render_recovery_confirm",
+            FEATHER.ScreenPage.ACTION_PROMPT: "_render_action_prompt",
+            FEATHER.ScreenPage.MESSAGE: "_render_message",
+            FEATHER.ScreenPage.ERROR: "_render_error",
         }
         feature_pages = {
             page for spec in FEATHER.FEATURE_SPECS for page in spec.pages
@@ -240,7 +267,7 @@ class ControllerSafetyTest(unittest.TestCase):
         controller = ScenarioController.__new__(ScenarioController)
         controller.renderer = FEATHER.FeatherRenderer()
         controller.print_state = FEATHER.PrintState.PRINTING
-        controller.page = FEATHER.Page.IDLE_HOME
+        controller.page = FEATHER.ScreenPage.IDLE_HOME
         drawing = []
 
         def render_home():
@@ -251,16 +278,16 @@ class ControllerSafetyTest(unittest.TestCase):
 
         controller._render_home = render_home
 
-        controller._show_page(FEATHER.Page.IDLE_HOME)
+        controller._show_page(FEATHER.ScreenPage.IDLE_HOME)
 
-        self.assertFalse(controller.renderer._emergency_stop_visible)
+        self.assertIsNone(controller.renderer._header_action)
         self.assertIn("nav.menu", "\n".join(drawing))
         self.assertNotIn("global.abort", "\n".join(drawing))
 
     def test_safety_composes_armed_pages_and_global_printer_activity(self):
         controller = ScenarioController.__new__(ScenarioController)
         controller.reactor = Reactor()
-        controller.page = FEATHER.Page.MAIN_MENU
+        controller.page = FEATHER.ScreenPage.MAIN_MENU
         controller.print_state = FEATHER.PrintState.IDLE
         controller.print_stats = StatusObject({"state": "standby"})
         controller.idle_timeout = StatusObject({"state": "Ready"})
@@ -297,7 +324,7 @@ class ControllerSafetyTest(unittest.TestCase):
         controller.print_stats.status["state"] = "printing"
         self.assertTrue(controller._safety_decision().visible)
         self.assertFalse(controller._safety_decision(
-            FEATHER.Page.IDLE_HOME).visible)
+            FEATHER.ScreenPage.IDLE_HOME).visible)
 
         controller.print_stats.status["state"] = "standby"
         mutex.busy = True
@@ -325,32 +352,32 @@ class ControllerSafetyTest(unittest.TestCase):
         controller.joystick_stream.active = False
 
         self.assertFalse(controller._safety_decision(
-            FEATHER.Page.CONTROL_MOVE).visible)
+            FEATHER.ScreenPage.CONTROL_MOVE).visible)
         controller.toolhead.status["homed_axes"] = "x"
-        move = controller._safety_decision(FEATHER.Page.CONTROL_MOVE)
+        move = controller._safety_decision(FEATHER.ScreenPage.CONTROL_MOVE)
         self.assertTrue(move.visible)
         self.assertEqual(move.armed_reasons, ("homed-motion-controls",))
         self.assertTrue(controller._safety_decision(
-            FEATHER.Page.CONTROL_HEAT).visible)
+            FEATHER.ScreenPage.CONTROL_HEAT).visible)
         self.assertFalse(controller._safety_decision(
-            FEATHER.Page.FILE_CONFIRM).visible)
+            FEATHER.ScreenPage.FILE_CONFIRM).visible)
 
     def test_active_process_shows_abort_on_every_live_page_except_home(self):
         controller = ScenarioController.__new__(ScenarioController)
         controller.reactor = Reactor()
-        controller.page = FEATHER.Page.MAIN_MENU
+        controller.page = FEATHER.ScreenPage.MAIN_MENU
         controller.print_state = FEATHER.PrintState.PRINTING
         controller.print_stats = StatusObject({"state": "printing"})
 
-        for page in FEATHER.Page:
+        for page in FEATHER.ScreenPage:
             decision = controller._safety_decision(page)
             self.assertEqual(decision.visible,
-                             page != FEATHER.Page.IDLE_HOME, page)
+                             page != FEATHER.ScreenPage.IDLE_HOME, page)
 
     def test_feature_armed_policy_failure_is_fail_safe(self):
         controller = ScenarioController.__new__(ScenarioController)
         controller.reactor = Reactor()
-        controller.page = FEATHER.Page.SETTINGS
+        controller.page = FEATHER.ScreenPage.SETTINGS
         controller.print_state = FEATHER.PrintState.IDLE
         controller.feature_manager = type("Manager", (), {
             "safety_active_reasons": lambda self, eventtime: (),
@@ -370,7 +397,7 @@ class ControllerSafetyTest(unittest.TestCase):
     def test_short_gcode_state_does_not_flash_abort(self):
         controller = ScenarioController.__new__(ScenarioController)
         controller.reactor = Reactor()
-        controller.page = FEATHER.Page.MAIN_MENU
+        controller.page = FEATHER.ScreenPage.MAIN_MENU
         controller.print_state = FEATHER.PrintState.IDLE
         controller.print_stats = StatusObject({"state": "standby"})
         controller.idle_timeout = StatusObject({"state": "Ready"})
@@ -422,7 +449,7 @@ class ControllerSafetyTest(unittest.TestCase):
 
     def test_dashboard_refresh_redraws_only_changed_panel(self):
         controller = ScenarioController.__new__(ScenarioController)
-        controller.page = FEATHER.Page.IDLE_HOME
+        controller.page = FEATHER.ScreenPage.IDLE_HOME
         controller.renderer = FEATHER.FeatherRenderer()
         batches = []
         controller.renderer.send = batches.append
@@ -460,7 +487,7 @@ class ControllerSafetyTest(unittest.TestCase):
 
     def test_dashboard_worst_case_content_is_bounded(self):
         controller = ScenarioController.__new__(ScenarioController)
-        controller.page = FEATHER.Page.IDLE_HOME
+        controller.page = FEATHER.ScreenPage.IDLE_HOME
         controller.print_state = FEATHER.PrintState.PREPARING
         controller.renderer = FEATHER.FeatherRenderer()
         controller.reactor = Reactor()
@@ -559,7 +586,7 @@ class ControllerSafetyTest(unittest.TestCase):
 
         controller._handle_calibration_action("cal.axes")
         self.assertEqual(controller.calibration_guide_kind, "axes")
-        self.assertEqual(pages[-1], FEATHER.Page.CALIBRATION_GUIDE)
+        self.assertEqual(pages[-1], FEATHER.ScreenPage.CALIBRATION_GUIDE)
 
     def test_pid_confirm_uses_selected_material_temperature(self):
         controller = ScenarioController.__new__(ScenarioController)
@@ -601,7 +628,7 @@ class ControllerSafetyTest(unittest.TestCase):
 
                 self.assertEqual(controller.gcode.commands, expected)
                 self.assertEqual(
-                    pages, [FEATHER.Page.CALIBRATION_RESULT])
+                    pages, [FEATHER.ScreenPage.CALIBRATION_RESULT])
 
     def test_tuning_result_can_save_or_return_without_saving(self):
         controller = ScenarioController.__new__(ScenarioController)
@@ -625,7 +652,7 @@ class ControllerSafetyTest(unittest.TestCase):
         self.assertEqual(restarts, ["SAVE_CONFIG"])
 
         controller._handle_calibration_action("cal.tuning.discard")
-        self.assertEqual(pages, [FEATHER.Page.CALIBRATION_HOME])
+        self.assertEqual(pages, [FEATHER.ScreenPage.CALIBRATION_HOME])
 
 
     def test_z_offset_summary_registers_all_positions(self):
@@ -714,7 +741,7 @@ class ControllerSafetyTest(unittest.TestCase):
         controller.live_z_step = 0.005
         controller.live_z_dialog = None
         controller.z_adjust_warning_threshold = 0.3
-        controller.renderer.set_emergency_stop_visible(True)
+        controller.renderer.set_header_action("global.abort", "ABORT")
 
         controller._render_live_z_offset()
 
@@ -1051,7 +1078,7 @@ class ControllerSafetyTest(unittest.TestCase):
                     }})()
                 controller.reactor = Reactor()
                 controller.renderer.send = lambda commands: None
-                controller.renderer.set_emergency_stop_visible(True)
+                controller.renderer.set_header_action("global.abort", "ABORT")
 
                 controller._render_calibration_progress()
 
@@ -1136,7 +1163,7 @@ class ControllerSafetyTest(unittest.TestCase):
             "SET_SKEW CLEAR=1",
             "_SET_GCODE_OFFSET Z=0 MOVE=0",
             "BED_MESH_CLEAR"])
-        self.assertEqual(pages, [FEATHER.Page.SAFE_Z_BRIEFING])
+        self.assertEqual(pages, [FEATHER.ScreenPage.SAFE_Z_BRIEFING])
         self.assertEqual(controller.reactor.callbacks, [])
 
     def test_z_session_entry_failure_restores_runtime_and_mesh(self):
@@ -1225,7 +1252,7 @@ class ControllerSafetyTest(unittest.TestCase):
     def test_z_pressure_dialog_is_suppressed_during_probe_then_rearms(self):
         controller = ScenarioController.__new__(ScenarioController)
         controller.reactor = Reactor()
-        controller.page = FEATHER.Page.Z_OFFSET_PAPER
+        controller.page = FEATHER.ScreenPage.Z_OFFSET_PAPER
         controller.weight_sensor = StatusObject({
             "temperature": 850.0,
             "measured_min_temp": 0.0,
@@ -1268,7 +1295,7 @@ class ControllerSafetyTest(unittest.TestCase):
         controller = ScenarioController.__new__(ScenarioController)
         controller.reactor = Reactor()
         controller.gcode = AbortPreparation()
-        controller.page = FEATHER.Page.CALIBRATION_PROGRESS
+        controller.page = FEATHER.ScreenPage.CALIBRATION_PROGRESS
         controller.print_state = FEATHER.PrintState.IDLE
         controller.shutdown_active = False
         controller.toolhead = StatusObject({
@@ -1296,12 +1323,12 @@ class ControllerSafetyTest(unittest.TestCase):
         self.assertIs(controller.bed_mesh.z_mesh, original_mesh)
         self.assertEqual(controller.bed_mesh.profile_name, "adaptive")
         self.assertEqual(len(messages), 1)
-        self.assertEqual(messages[0][1], FEATHER.Page.CALIBRATION_HOME)
+        self.assertEqual(messages[0][1], FEATHER.ScreenPage.CALIBRATION_HOME)
 
     def test_z_shutdown_clears_local_session_without_replacing_error_page(self):
         controller = ScenarioController.__new__(ScenarioController)
         controller.gcode = FailingGCode()
-        controller.page = FEATHER.Page.ERROR
+        controller.page = FEATHER.ScreenPage.ERROR
         controller.print_state = FEATHER.PrintState.IDLE
         controller.shutdown_active = True
         controller.calibration_clean_nozzle = False
@@ -1318,7 +1345,7 @@ class ControllerSafetyTest(unittest.TestCase):
         controller._run_z_calibration_preparation(100.0)
 
         self.assertFalse(controller.z_calibration.active)
-        self.assertEqual(controller.page, FEATHER.Page.ERROR)
+        self.assertEqual(controller.page, FEATHER.ScreenPage.ERROR)
         self.assertEqual(pages, [])
 
     def test_calibration_cancel_requests_context_domain_once(self):
@@ -1327,7 +1354,7 @@ class ControllerSafetyTest(unittest.TestCase):
         controller.calibration_cancel_requested = False
         controller.calibration_cancel_dispatched = False
         controller.reactor = Reactor()
-        controller.operation_cancel_return_page = FEATHER.Page.IDLE_HOME
+        controller.operation_cancel_return_page = FEATHER.ScreenPage.IDLE_HOME
         controller.operation_cancel_on_accept = None
         controller.operation_cancel_on_clear = None
         controller.operation_cancel_request_id = None
@@ -1366,7 +1393,7 @@ class ControllerSafetyTest(unittest.TestCase):
 
     def test_calibration_cancel_dialog_is_not_blocked_by_active_macro(self):
         controller = ScenarioController.__new__(ScenarioController)
-        controller.page = FEATHER.Page.CALIBRATION_PROGRESS
+        controller.page = FEATHER.ScreenPage.CALIBRATION_PROGRESS
         controller.calibration_kind = "mesh"
         controller.command_depth = 1
         controller.mod_update_pending = False
@@ -1385,7 +1412,7 @@ class ControllerSafetyTest(unittest.TestCase):
 
     def test_same_page_redraw_does_not_discard_delayed_button_action(self):
         controller = ScenarioController.__new__(ScenarioController)
-        controller.page = FEATHER.Page.SETTINGS
+        controller.page = FEATHER.ScreenPage.SETTINGS
         controller.touch_feedback_pending = True
         restored = []
         controller.renderer = type("Renderer", (), {
@@ -1397,7 +1424,7 @@ class ControllerSafetyTest(unittest.TestCase):
 
         controller._finish_touch_action(
             0, "settings.theme.next",
-            source_page=FEATHER.Page.SETTINGS, generation=1)
+            source_page=FEATHER.ScreenPage.SETTINGS, generation=1)
 
         self.assertEqual(restored, [])
         self.assertEqual(dispatched, ["settings.theme.next"])
@@ -1405,7 +1432,7 @@ class ControllerSafetyTest(unittest.TestCase):
 
     def test_page_change_discards_delayed_button_action(self):
         controller = ScenarioController.__new__(ScenarioController)
-        controller.page = FEATHER.Page.IDLE_HOME
+        controller.page = FEATHER.ScreenPage.IDLE_HOME
         controller.touch_feedback_pending = True
         controller.renderer = type("Renderer", (), {"generation": 2})()
         dispatched = []
@@ -1413,7 +1440,7 @@ class ControllerSafetyTest(unittest.TestCase):
 
         controller._finish_touch_action(
             0, "settings.theme.next",
-            source_page=FEATHER.Page.SETTINGS, generation=1)
+            source_page=FEATHER.ScreenPage.SETTINGS, generation=1)
 
         self.assertEqual(dispatched, [])
         self.assertFalse(controller.touch_feedback_pending)
@@ -1439,7 +1466,7 @@ class ControllerSafetyTest(unittest.TestCase):
         controller.reactor = Reactor()
         batches = []
         controller.renderer.send = batches.append
-        controller.renderer.set_emergency_stop_visible(True)
+        controller.renderer.set_header_action("global.abort", "ABORT")
         controller._render_calibration_progress()
         initial_generation = controller.renderer.generation
 
@@ -1452,7 +1479,7 @@ class ControllerSafetyTest(unittest.TestCase):
 
     def test_global_abort_bypasses_busy_and_touch_feedback(self):
         controller = ScenarioController.__new__(ScenarioController)
-        controller.page = FEATHER.Page.MAIN_MENU
+        controller.page = FEATHER.ScreenPage.MAIN_MENU
         controller.print_state = FEATHER.PrintState.IDLE
         controller.command_depth = 1
         controller.mod_update_pending = False
@@ -1633,7 +1660,7 @@ class ControllerSafetyTest(unittest.TestCase):
         controller._handle_mod_action("mod.option.1")
         controller._handle_mod_action("mod.apply")
 
-        self.assertEqual(controller.page, FEATHER.Page.MOD_SETTINGS)
+        self.assertEqual(controller.page, FEATHER.ScreenPage.MOD_SETTINGS)
         self.assertIn("01-05 / 06", "\n".join(controller.draw_batches[-1]))
         self.assertEqual(controller.mod_page, 0)
         controller._handle_mod_action("mod.next")
@@ -1759,7 +1786,7 @@ class ControllerSafetyTest(unittest.TestCase):
             options = tuple(controller.parameter_options)
             page_count = (len(options) + 3) // 4
             first = "\n".join(controller.draw_batches[-1])
-            self.assertEqual(controller.page, FEATHER.Page.PARAMETER_OPTIONS)
+            self.assertEqual(controller.page, FEATHER.ScreenPage.PARAMETER_OPTIONS)
             self.assertIn("1/%d" % page_count, first)
             self.assertEqual(refresh.call_count, 1)
 
@@ -1852,17 +1879,17 @@ class ControllerSafetyTest(unittest.TestCase):
         theme = mod_param("feather_theme", str, "DEFAULT",
                           "Feather color theme")
         controller = mod_controller([theme], {"feather_theme": "DEFAULT"})
-        controller.page = FEATHER.Page.SETTINGS
+        controller.page = FEATHER.ScreenPage.SETTINGS
 
         controller._handle_settings_action("settings.theme")
 
-        self.assertEqual(controller.page, FEATHER.Page.PARAMETER_OPTIONS)
-        self.assertEqual(controller.mod_return_page, FEATHER.Page.SETTINGS)
+        self.assertEqual(controller.page, FEATHER.ScreenPage.PARAMETER_OPTIONS)
+        self.assertEqual(controller.mod_return_page, FEATHER.ScreenPage.SETTINGS)
         options = tuple(controller.parameter_options)
         dark_index = options.index("DARK")
         controller._handle_mod_action("mod.option.%d" % dark_index)
         controller._handle_mod_action("mod.apply")
-        self.assertEqual(controller.page, FEATHER.Page.SETTINGS)
+        self.assertEqual(controller.page, FEATHER.ScreenPage.SETTINGS)
 
     def test_toggle_thumb_is_centered_and_animates_between_halves(self):
         renderer = FEATHER.FeatherRenderer()
@@ -1986,19 +2013,19 @@ class ControllerSafetyTest(unittest.TestCase):
         controller = mod_controller([param], {"display": 1})
 
         controller._handle_mod_action("mod.item.0")
-        self.assertEqual(controller.page, FEATHER.Page.PARAMETER_OPTIONS)
+        self.assertEqual(controller.page, FEATHER.ScreenPage.PARAMETER_OPTIONS)
         self.assertEqual(controller.params.updated, [])
         controller._handle_mod_action("mod.option.3")
         controller._handle_mod_action("mod.apply")
 
         self.assertEqual(controller.params.updated, [("display", 3)])
-        self.assertEqual(controller.page, FEATHER.Page.MOD_SETTINGS)
+        self.assertEqual(controller.page, FEATHER.ScreenPage.MOD_SETTINGS)
 
     def test_mod_numeric_editor_rejects_decimal_for_integer(self):
         param = mod_param("park_dz", int, 50, "Park offset")
         controller = mod_controller([param], {"park_dz": 50})
         controller._handle_mod_action("mod.item.0")
-        self.assertEqual(controller.page, FEATHER.Page.MOD_VALUE)
+        self.assertEqual(controller.page, FEATHER.ScreenPage.MOD_VALUE)
         controller.mod_edit_value = ""
         controller._handle_mod_action("mod.key.7")
         controller._handle_mod_action("mod.dot")
@@ -2034,7 +2061,7 @@ class ControllerSafetyTest(unittest.TestCase):
                 "keyboard.shift", "keyboard.key.a", "keyboard.space",
                 "keyboard.symbols"):
             self.assertTrue(controller.handle_action(
-                FEATHER.Page.MOD_VALUE, action))
+                FEATHER.ScreenPage.MOD_VALUE, action))
         self.assertIn("keyboard.key.1", dict(controller.renderer._buttons))
         self.assertIn("keyboard.key.0", dict(controller.renderer._buttons))
         controller._handle_mod_action("keyboard.key.hash")
@@ -2132,7 +2159,7 @@ class ControllerSafetyTest(unittest.TestCase):
         controller.reactor = Reactor()
         controller.last_action_time = -1
         controller.pending_action = "print.pause"
-        controller.page = FEATHER.Page.PRINTING
+        controller.page = FEATHER.ScreenPage.PRINTING
         controller.debug = False
         calls = []
         controller._handle_print_action = calls.append
@@ -2151,7 +2178,7 @@ class ControllerSafetyTest(unittest.TestCase):
             "file_path": lambda self: "/data/test.gcode"})()
         controller._live_z_adjust_allowed = lambda eventtime: False
         controller._update_print_progress = lambda eventtime: None
-        controller.renderer.set_emergency_stop_visible(True)
+        controller.renderer.set_header_action("global.abort", "ABORT")
 
         controller._render_print_page()
 
@@ -2180,7 +2207,7 @@ class ControllerSafetyTest(unittest.TestCase):
             "print_started": False}})()
         controller._live_z_adjust_allowed = lambda eventtime: False
         controller._update_print_progress = lambda eventtime: None
-        controller.renderer.set_emergency_stop_visible(True)
+        controller.renderer.set_header_action("global.abort", "ABORT")
 
         controller._render_print_page()
 
@@ -2194,7 +2221,7 @@ class ControllerSafetyTest(unittest.TestCase):
         controller.renderer = FEATHER.FeatherRenderer()
         batches = []
         controller.renderer.send = batches.append
-        controller.page = FEATHER.Page.PRINTING
+        controller.page = FEATHER.ScreenPage.PRINTING
         controller._last_progress = None
         controller._progress_floor = 0.0
         controller._last_time = None
@@ -2331,7 +2358,7 @@ class ControllerSafetyTest(unittest.TestCase):
             "temperature": 220.0, "target": 220.0})
         controller.extruder.min_extrude_temp = 170.0
 
-        FilamentFeature(controller).render(FEATHER.Page.FILAMENT_ACTION)
+        FilamentFeature(controller).render(FEATHER.ScreenPage.FILAMENT_ACTION)
 
         drawing = "\n".join(batches[0])
         for action, y in ((FILAMENT_ACTIONS.LOAD, 72),
@@ -2354,7 +2381,7 @@ class ControllerSafetyTest(unittest.TestCase):
         controller.extruder.min_extrude_temp = 170.0
 
         feature = FilamentFeature(controller)
-        feature.render(FEATHER.Page.FILAMENT_ACTION)
+        feature.render(FEATHER.ScreenPage.FILAMENT_ACTION)
 
         drawing = "\n".join(batches[0])
         for action in (FILAMENT_ACTIONS.LOAD, FILAMENT_ACTIONS.UNLOAD,
@@ -2363,7 +2390,7 @@ class ControllerSafetyTest(unittest.TestCase):
 
         controller.extruder.status["temperature"] = 248.0
         batches.clear()
-        feature.render(FEATHER.Page.FILAMENT_ACTION)
+        feature.render(FEATHER.ScreenPage.FILAMENT_ACTION)
         drawing = "\n".join(batches[0])
         for action in (FILAMENT_ACTIONS.LOAD, FILAMENT_ACTIONS.UNLOAD,
                        FILAMENT_ACTIONS.PURGE):
@@ -2371,7 +2398,7 @@ class ControllerSafetyTest(unittest.TestCase):
 
         controller.extruder.status["temperature"] = 260.0
         batches.clear()
-        feature.render(FEATHER.Page.FILAMENT_ACTION)
+        feature.render(FEATHER.ScreenPage.FILAMENT_ACTION)
         drawing = "\n".join(batches[0])
         for action in (FILAMENT_ACTIONS.LOAD, FILAMENT_ACTIONS.UNLOAD,
                        FILAMENT_ACTIONS.PURGE):
@@ -2388,7 +2415,7 @@ class ControllerSafetyTest(unittest.TestCase):
         controller._change_print_state(FEATHER.PrintState.IDLE, "cancelled")
         self.assertEqual(controller.print_state, FEATHER.PrintState.IDLE)
         self.assertEqual(len(messages), 1)
-        self.assertEqual(messages[0][1], FEATHER.Page.IDLE_HOME)
+        self.assertEqual(messages[0][1], FEATHER.ScreenPage.IDLE_HOME)
 
     def test_preheat_presets_respect_real_heater_limits(self):
         controller = ScenarioController.__new__(ScenarioController)
@@ -2426,7 +2453,7 @@ class ControllerSafetyTest(unittest.TestCase):
         controller._show_page = pages.append
         controller._finish_filament(False)
         self.assertEqual(controller.gcode.commands, ["M104 S185"])
-        self.assertEqual(pages, [FEATHER.Page.IDLE_HOME])
+        self.assertEqual(pages, [FEATHER.ScreenPage.IDLE_HOME])
 
     def test_live_z_adjust_is_available_on_every_layer_when_z_is_homed(self):
         controller = ScenarioController.__new__(ScenarioController)
@@ -2458,7 +2485,7 @@ class ControllerSafetyTest(unittest.TestCase):
         controller._run_calibration(0)
         self.assertEqual(controller.gcode.commands,
                          ["AUTO_FULL_BED_LEVEL EXTRUDER_TEMP=245 BED_TEMP=68 PROFILE=auto"])
-        self.assertEqual(pages, [FEATHER.Page.CALIBRATION_RESULT])
+        self.assertEqual(pages, [FEATHER.ScreenPage.CALIBRATION_RESULT])
 
     def test_screw_calibration_passes_selected_cleaning_path(self):
         controller = ScenarioController.__new__(ScenarioController)
@@ -2475,7 +2502,7 @@ class ControllerSafetyTest(unittest.TestCase):
         controller._run_calibration(0)
         self.assertEqual(controller.gcode.commands, [
             "BED_LEVEL_SCREWS_TUNE CLEAN=0"])
-        self.assertEqual(pages, [FEATHER.Page.CALIBRATION_RESULT])
+        self.assertEqual(pages, [FEATHER.ScreenPage.CALIBRATION_RESULT])
 
     def test_cancelled_calibration_result_does_not_offer_unsafe_repeat(self):
         controller = ScenarioController.__new__(ScenarioController)
@@ -2534,7 +2561,7 @@ class ControllerSafetyTest(unittest.TestCase):
 
         controller._handle_calibration_action("cal.mesh.discard")
 
-        self.assertEqual(pages, [FEATHER.Page.CALIBRATION_HOME])
+        self.assertEqual(pages, [FEATHER.ScreenPage.CALIBRATION_HOME])
 
     def test_mesh_save_actions_are_ignored_without_valid_result(self):
         for error, cancelled, mesh in (
@@ -2601,7 +2628,7 @@ class ControllerSafetyTest(unittest.TestCase):
                 self.assertTrue(controller.calibration_cancelled)
                 self.assertIsNone(controller.calibration_error)
                 self.assertEqual(
-                    pages, [FEATHER.Page.CALIBRATION_RESULT])
+                    pages, [FEATHER.ScreenPage.CALIBRATION_RESULT])
 
     def test_screw_repeat_starts_probe_immediately_without_confirm(self):
         controller = ScenarioController.__new__(ScenarioController)
@@ -2615,7 +2642,7 @@ class ControllerSafetyTest(unittest.TestCase):
         pages = []
         controller._show_page = pages.append
         controller._handle_calibration_action("cal.repeat")
-        self.assertEqual(pages, [FEATHER.Page.CALIBRATION_PROGRESS])
+        self.assertEqual(pages, [FEATHER.ScreenPage.CALIBRATION_PROGRESS])
         self.assertTrue(controller.calibration_repeat_probe)
         self.assertEqual(controller.calibration_results, [])
         self.assertEqual(len(controller.reactor.callbacks), 1)
@@ -2640,7 +2667,7 @@ class ControllerSafetyTest(unittest.TestCase):
         with self.assertLogs(level="ERROR"):
             controller._run_calibration(0)
         self.assertEqual(controller.calibration_error, "macro failed")
-        self.assertEqual(pages, [FEATHER.Page.CALIBRATION_RESULT])
+        self.assertEqual(pages, [FEATHER.ScreenPage.CALIBRATION_RESULT])
 
     def test_calibration_shutdown_preserves_firmware_restart_screen(self):
         class ShutdownGCode:
@@ -2655,7 +2682,7 @@ class ControllerSafetyTest(unittest.TestCase):
         controller.gcode = ShutdownGCode()
         controller.renderer = FEATHER.FeatherRenderer()
         controller.renderer.freeze_output()
-        controller.page = FEATHER.Page.ERROR
+        controller.page = FEATHER.ScreenPage.ERROR
         controller.error_recovery = None
         controller._require_idle = lambda: None
         controller._limited_preheat = lambda material: (220, 60)
@@ -2666,12 +2693,12 @@ class ControllerSafetyTest(unittest.TestCase):
             controller._run_calibration(0)
 
         self.assertEqual(controller.calibration_error, "opaque command failure")
-        self.assertEqual(controller.page, FEATHER.Page.ERROR)
+        self.assertEqual(controller.page, FEATHER.ScreenPage.ERROR)
         self.assertEqual(rendered, [])
 
     def test_workflow_pages_cannot_replace_firmware_restart_screen(self):
         controller = ScenarioController.__new__(ScenarioController)
-        controller.page = FEATHER.Page.ERROR
+        controller.page = FEATHER.ScreenPage.ERROR
         controller.renderer = FEATHER.FeatherRenderer()
         controller.renderer.freeze_output()
         controller.error_recovery = "firmware_restart"
@@ -2679,14 +2706,14 @@ class ControllerSafetyTest(unittest.TestCase):
         rendered = []
         controller._render_calibration_result = lambda: rendered.append(True)
 
-        controller._show_page(FEATHER.Page.CALIBRATION_RESULT)
+        controller._show_page(FEATHER.ScreenPage.CALIBRATION_RESULT)
 
-        self.assertEqual(controller.page, FEATHER.Page.ERROR)
+        self.assertEqual(controller.page, FEATHER.ScreenPage.ERROR)
         self.assertEqual(rendered, [])
 
     def test_frozen_shutdown_screen_ignores_late_action_error_page(self):
         controller = ScenarioController.__new__(ScenarioController)
-        controller.page = FEATHER.Page.ERROR
+        controller.page = FEATHER.ScreenPage.ERROR
         controller.renderer = FEATHER.FeatherRenderer()
         controller.renderer.freeze_output()
         controller.print_state = FEATHER.PrintState.IDLE
@@ -2698,14 +2725,14 @@ class ControllerSafetyTest(unittest.TestCase):
         controller._render_message = lambda: rendered.append(True)
 
         controller._show_message(
-            "opaque command failure", FEATHER.Page.CONTROL_HOME)
+            "opaque command failure", FEATHER.ScreenPage.CONTROL_HOME)
 
-        self.assertEqual(controller.page, FEATHER.Page.ERROR)
+        self.assertEqual(controller.page, FEATHER.ScreenPage.ERROR)
         self.assertEqual(rendered, [])
 
     def test_frozen_shutdown_screen_preserves_recovery_hitbox_generation(self):
         controller = ScenarioController.__new__(ScenarioController)
-        controller.page = FEATHER.Page.ERROR
+        controller.page = FEATHER.ScreenPage.ERROR
         controller.renderer = FEATHER.FeatherRenderer()
         controller.renderer._generation = 9
         controller.renderer.freeze_output()
@@ -2715,7 +2742,7 @@ class ControllerSafetyTest(unittest.TestCase):
 
         controller._show_message(
             "Shutdown due to M112 command; use FIRMWARE_RESTART",
-            FEATHER.Page.ERROR)
+            FEATHER.ScreenPage.ERROR)
 
         self.assertEqual(controller.renderer.generation, 9)
         self.assertEqual(controller.error_message,
@@ -3031,8 +3058,8 @@ class ControllerSafetyTest(unittest.TestCase):
                 events.append(("theme", name))
                 return True
 
-            def startup_modal(self, phase, restarting=False):
-                events.append(("modal", phase, restarting))
+            def startup_modal(self, title, detail, phase, critical=False):
+                events.append(("modal", title, detail, phase, critical))
 
         class TimerReactor:
             NOW = 0.0
@@ -3056,7 +3083,8 @@ class ControllerSafetyTest(unittest.TestCase):
 
         self.assertEqual(events, [
             ("theme", "USER_THEME"),
-            ("modal", 2, True),
+            ("modal", "INITIALIZING KLIPPER",
+             "RESTART IN PROGRESS - DISPLAY MAY PAUSE", 2, True),
         ])
 
     def test_startup_tick_advances_pulse_until_klipper_is_ready(self):

@@ -268,7 +268,7 @@ class RunnerContractTest(unittest.TestCase):
         })()
         host = type("Host", (), {
             "reactor": reactor,
-            "page": FEATHER.Page.CONTROL_MOVE,
+            "page": FEATHER.ScreenPage.CONTROL_MOVE,
             "command_depth": 1,
             "busy_message": "HOMING...",
         })()
@@ -281,7 +281,7 @@ class RunnerContractTest(unittest.TestCase):
         feature._schedule = schedules.append
         step = {"kind": "tap", "label": "move.homeall"}
 
-        feature._after_tap(10.0, step, FEATHER.Page.CONTROL_MOVE)
+        feature._after_tap(10.0, step, FEATHER.ScreenPage.CONTROL_MOVE)
 
         self.assertEqual(feature.step_index, 4)
         self.assertEqual(feature.step_runtime["operation_deadline"],
@@ -292,7 +292,7 @@ class RunnerContractTest(unittest.TestCase):
         host.busy_message = None
         # A long operation may legitimately advance from its progress page to
         # a result page before synthetic tap completion is acknowledged.
-        host.page = FEATHER.Page.CALIBRATION_RESULT
+        host.page = FEATHER.ScreenPage.CALIBRATION_RESULT
         callbacks[0][0](10.1)
         self.assertEqual(feature.step_index, 5)
         self.assertEqual(events, ["PASS move.homeall"])
@@ -505,7 +505,7 @@ class RunnerContractTest(unittest.TestCase):
                 "monotonic": lambda self: 12.5,
             })(),
             "renderer": renderer,
-            "page": FEATHER.Page.IDLE_HOME,
+            "page": FEATHER.ScreenPage.IDLE_HOME,
             "extruder": Status({"temperature": 31.5, "target": 0.0}),
             "heater_bed": Status({"temperature": 29.0, "target": 0.0}),
             "toolhead": Status({"position": (1.0, 2.0, 3.0, 4.0)}),
@@ -614,10 +614,10 @@ class RunnerContractTest(unittest.TestCase):
 
         self.assertEqual(
             (steps[returned + 1]["action"], steps[returned + 1]["page"]),
-            ("nav.back", FEATHER.Page.IDLE_HOME))
+            ("nav.back", FEATHER.ScreenPage.IDLE_HOME))
         self.assertEqual(
             (steps[returned + 2]["action"], steps[returned + 2]["page"]),
-            ("nav.menu", FEATHER.Page.MAIN_MENU))
+            ("nav.menu", FEATHER.ScreenPage.MAIN_MENU))
 
     def test_component_suite_discovers_declarative_pages_without_hardware(self):
         feature = UI_TEST.UITestRun(object())
@@ -657,7 +657,7 @@ class RunnerContractTest(unittest.TestCase):
             "FORGE-X // FEATHER", back=False)
         renderer.send.assert_called_once_with(["header", "body"])
         renderer.footer.assert_called_once_with(
-            25.0, 0.0, 25.0, 0.0, "PREVIEW", "IDLE")
+            "NOZZLE 25/0C | BED 25/0C", "PREVIEW | IDLE")
 
     def test_component_cases_accept_only_known_mutable_typed_state(self):
         feature = UI_TEST.UITestRun(object())
@@ -720,7 +720,7 @@ class RunnerContractTest(unittest.TestCase):
         self.assertEqual(
             (steps[action_capture + 4]["action"],
              steps[action_capture + 4]["page"]),
-            ("nav.back", FEATHER.Page.FILAMENT_MATERIAL))
+            ("nav.back", FEATHER.ScreenPage.FILAMENT_MATERIAL))
         self.assertEqual(
             labels[action_capture + 5], "ui-filament-target-preserved")
         self.assertEqual(labels[action_capture + 6],
@@ -739,7 +739,7 @@ class RunnerContractTest(unittest.TestCase):
         host.heating_materials = ("PETG",)
         host.filament_material = None
         host.extruder = original
-        host.page = FEATHER.Page.FILAMENT_MATERIAL
+        host.page = FEATHER.ScreenPage.FILAMENT_MATERIAL
         host.reactor = type("Reactor", (), {
             "monotonic": lambda self: 1.0,
         })()
@@ -780,7 +780,7 @@ class RunnerContractTest(unittest.TestCase):
         })()
         host = type("Host", (), {
             "feature_manager": manager,
-            "page": FEATHER.Page.IDLE_HOME,
+            "page": FEATHER.ScreenPage.IDLE_HOME,
             "_show_page": lambda self, page: setattr(self, "page", page),
         })()
         feature = UI_TEST.UITestRun(host)
@@ -788,7 +788,7 @@ class RunnerContractTest(unittest.TestCase):
         feature.scenarios._open_calibration_home()
 
         self.assertEqual(calibration.calibration_page, 0)
-        self.assertEqual(host.page, FEATHER.Page.CALIBRATION_HOME)
+        self.assertEqual(host.page, FEATHER.ScreenPage.CALIBRATION_HOME)
 
     def test_test_mode_blocks_only_persistent_actions(self):
         feature = UI_TEST.UITestRun(object())
@@ -854,8 +854,8 @@ class RunnerContractTest(unittest.TestCase):
         controller.print_state = FEATHER.PrintState.IDLE
         controller.command_depth = 0
         controller.busy_message = None
-        controller.page = FEATHER.Page.IDLE_HOME
-        controller.previous_page = FEATHER.Page.IDLE_HOME
+        controller.page = FEATHER.ScreenPage.IDLE_HOME
+        controller.previous_page = FEATHER.ScreenPage.IDLE_HOME
         controller.last_action_time = -1.0
         controller.pending_action = None
         controller.touch_feedback_pending = False
@@ -880,7 +880,7 @@ class RunnerContractTest(unittest.TestCase):
         def show_message(message, page):
             messages.append((message, page))
             controller.message = message
-            controller.page = FEATHER.Page.MESSAGE
+            controller.page = FEATHER.ScreenPage.MESSAGE
 
         controller._show_message = show_message
         feature.host = controller
@@ -898,7 +898,7 @@ class RunnerContractTest(unittest.TestCase):
         callbacks.pop()(1.08)
         self.assertEqual(feedback[-1], ("up", "synthetic.action"))
         self.assertEqual(messages, [("synthetic command failed",
-                                     FEATHER.Page.IDLE_HOME)])
+                                     FEATHER.ScreenPage.IDLE_HOME)])
 
         feature._after_tap(1.22, {"label": "synthetic.action"}, None)
         self.assertEqual(completed, [("failed", "synthetic command failed")])
@@ -909,7 +909,7 @@ class RunnerContractTest(unittest.TestCase):
             "timer": None,
             "reactor": type("Reactor", (), {"NOW": 0.0})(),
             "filament_material": "PETG",
-            "previous_page": FEATHER.Page.MAIN_MENU,
+            "previous_page": FEATHER.ScreenPage.MAIN_MENU,
             "_run_script": lambda self, command: (_ for _ in ()).throw(
                 AssertionError("UI suite issued hardware G-code: %s" % command)),
             "_show_page": lambda self, page: shown.append(page),
@@ -918,13 +918,13 @@ class RunnerContractTest(unittest.TestCase):
             feature = UI_TEST.UITestRun(host)
             feature.suite = suite
             feature.snapshot = UI_TEST.PrinterStateSnapshot(
-                FEATHER.Page.IDLE_HOME, FEATHER.Page.CONTROL_HOME,
+                FEATHER.ScreenPage.IDLE_HOME, FEATHER.ScreenPage.CONTROL_HOME,
                 "PLA", 0.0, None, "", 0.0, 0.0, 0.0, False)
             feature._restore_state()
 
         self.assertEqual(host.filament_material, "PLA")
-        self.assertEqual(shown, [FEATHER.Page.IDLE_HOME] * 3)
-        self.assertEqual(host.previous_page, FEATHER.Page.CONTROL_HOME)
+        self.assertEqual(shown, [FEATHER.ScreenPage.IDLE_HOME] * 3)
+        self.assertEqual(host.previous_page, FEATHER.ScreenPage.CONTROL_HOME)
 
     def test_status_does_not_load_lazy_feature(self):
         controller = FEATHER.FeatherScreen.__new__(FEATHER.FeatherScreen)
@@ -1468,7 +1468,7 @@ class RunnerContractTest(unittest.TestCase):
             host.file_source = "internal"
             host.file_page = 2
             host.file_scan_token = 3
-            host.page = FEATHER.Page.IDLE_HOME
+            host.page = FEATHER.ScreenPage.IDLE_HOME
             host._show_page = lambda page: setattr(host, "page", page)
             feature = UI_TEST.UITestRun(host)
             feature.context_fixture = UI_TEST.ContextTestFixture(
@@ -1479,7 +1479,7 @@ class RunnerContractTest(unittest.TestCase):
             entry = host.file_entry_cache["internal"][0]
             self.assertEqual(entry["path"], str(path.resolve()))
             self.assertEqual(host.file_entries, [entry])
-            self.assertEqual(host.page, FEATHER.Page.FILE_BROWSER)
+            self.assertEqual(host.page, FEATHER.ScreenPage.FILE_BROWSER)
             self.assertEqual(host.file_scan_token, 4)
             self.assertEqual(
                 feature.context_fixture.file_browser["cache"],
@@ -1497,14 +1497,14 @@ class RunnerContractTest(unittest.TestCase):
             "is_active": lambda self: False,
         })()
         host.print_state = FEATHER.PrintState.PRINTING
-        host.page = FEATHER.Page.PRINTING
+        host.page = FEATHER.ScreenPage.PRINTING
         host.renderer = type("Renderer", (), {"_buttons": {}})()
         feature = UI_TEST.UITestRun(host)
 
         self.assertFalse(feature.scenarios._context_print_complete())
         host.print_state = FEATHER.PrintState.IDLE
         self.assertFalse(feature.scenarios._context_print_complete())
-        host.page = FEATHER.Page.MESSAGE
+        host.page = FEATHER.ScreenPage.MESSAGE
         self.assertFalse(feature.scenarios._context_print_complete())
         host.renderer._buttons["message.ok"] = ()
         self.assertTrue(feature.scenarios._context_print_complete())
@@ -1518,7 +1518,7 @@ class RunnerContractTest(unittest.TestCase):
         host.print_stats = type("Stats", (), {
             "get_status": lambda self, eventtime: dict(status),
         })()
-        host.page = FEATHER.Page.PRINTING
+        host.page = FEATHER.ScreenPage.PRINTING
         host.renderer = type("Renderer", (), {"_buttons": {}})()
         feature = UI_TEST.UITestRun(host)
 
@@ -1528,13 +1528,13 @@ class RunnerContractTest(unittest.TestCase):
         self.assertTrue(feature.scenarios._context_print_controls_ready())
 
         status["state"] = "paused"
-        host.page = FEATHER.Page.PAUSED
+        host.page = FEATHER.ScreenPage.PAUSED
         host.renderer._buttons = {"print.resume": ()}
         self.assertTrue(feature.scenarios._context_paused())
 
         status["state"] = "cancelled"
         host.print_state = FEATHER.PrintState.IDLE
-        host.page = FEATHER.Page.MESSAGE
+        host.page = FEATHER.ScreenPage.MESSAGE
         host.virtual_sdcard = type("SD", (), {
             "is_active": lambda self: False,
         })()

@@ -1,6 +1,6 @@
 ## Guided extruder rotation-distance feature for Feather.
 
-from ui import Page
+from ff5m_ui.screen import ScreenPage
 from feather_feature_manager import FeatureHostProxy
 from feather_extruder_calibration import (
         ExtruderCalibrationSession, FeatherExtruderCalibrationMixin)
@@ -37,14 +37,14 @@ class ExtruderCalibrationFeature(FeatherExtruderCalibrationMixin,
 
     def handle_immediate_action(self, page, action):
         if (action == "extruder.coldpull.cancel"
-                and page == Page.EXTRUDER_CALIBRATION
+                and page == ScreenPage.EXTRUDER_CALIBRATION
                 and self.extruder_calibration.phase == "cold_pull"):
             self._open_cold_pull_cancel()
             return True
         return False
 
     def back(self, page):
-        if page != Page.EXTRUDER_CALIBRATION:
+        if page != ScreenPage.EXTRUDER_CALIBRATION:
             return False
         self._cancel_extruder_calibration()
         return True
@@ -54,7 +54,7 @@ class ExtruderCalibrationFeature(FeatherExtruderCalibrationMixin,
 
     def safety_armed_reasons(self, page, eventtime):
         return (("extruder-controls",)
-                if page == Page.EXTRUDER_CALIBRATION else ())
+                if page == ScreenPage.EXTRUDER_CALIBRATION else ())
 
     def deactivate(self):
         self.extruder_calibration.clear()

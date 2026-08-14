@@ -11,8 +11,10 @@ import signal
 import subprocess
 import time
 
-from ui import Page, PrintState, ThemeColor, ThemeRole
+from ui import ThemeColor, ThemeRole
 from ui.lazy import LazyModule
+from ff5m_ui.screen import ScreenPage
+from ff5m_ui.print_state import PrintState
 
 from feather_keyboard import TEXT_KEYBOARD, is_keyboard_action
 from feather_files import FileEntry, scan_gcode_files
@@ -199,7 +201,7 @@ class FeatherPagesMixin(FeatherNetworkPagesMixin):
         self.file_entry_loaded_at[source] = self.reactor.monotonic()
         if source == getattr(self, "file_source", "internal"):
             self.file_entries = entries
-        if (self.page == Page.FILE_BROWSER
+        if (self.page == ScreenPage.FILE_BROWSER
                 and source == getattr(self, "file_source", "internal")):
             self._render_file_browser()
             if message is not None:
@@ -291,9 +293,9 @@ class FeatherPagesMixin(FeatherNetworkPagesMixin):
                 self._render_file_browser()
                 return
             self.selected_file = entry
-            self.file_confirm_return_page = Page.FILE_BROWSER
+            self.file_confirm_return_page = ScreenPage.FILE_BROWSER
             self.file_confirm_repeat = False
-            self._show_page(Page.FILE_CONFIRM)
+            self._show_page(ScreenPage.FILE_CONFIRM)
 
     def _open_last_job(self):
         self._require_idle()
@@ -313,9 +315,9 @@ class FeatherPagesMixin(FeatherNetworkPagesMixin):
         self.last_job_name = os.path.basename(relative)
         self.selected_file = FileEntry(
             self.last_job_name, path, size=stat.st_size, mtime=stat.st_mtime)
-        self.file_confirm_return_page = Page.IDLE_HOME
+        self.file_confirm_return_page = ScreenPage.IDLE_HOME
         self.file_confirm_repeat = True
-        self._show_page(Page.FILE_CONFIRM)
+        self._show_page(ScreenPage.FILE_CONFIRM)
 
     def _render_file_confirm(self):
         entry = self.selected_file
@@ -418,7 +420,7 @@ class FeatherPagesMixin(FeatherNetworkPagesMixin):
             "print_started", False))
 
     def _update_print_progress(self, eventtime):
-        if self.page not in (Page.PRINTING, Page.PAUSED):
+        if self.page not in (ScreenPage.PRINTING, ScreenPage.PAUSED):
             return
         controls_ready = self._print_controls_ready()
         if controls_ready != getattr(
@@ -544,7 +546,7 @@ class FeatherPagesMixin(FeatherNetworkPagesMixin):
         if revision == getattr(self, "_last_operation_revision", -1):
             return
         self._last_operation_revision = revision
-        if self._page_paint_allowed(Page.PRINTING, Page.PAUSED):
+        if self._page_paint_allowed(ScreenPage.PRINTING, ScreenPage.PAUSED):
             self._draw_print_status(
                 self._display_status_text(status=operation))
 
@@ -607,7 +609,7 @@ class FeatherPagesMixin(FeatherNetworkPagesMixin):
                 if (token != self._filament_request_token
                         or current != "paused"
                         or self.cancel_requested
-                        or self.page not in (Page.PRINTING, Page.PAUSED)):
+                        or self.page not in (ScreenPage.PRINTING, ScreenPage.PAUSED)):
                     logging.info(
                         "[feather_screen] stale filament request discarded "
                         "token=%s current=%s page=%s cancel=%s",
@@ -623,10 +625,10 @@ class FeatherPagesMixin(FeatherNetworkPagesMixin):
                     raise RuntimeError("Z adjust is not available yet")
                 self.live_z_dialog = None
                 self._begin_z_weight_gauge()
-                self._show_page(Page.LIVE_Z_OFFSET)
+                self._show_page(ScreenPage.LIVE_Z_OFFSET)
         elif action == "print.cancel" and stats in ("printing", "paused"):
             self._open_operation_cancel(
-                Page.PAUSED if stats == "paused" else Page.PRINTING,
+                ScreenPage.PAUSED if stats == "paused" else ScreenPage.PRINTING,
                 self._accept_print_operation_cancel,
                 self._clear_print_operation_cancel)
 
@@ -645,13 +647,13 @@ class FeatherPagesMixin(FeatherNetworkPagesMixin):
             "cancel_target_mode")
         self.cancel_mode = ("confirm" if operation["cancel_available"]
                             else "not_cancelable")
-        self._show_page(Page.CANCEL_CONFIRM)
+        self._show_page(ScreenPage.CANCEL_CONFIRM)
 
     def _close_operation_cancel(self):
         if getattr(self, "cancel_mode", None) == "pending":
             return
         return_page = getattr(
-            self, "operation_cancel_return_page", Page.IDLE_HOME)
+            self, "operation_cancel_return_page", ScreenPage.IDLE_HOME)
         self._reset_operation_cancel()
         self._show_page(return_page)
 
@@ -707,7 +709,7 @@ class FeatherPagesMixin(FeatherNetworkPagesMixin):
             callback(result)
         if interrupting_wait:
             self._run_immediate_command("M108")
-            if (self.page == Page.CANCEL_CONFIRM
+            if (self.page == ScreenPage.CANCEL_CONFIRM
                     and self.cancel_mode == "pending"):
                 self._render_cancel_confirm()
 
@@ -820,7 +822,7 @@ class FeatherPagesMixin(FeatherNetworkPagesMixin):
         return "WILL STOP AT THE NEXT STEP"
 
     def _update_cancel_progress(self):
-        if (self.page != Page.CANCEL_CONFIRM
+        if (self.page != ScreenPage.CANCEL_CONFIRM
                 or self.cancel_mode != "pending"):
             return
         label = self._cancel_progress_label()
@@ -918,13 +920,13 @@ class FeatherPagesMixin(FeatherNetworkPagesMixin):
             parameters = self._mod_parameters()
             for index, param in enumerate(parameters):
                 if param.key == "feather_theme":
-                    self._open_mod_parameter(index, Page.SETTINGS)
+                    self._open_mod_parameter(index, ScreenPage.SETTINGS)
                     return
             raise RuntimeError("Feather theme parameter is unavailable")
         if action == "settings.mod":
             self.mod_page = 0
             self.mod_parameter = None
-            self._show_page(Page.MOD_SETTINGS)
+            self._show_page(ScreenPage.MOD_SETTINGS)
             return
         if action.startswith("settings.led."):
             if getattr(self, "chamber_light", None) is None:
@@ -1058,7 +1060,7 @@ class FeatherPagesMixin(FeatherNetworkPagesMixin):
                                            max(4, thumb_height - 4), ThemeColor.PRIMARY))
         self.renderer.send(commands)
 
-    def _open_mod_parameter(self, index, return_page=Page.MOD_SETTINGS):
+    def _open_mod_parameter(self, index, return_page=ScreenPage.MOD_SETTINGS):
         parameters = self._mod_parameters()
         rendered_key = getattr(self, "mod_action_keys", {}).get(index)
         if rendered_key is not None:
@@ -1121,10 +1123,10 @@ class FeatherPagesMixin(FeatherNetworkPagesMixin):
                 disabled = ()
             self._set_parameter_options(
                 options, self.mod_edit_value, descriptions, disabled)
-            self._show_page(Page.PARAMETER_OPTIONS)
+            self._show_page(ScreenPage.PARAMETER_OPTIONS)
         else:
             self.selected_parameter_option = None
-            self._show_page(Page.MOD_VALUE)
+            self._show_page(ScreenPage.MOD_VALUE)
 
     def _set_mod_value(self, param, value, complete=None,
                        minimum_duration=0.0):
@@ -1230,12 +1232,12 @@ class FeatherPagesMixin(FeatherNetworkPagesMixin):
             return
         if action.startswith("mod.item."):
             self._open_mod_parameter(
-                int(action.rsplit(".", 1)[1]), Page.MOD_SETTINGS)
+                int(action.rsplit(".", 1)[1]), ScreenPage.MOD_SETTINGS)
             return
         if action == "mod.cancel":
             self.mod_parameter = None
             self._show_page(getattr(
-                self, "mod_return_page", Page.MOD_SETTINGS))
+                self, "mod_return_page", ScreenPage.MOD_SETTINGS))
             return
         param = self.mod_parameter
         if param is None:
@@ -1268,7 +1270,7 @@ class FeatherPagesMixin(FeatherNetworkPagesMixin):
                 if param.key == "feather_theme":
                     self.renderer.set_theme(value)
                 return_page = getattr(
-                    self, "mod_return_page", Page.MOD_SETTINGS)
+                    self, "mod_return_page", ScreenPage.MOD_SETTINGS)
                 self.mod_parameter = None
                 self._show_page(return_page)
                 self._toast("UPDATED: %s" % param.label)
@@ -1280,7 +1282,7 @@ class FeatherPagesMixin(FeatherNetworkPagesMixin):
 
             def complete():
                 return_page = getattr(
-                    self, "mod_return_page", Page.MOD_SETTINGS)
+                    self, "mod_return_page", ScreenPage.MOD_SETTINGS)
                 self.mod_parameter = None
                 self._show_page(return_page)
                 self._toast("UPDATED: %s" % param.label)
@@ -1307,7 +1309,7 @@ class FeatherPagesMixin(FeatherNetworkPagesMixin):
     def _render_parameter_options(self):
         param = self.mod_parameter
         if param is None:
-            self._show_page(Page.MOD_SETTINGS)
+            self._show_page(ScreenPage.MOD_SETTINGS)
             return
         commands = self.renderer.begin_page(str(param.label), back=True)
         commands.append(self.renderer.text(
@@ -1374,7 +1376,7 @@ class FeatherPagesMixin(FeatherNetworkPagesMixin):
     def _render_mod_value(self):
         param = self.mod_parameter
         if param is None:
-            self._show_page(Page.MOD_SETTINGS)
+            self._show_page(ScreenPage.MOD_SETTINGS)
             return
         kind = mod_ui.parameter_kind(param)
         commands = self.renderer.begin_page("Edit value", back=True)
@@ -1534,7 +1536,7 @@ class FeatherPagesMixin(FeatherNetworkPagesMixin):
                 "RESPOND TYPE=command MSG=action:prompt_end")
         elif action in ("recovery.restore", "recovery.cleanup"):
             self.recovery_action = action.split(".", 1)[1]
-            self._show_page(Page.RECOVERY_CONFIRM)
+            self._show_page(ScreenPage.RECOVERY_CONFIRM)
         elif action == "recovery.confirm":
             command = "RESURRECT" if self.recovery_action == "restore" else "RESURRECT_ABORT"
             manager = getattr(self, "feature_manager", None)
@@ -1544,7 +1546,7 @@ class FeatherPagesMixin(FeatherNetworkPagesMixin):
                 self.calibration_kind = "recovery"
                 self.calibration_starting_text = "STARTING..."
                 self._reset_calibration_progress()
-            self._show_page(Page.CALIBRATION_PROGRESS)
+            self._show_page(ScreenPage.CALIBRATION_PROGRESS)
             self.reactor.register_callback(
                 lambda eventtime, cmd=command: self._run_recovery(eventtime, cmd))
 
@@ -1553,13 +1555,13 @@ class FeatherPagesMixin(FeatherNetworkPagesMixin):
             self._run_script(command)
         except Exception as exc:
             logging.exception("[feather_screen] recovery failed")
-            self._show_message(str(exc), Page.RECOVERY_PROMPT)
+            self._show_message(str(exc), ScreenPage.RECOVERY_PROMPT)
             return
         status = (self.resurrection.get_status(self.reactor.monotonic())
                   if self.resurrection is not None else {})
         if command == "RESURRECT_ABORT" and status.get("available"):
-            self._show_message("Recovery cleanup failed", Page.RECOVERY_PROMPT)
+            self._show_message("Recovery cleanup failed", ScreenPage.RECOVERY_PROMPT)
         elif command == "RESURRECT_ABORT":
-            self._show_message("Recovery data cleaned up", Page.IDLE_HOME)
+            self._show_message("Recovery data cleaned up", ScreenPage.IDLE_HOME)
         elif status.get("state") != "printing":
-            self._show_message("Restore did not start printing", Page.RECOVERY_PROMPT)
+            self._show_message("Restore did not start printing", ScreenPage.RECOVERY_PROMPT)

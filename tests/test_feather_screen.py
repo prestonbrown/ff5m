@@ -184,8 +184,8 @@ def mod_controller(params, variables):
     host.virtual_sdcard = type(
         "SD", (), {"is_active": lambda self: False})()
     host.print_state = FEATHER.PrintState.IDLE
-    host.page = FEATHER.Page.MOD_SETTINGS
-    host.previous_page = FEATHER.Page.SETTINGS
+    host.page = FEATHER.ScreenPage.MOD_SETTINGS
+    host.previous_page = FEATHER.ScreenPage.SETTINGS
     host.toast_until = 0
     host.toast_message = ""
     host._toast = lambda message: None
@@ -195,8 +195,8 @@ def mod_controller(params, variables):
     def show_page(page):
         host.previous_page = host.page
         host.page = page
-        if page in (FEATHER.Page.SETTINGS, FEATHER.Page.MOD_SETTINGS,
-                    FEATHER.Page.PARAMETER_OPTIONS, FEATHER.Page.MOD_VALUE):
+        if page in (FEATHER.ScreenPage.SETTINGS, FEATHER.ScreenPage.MOD_SETTINGS,
+                    FEATHER.ScreenPage.PARAMETER_OPTIONS, FEATHER.ScreenPage.MOD_VALUE):
             feature.render(page)
 
     host._show_page = show_page
@@ -351,13 +351,13 @@ class FeatherUtilitiesTest(unittest.TestCase):
     def test_stale_actions_are_rejected(self):
         controller = FEATHER.FeatherScreen.__new__(FEATHER.FeatherScreen)
         allowed = controller._action_allowed
-        self.assertTrue(allowed(FEATHER.Page.FILE_CONFIRM, "file.start"))
-        self.assertFalse(allowed(FEATHER.Page.IDLE_HOME, "file.start"))
-        self.assertTrue(allowed(FEATHER.Page.CANCEL_CONFIRM,
+        self.assertTrue(allowed(FEATHER.ScreenPage.FILE_CONFIRM, "file.start"))
+        self.assertFalse(allowed(FEATHER.ScreenPage.IDLE_HOME, "file.start"))
+        self.assertTrue(allowed(FEATHER.ScreenPage.CANCEL_CONFIRM,
                                 "operation.cancel.confirm"))
-        self.assertTrue(allowed(FEATHER.Page.CANCEL_CONFIRM,
+        self.assertTrue(allowed(FEATHER.ScreenPage.CANCEL_CONFIRM,
                                 "operation.cancel.back"))
-        self.assertFalse(allowed(FEATHER.Page.PRINTING,
+        self.assertFalse(allowed(FEATHER.ScreenPage.PRINTING,
                                  "print.cancel.confirm"))
 
     def test_heater_targets_use_configured_limits(self):
@@ -370,80 +370,80 @@ class FeatherUtilitiesTest(unittest.TestCase):
     def test_page_actions_cover_navigation_and_reject_stale_taps(self):
         controller = FEATHER.FeatherScreen.__new__(FEATHER.FeatherScreen)
         allowed = controller._action_allowed
-        self.assertTrue(allowed(FEATHER.Page.IDLE_HOME, "nav.menu"))
-        self.assertTrue(allowed(FEATHER.Page.IDLE_HOME, "nav.heat"))
-        self.assertTrue(allowed(FEATHER.Page.IDLE_HOME, "nav.network"))
-        self.assertTrue(allowed(FEATHER.Page.IDLE_HOME, "nav.job"))
-        self.assertTrue(allowed(FEATHER.Page.IDLE_HOME, "home.last_job"))
-        self.assertTrue(allowed(FEATHER.Page.IDLE_HOME, "nav.filament"))
-        self.assertTrue(allowed(FEATHER.Page.IDLE_HOME, "nav.move"))
-        self.assertTrue(allowed(FEATHER.Page.PRINTING, "nav.home"))
-        self.assertFalse(allowed(FEATHER.Page.IDLE_HOME, "nav.settings"))
-        self.assertTrue(allowed(FEATHER.Page.MAIN_MENU, "nav.filament"))
-        self.assertTrue(allowed(FEATHER.Page.CONTROL_HOME, "nav.calibration"))
+        self.assertTrue(allowed(FEATHER.ScreenPage.IDLE_HOME, "nav.menu"))
+        self.assertTrue(allowed(FEATHER.ScreenPage.IDLE_HOME, "nav.heat"))
+        self.assertTrue(allowed(FEATHER.ScreenPage.IDLE_HOME, "nav.network"))
+        self.assertTrue(allowed(FEATHER.ScreenPage.IDLE_HOME, "nav.job"))
+        self.assertTrue(allowed(FEATHER.ScreenPage.IDLE_HOME, "home.last_job"))
+        self.assertTrue(allowed(FEATHER.ScreenPage.IDLE_HOME, "nav.filament"))
+        self.assertTrue(allowed(FEATHER.ScreenPage.IDLE_HOME, "nav.move"))
+        self.assertTrue(allowed(FEATHER.ScreenPage.PRINTING, "nav.home"))
+        self.assertFalse(allowed(FEATHER.ScreenPage.IDLE_HOME, "nav.settings"))
+        self.assertTrue(allowed(FEATHER.ScreenPage.MAIN_MENU, "nav.filament"))
+        self.assertTrue(allowed(FEATHER.ScreenPage.CONTROL_HOME, "nav.calibration"))
         # Feature-owned actions never fall back to the controller table.
-        self.assertFalse(allowed(FEATHER.Page.CALIBRATION_CONFIRM,
+        self.assertFalse(allowed(FEATHER.ScreenPage.CALIBRATION_CONFIRM,
                                  "cal.material.PETG"))
-        self.assertFalse(allowed(FEATHER.Page.EXTRUDER_CALIBRATION,
+        self.assertFalse(allowed(FEATHER.ScreenPage.EXTRUDER_CALIBRATION,
                                  "extruder.feed100"))
-        self.assertFalse(allowed(FEATHER.Page.CALIBRATION_HOME,
+        self.assertFalse(allowed(FEATHER.ScreenPage.CALIBRATION_HOME,
                                  "extruder.feed100"))
         # Declarative pages accept only actions registered in their real tree.
-        self.assertFalse(allowed(FEATHER.Page.Z_OFFSET_SUMMARY,
+        self.assertFalse(allowed(FEATHER.ScreenPage.Z_OFFSET_SUMMARY,
                                  "z.zone.front_left"))
-        self.assertFalse(allowed(FEATHER.Page.Z_OFFSET_PAPER, "z.probe"))
+        self.assertFalse(allowed(FEATHER.ScreenPage.Z_OFFSET_PAPER, "z.probe"))
         host = type("Host", (), {})()
-        host.page = FEATHER.Page.Z_OFFSET_SUMMARY
+        host.page = FEATHER.ScreenPage.Z_OFFSET_SUMMARY
         z_feature = ZCalibrationFeature(host)
         self.assertEqual(
             z_feature.resolve_semantic_action(
                 host.page,
                 Z_OFFSET_LAYOUT.ZONE_ACTIONS["front_left"].wire_id),
             Z_OFFSET_LAYOUT.ZONE_ACTIONS["front_left"])
-        host.page = FEATHER.Page.Z_OFFSET_PAPER
+        host.page = FEATHER.ScreenPage.Z_OFFSET_PAPER
         self.assertEqual(
             z_feature.resolve_semantic_action(
                 host.page, Z_OFFSET_LAYOUT.PROBE.wire_id),
             Z_OFFSET_LAYOUT.PROBE)
-        self.assertFalse(allowed(FEATHER.Page.LIVE_Z_OFFSET,
+        self.assertFalse(allowed(FEATHER.ScreenPage.LIVE_Z_OFFSET,
                                  "live_z.closer"))
-        self.assertFalse(allowed(FEATHER.Page.LIVE_Z_OFFSET,
+        self.assertFalse(allowed(FEATHER.ScreenPage.LIVE_Z_OFFSET,
                                  "live_z.save"))
-        self.assertFalse(allowed(FEATHER.Page.Z_OFFSET_SUMMARY,
+        self.assertFalse(allowed(FEATHER.ScreenPage.Z_OFFSET_SUMMARY,
                                  "live_z.closer"))
-        self.assertFalse(allowed(FEATHER.Page.LIVE_Z_OFFSET, "z.probe"))
-        self.assertFalse(allowed(FEATHER.Page.CONTROL_MOVE,
+        self.assertFalse(allowed(FEATHER.ScreenPage.LIVE_Z_OFFSET, "z.probe"))
+        self.assertFalse(allowed(FEATHER.ScreenPage.CONTROL_MOVE,
                                  "z.zone.front_left"))
-        self.assertFalse(allowed(FEATHER.Page.SETTINGS, "cal.confirm"))
-        self.assertFalse(allowed(FEATHER.Page.SETTINGS, "settings.mod"))
-        self.assertFalse(allowed(FEATHER.Page.SETTINGS, "settings.led"))
-        self.assertFalse(allowed(FEATHER.Page.SETTINGS,
+        self.assertFalse(allowed(FEATHER.ScreenPage.SETTINGS, "cal.confirm"))
+        self.assertFalse(allowed(FEATHER.ScreenPage.SETTINGS, "settings.mod"))
+        self.assertFalse(allowed(FEATHER.ScreenPage.SETTINGS, "settings.led"))
+        self.assertFalse(allowed(FEATHER.ScreenPage.SETTINGS,
                                  "settings.led.minus"))
-        self.assertFalse(allowed(FEATHER.Page.SETTINGS,
+        self.assertFalse(allowed(FEATHER.ScreenPage.SETTINGS,
                                  "settings.led.plus"))
-        self.assertFalse(allowed(FEATHER.Page.MOD_SETTINGS, "mod.item.12"))
-        self.assertFalse(allowed(FEATHER.Page.PARAMETER_OPTIONS, "mod.item.12"))
-        self.assertFalse(allowed(FEATHER.Page.PARAMETER_OPTIONS,
+        self.assertFalse(allowed(FEATHER.ScreenPage.MOD_SETTINGS, "mod.item.12"))
+        self.assertFalse(allowed(FEATHER.ScreenPage.PARAMETER_OPTIONS, "mod.item.12"))
+        self.assertFalse(allowed(FEATHER.ScreenPage.PARAMETER_OPTIONS,
                                  "mod.option.2"))
-        self.assertFalse(allowed(FEATHER.Page.MOD_VALUE, "mod.key.7"))
+        self.assertFalse(allowed(FEATHER.ScreenPage.MOD_VALUE, "mod.key.7"))
         self.assertFalse(allowed(
-            FEATHER.Page.MOD_VALUE, "keyboard.key.hash"))
+            FEATHER.ScreenPage.MOD_VALUE, "keyboard.key.hash"))
         self.assertTrue(allowed(
-            FEATHER.Page.WIFI_PASSWORD, "keyboard.backspace"))
+            FEATHER.ScreenPage.WIFI_PASSWORD, "keyboard.backspace"))
         self.assertFalse(allowed(
-            FEATHER.Page.WIFI_SCAN, "net.reset.saved"))
+            FEATHER.ScreenPage.WIFI_SCAN, "net.reset.saved"))
         self.assertFalse(allowed(
-            FEATHER.Page.MESSAGE, "net.reset.saved"))
+            FEATHER.ScreenPage.MESSAGE, "net.reset.saved"))
         controller.message_actions = (
             ("message.ok", "CANCEL", "enabled"),
             ("net.reset.saved", "RESET PASSWORD", "warning"),
         )
         self.assertTrue(allowed(
-            FEATHER.Page.MESSAGE, "net.reset.saved"))
+            FEATHER.ScreenPage.MESSAGE, "net.reset.saved"))
         self.assertFalse(allowed(
-            FEATHER.Page.MOD_SETTINGS, "keyboard.key.hash"))
+            FEATHER.ScreenPage.MOD_SETTINGS, "keyboard.key.hash"))
 
-        self.assertFalse(allowed(FEATHER.Page.MOD_SETTINGS, "mod.save"))
+        self.assertFalse(allowed(FEATHER.ScreenPage.MOD_SETTINGS, "mod.save"))
 
     def test_network_status_parser_is_bounded_to_public_fields(self):
         # Unknown keys must be silently dropped; only SNAPSHOT_KEYS survive.
@@ -976,8 +976,8 @@ class RendererStateTest(unittest.TestCase):
         batches = []
         renderer.send = batches.append
 
-        renderer.startup_modal(0)
-        renderer.startup_modal(2)
+        renderer.startup_modal("INITIALIZING KLIPPER", "STARTING", 0)
+        renderer.startup_modal("INITIALIZING KLIPPER", "STARTING", 2)
 
         first = "\n".join(batches[0])
         expanded = "\n".join(batches[1])
@@ -1001,7 +1001,8 @@ class RendererStateTest(unittest.TestCase):
             lambda callback, delay: callbacks.append((delay, callback)))
 
         page_generation = renderer.generation
-        renderer.startup_modal(0, restarting=True)
+        renderer.startup_modal(
+            "INITIALIZING KLIPPER", "RESTARTING", 0, critical=True)
         loader_batch_count = len(batches)
         for delay, callback in callbacks:
             callback(100.0 + delay)
@@ -1241,14 +1242,15 @@ class RendererStateTest(unittest.TestCase):
         renderer = FEATHER.FeatherRenderer()
         sent = []
         renderer.send = sent.append
-        renderer.footer(21, 220, 24, 60, "192.168.2.4", "idle")
+        renderer.footer(
+            "NOZZLE 21/220C | BED 24/60C", "192.168.2.4 | IDLE")
 
         first = renderer.begin_page("Control")
         second = renderer.begin_page("Settings")
 
         self.assertEqual(len(sent), 1)
-        self.assertEqual(renderer._last_footer,
-                         (21, 220, 24, 60, "192.168.2.4", "idle"))
+        self.assertEqual(renderer._last_footer, (
+            "NOZZLE 21/220C | BED 24/60C", "192.168.2.4 | IDLE"))
         self.assertIn("-s 800 442", "\n".join(first))
         self.assertNotIn("-s 784 472", "\n".join(first))
         self.assertIn("-s 784 439", "\n".join(first))
@@ -1256,8 +1258,8 @@ class RendererStateTest(unittest.TestCase):
     def test_footer_fits_full_network_and_standby_status(self):
         renderer = FEATHER.FeatherRenderer()
         drawing = "\n".join(renderer._footer_commands(
-            (250.0, 250.0, 32.0, 0.0,
-             "192.168.2.124", "standby")))
+            ("NOZZLE 250/250C | BED 32/0C",
+             "192.168.2.124 | STANDBY")))
 
         self.assertIn('"192.168.2.124 | STANDBY"', drawing)
         self.assertIn("--max-width 340 --truncate", drawing)
@@ -1267,7 +1269,8 @@ class RendererStateTest(unittest.TestCase):
     def test_theme_change_repaints_cached_footer(self):
         renderer = FEATHER.FeatherRenderer()
         renderer.send = lambda _commands: None
-        renderer.footer(21, 220, 24, 60, "192.168.2.4", "idle")
+        renderer.footer(
+            "NOZZLE 21/220C | BED 24/60C", "192.168.2.4 | IDLE")
 
         self.assertTrue(renderer.set_theme("SYNTH"))
         expected_primary = renderer.color(UI.ThemeColor.PRIMARY)
@@ -1287,7 +1290,8 @@ class RendererStateTest(unittest.TestCase):
         sent = []
         renderer.send = sent.append
         overlay = renderer.color(UI.ThemeColor.OVERLAY)
-        renderer.startup_modal()
+        renderer.startup_modal(
+            "INITIALIZING KLIPPER", "INITIALIZING PRINTER SERVICES")
 
         colors = dict(UI.FALLBACK_THEME)
         colors["background"] = (
@@ -1295,7 +1299,7 @@ class RendererStateTest(unittest.TestCase):
         renderer._palette = UI.resolve_theme(colors)
         background = renderer.color(UI.ThemeColor.BACKGROUND)
         renderer._footer_values = (
-            21.0, 220.0, 24.0, 60.0, "192.168.2.4", "idle")
+            "NOZZLE 21/220C | BED 24/60C", "192.168.2.4 | IDLE")
         renderer._footer_drawn = False
         page = renderer.begin_page("Settings")
 
@@ -1428,14 +1432,17 @@ class RendererStateTest(unittest.TestCase):
 
         drawing = "\n".join(sent[-1])
         self.assertIn("--batch hitbox", drawing)
-        self.assertIn("--id 1:global.toast.dismiss", drawing)
+        self.assertIn(
+            "--id 1:%s" % FEATHER.DismissToast().wire_id,
+            drawing,
+        )
         self.assertIn("--layer overlay", drawing)
 
     def test_replacing_toast_hides_old_surface_before_drawing_new_one(self):
         controller = FEATHER.FeatherScreen.__new__(FEATHER.FeatherScreen)
         controller.reactor = Reactor()
         controller.renderer = mock.Mock()
-        controller.page = FEATHER.Page.IDLE_HOME
+        controller.page = FEATHER.ScreenPage.IDLE_HOME
         controller.print_state = FEATHER.PrintState.IDLE
         controller.toast_until = 101.0
         controller.toast_message = "Old"
@@ -1443,7 +1450,7 @@ class RendererStateTest(unittest.TestCase):
 
         controller._toast("New")
 
-        controller._show_page.assert_called_once_with(FEATHER.Page.IDLE_HOME)
+        controller._show_page.assert_called_once_with(FEATHER.ScreenPage.IDLE_HOME)
         controller.renderer.toast.assert_called_once_with("New")
         self.assertEqual(controller.toast_message, "New")
         self.assertEqual(controller.toast_until, 102.0)
@@ -1452,7 +1459,7 @@ class RendererStateTest(unittest.TestCase):
         controller = FEATHER.FeatherScreen.__new__(FEATHER.FeatherScreen)
         controller._hide_toast = mock.Mock()
 
-        controller._handle_touch_action("global.toast.dismiss")
+        controller._handle_touch_action(FEATHER.DismissToast().wire_id)
 
         controller._hide_toast.assert_called_once_with()
 
@@ -1548,9 +1555,9 @@ class RendererStateTest(unittest.TestCase):
         renderer = FEATHER.FeatherRenderer()
         sent = []
         renderer.send = sent.append
-        renderer.footer(20, 0, 25, 0, "Offline", "idle")
-        renderer.footer(20, 0, 25, 0, "Offline", "idle")
-        renderer.footer(21, 0, 25, 0, "Offline", "idle")
+        renderer.footer("NOZZLE 20/0C | BED 25/0C", "Offline | IDLE")
+        renderer.footer("NOZZLE 20/0C | BED 25/0C", "Offline | IDLE")
+        renderer.footer("NOZZLE 21/0C | BED 25/0C", "Offline | IDLE")
         self.assertEqual(len(sent), 2)
 
     def test_dynamic_list_and_keyboard_hitboxes_stay_between_chrome(self):
@@ -1645,7 +1652,7 @@ class RendererStateTest(unittest.TestCase):
         renderer = FEATHER.FeatherRenderer()
         sent = []
         renderer.send = sent.append
-        renderer.set_emergency_stop_visible(True)
+        renderer.set_header_action("global.abort", "ABORT")
         page = renderer.begin_page("Printing", back=True)
         page_generation = renderer.generation
         sent_before_busy = len(sent)
@@ -1671,7 +1678,7 @@ class RendererStateTest(unittest.TestCase):
 
     def test_modal_dialog_preserves_emergency_stop_hitbox(self):
         renderer = FEATHER.FeatherRenderer()
-        renderer.set_emergency_stop_visible(True)
+        renderer.set_header_action("global.abort", "ABORT")
         commands = renderer.begin_page("Live Z")
         commands += renderer.dialog(
             "Warning", ("Check the first layer",),
@@ -1685,7 +1692,7 @@ class RendererStateTest(unittest.TestCase):
         self.assertGreater(
             drawing.rfind("global.abort"),
             drawing.rfind("clear-hitboxes"))
-        self.assertTrue(renderer._emergency_stop_visible)
+        self.assertIsNotNone(renderer._header_action)
 
     def test_primary_layouts_do_not_overlap_footer(self):
         footer = (0, UI.FOOTER_Y, UI.SCREEN_WIDTH, UI.FOOTER_HEIGHT)
@@ -1782,7 +1789,7 @@ class RendererStateTest(unittest.TestCase):
     def test_periodic_update_contains_any_ui_failure_and_recovers(self):
         controller = FEATHER.FeatherScreen.__new__(FEATHER.FeatherScreen)
         controller.print_state = FEATHER.PrintState.IDLE
-        controller.page = FEATHER.Page.CONTROL_HEAT
+        controller.page = FEATHER.ScreenPage.CONTROL_HEAT
         controller._update_cycle = mock.Mock(side_effect=(
             ValueError("bad heat telemetry"),
             ValueError("bad footer telemetry"),
@@ -1880,7 +1887,7 @@ class RendererStateTest(unittest.TestCase):
         controller.renderer = FEATHER.FeatherRenderer()
         batches = []
         controller.renderer.send = batches.append
-        controller.page = FEATHER.Page.CONTROL_MOVE
+        controller.page = FEATHER.ScreenPage.CONTROL_MOVE
         controller.move_mode = "joystick"
         controller.toolhead = StatusObject({
             "position": (1.0, 2.0, 10.0, 0.0), "homed_axes": "xyz"})
@@ -1939,7 +1946,7 @@ class RendererStateTest(unittest.TestCase):
         controller.renderer = FEATHER.FeatherRenderer()
         batches = []
         controller.renderer.send = batches.append
-        controller.page = FEATHER.Page.CONTROL_MOVE
+        controller.page = FEATHER.ScreenPage.CONTROL_MOVE
         controller.move_mode = "joystick"
         controller.toolhead = StatusObject({
             "position": (1.0, 2.0, 10.0, 0.0), "homed_axes": "xyz"})
@@ -2044,7 +2051,7 @@ class RendererStateTest(unittest.TestCase):
 
     def test_joystick_refill_resamples_monotonic_time_for_each_segment(self):
         controller = FEATHER.FeatherScreen.__new__(FEATHER.FeatherScreen)
-        controller.page = FEATHER.Page.CONTROL_MOVE
+        controller.page = FEATHER.ScreenPage.CONTROL_MOVE
         controller.move_mode = "joystick"
         controller.print_state = FEATHER.PrintState.IDLE
         controller.joystick_action = MOVE_LAYOUT.JOYSTICK_XY.wire_id
@@ -2143,7 +2150,7 @@ class RendererStateTest(unittest.TestCase):
 
     def test_joystick_tick_forces_final_zero_inertia_frame(self):
         controller = FEATHER.FeatherScreen.__new__(FEATHER.FeatherScreen)
-        controller.page = FEATHER.Page.CONTROL_MOVE
+        controller.page = FEATHER.ScreenPage.CONTROL_MOVE
         controller.move_mode = "joystick"
         controller.print_state = FEATHER.PrintState.IDLE
         controller.joystick_action = None
@@ -2226,7 +2233,7 @@ class RendererStateTest(unittest.TestCase):
         controller.renderer = FEATHER.FeatherRenderer()
         batches = []
         controller.renderer.send = batches.append
-        controller.page = FEATHER.Page.CONTROL_MOVE
+        controller.page = FEATHER.ScreenPage.CONTROL_MOVE
         controller.move_mode = "joystick"
         controller.move_caution_signature = (False, None)
         controller.move_caution_acknowledged = False
@@ -2262,7 +2269,7 @@ class RendererStateTest(unittest.TestCase):
         controller.renderer = FEATHER.FeatherRenderer()
         batches = []
         controller.renderer.send = batches.append
-        controller.page = FEATHER.Page.CONTROL_MOVE
+        controller.page = FEATHER.ScreenPage.CONTROL_MOVE
         controller.move_mode = "joystick"
         controller.move_caution_signature = (True, "active")
         controller.move_caution_acknowledged = False

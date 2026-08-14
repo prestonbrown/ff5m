@@ -9,11 +9,13 @@ import statistics
 import time
 from collections import deque, namedtuple
 
-from ui import Page, PrintState, ReceiptTracker
+from ui import ReceiptTracker
 from ui.lazy import LazyModule
 from feather_feature_manager import FeatureHostProxy
 from ff5m_ui.benchmark.actions import BenchmarkAction, BenchmarkRoute
 from ff5m_ui.benchmark.constants import BENCHMARK_MODES
+from ff5m_ui.screen import ScreenPage
+from ff5m_ui.print_state import PrintState
 
 
 benchmark_page = LazyModule("ff5m_ui.benchmark.page")
@@ -64,7 +66,7 @@ class BenchmarkFeature(FeatureHostProxy):
             self._tick, self.reactor.NEVER)
 
     def render(self, page):
-        if page != Page.RENDER_BENCHMARK:
+        if page != ScreenPage.RENDER_BENCHMARK:
             raise ValueError("benchmark feature cannot render %s" % page)
         
         if self.print_state != PrintState.IDLE:
@@ -82,19 +84,19 @@ class BenchmarkFeature(FeatureHostProxy):
         self._submit_frame(now, full=True)
 
     def allows_action(self, page, action):
-        return page == Page.RENDER_BENCHMARK and action == "nav.back"
+        return page == ScreenPage.RENDER_BENCHMARK and action == "nav.back"
 
     def handle_action(self, page, action):
         return False
 
     def resolve_semantic_action(self, page, wire_id):
-        if page != Page.RENDER_BENCHMARK or self.page_tree is None:
+        if page != ScreenPage.RENDER_BENCHMARK or self.page_tree is None:
             return None
         
         return self.page_tree.resolve_action(wire_id)
 
     def handle_semantic_action(self, page, action):
-        if page != Page.RENDER_BENCHMARK:
+        if page != ScreenPage.RENDER_BENCHMARK:
             return False
         
         if (isinstance(action, BenchmarkAction)
@@ -105,11 +107,11 @@ class BenchmarkFeature(FeatureHostProxy):
         raise KeyError("Unsupported benchmark action: %s" % action)
 
     def back(self, page):
-        if page != Page.RENDER_BENCHMARK:
+        if page != ScreenPage.RENDER_BENCHMARK:
             return False
         
         self._stop_session()
-        self._show_page(Page.SETTINGS)
+        self._show_page(ScreenPage.SETTINGS)
 
         return True
 
@@ -119,7 +121,7 @@ class BenchmarkFeature(FeatureHostProxy):
             self._show_page(self.page_for_print_state())
 
     def on_page_changed(self, old_page, new_page):
-        if old_page == Page.RENDER_BENCHMARK and new_page != old_page:
+        if old_page == ScreenPage.RENDER_BENCHMARK and new_page != old_page:
             self._stop_session()
 
     def on_print_state_changed(self, old_state, new_state, stats_state):
@@ -127,7 +129,7 @@ class BenchmarkFeature(FeatureHostProxy):
             self._stop_session()
 
     def on_renderer_restarted(self):
-        if self.page == Page.RENDER_BENCHMARK:
+        if self.page == ScreenPage.RENDER_BENCHMARK:
             self._stop_session()
 
     def on_render_receipt(self, receipt, eventtime):
@@ -286,7 +288,7 @@ class BenchmarkFeature(FeatureHostProxy):
         return "%x:%d" % (self.session, self.frame + 1)
 
     def _submit_frame(self, eventtime, full=False):
-        if not self.active or self.page != Page.RENDER_BENCHMARK:
+        if not self.active or self.page != ScreenPage.RENDER_BENCHMARK:
             return self.reactor.NEVER
         if self.tracker.pending is not None:
             return self.tracker.pending.deadline
@@ -400,7 +402,7 @@ class BenchmarkFeature(FeatureHostProxy):
         self.stats_dirty = True
 
     def _cycle_mode(self, eventtime):
-        if not self.active or self.page != Page.RENDER_BENCHMARK:
+        if not self.active or self.page != ScreenPage.RENDER_BENCHMARK:
             return
         
         index = self.MODES.index(self.mode)
@@ -416,7 +418,7 @@ class BenchmarkFeature(FeatureHostProxy):
             self.reactor.update_timer(self.timer, self.reactor.NEVER)
 
         page_tree = self.page_tree
-        if page_tree is None or self.page != Page.RENDER_BENCHMARK:
+        if page_tree is None or self.page != ScreenPage.RENDER_BENCHMARK:
             return
         
         commands = self._render_stats()

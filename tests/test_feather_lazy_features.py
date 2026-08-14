@@ -215,7 +215,8 @@ assert not [name for name in sys.modules
 import sys
 import feather_screen
 from feather_feature_manager import LazyFeatureManager
-from ui import FeatherRenderer, Page
+from ff5m_ui.screen import ScreenPage
+from ui import FeatherRenderer
 
 class Host:
     pass
@@ -233,7 +234,7 @@ assert 'ff5m_ui.filament.runtime' in sys.modules
 assert 'ff5m_ui.filament.material.page' not in sys.modules
 assert 'ff5m_ui.filament.action.page' not in sys.modules
 calibration = manager.get('calibration')
-calibration.render(Page.CALIBRATION_HOME)
+calibration.render(ScreenPage.CALIBRATION_HOME)
 assert calibration is manager.get('calibration')
 assert 'feather_feature_calibration' in sys.modules
 assert 'feather_feature_z' not in sys.modules
@@ -244,7 +245,7 @@ assert z_feature is manager.get('z')
 assert 'feather_z_calibration' in sys.modules
 assert not [name for name in sys.modules
             if name.startswith('ff5m_ui.z_offset') and name.endswith('.page')]
-z_feature.render(Page.SAFE_Z_BRIEFING)
+z_feature.render(ScreenPage.SAFE_Z_BRIEFING)
 pages = [name for name in sys.modules
          if name.startswith('ff5m_ui.z_offset') and name.endswith('.page')]
 assert pages == ['ff5m_ui.z_offset.safe_briefing.page'], pages
@@ -281,7 +282,7 @@ assert not [name for name in sys.modules
             if name.startswith('ff5m_ui.z_offset') and name.endswith('.page')]
 """)
 
-    def test_klipper_package_feature_uses_the_core_page_enum(self):
+    def test_klipper_package_feature_uses_the_product_page_keys(self):
         self.run_clean("""
 import os
 import pathlib
@@ -298,10 +299,10 @@ with tempfile.TemporaryDirectory() as directory:
         object(), feather_screen.FEATURE_SPECS)
     feature = manager.get('calibration')
     feature_module = sys.modules[type(feature).__module__]
-    assert feature_module.Page is feather_screen.Page
+    assert feature_module.ScreenPage is feather_screen.ScreenPage
 """)
 
-    def test_klipper_fallback_feature_uses_the_core_page_enum(self):
+    def test_klipper_fallback_feature_uses_the_product_page_keys(self):
         source = """
 import os
 import pathlib
@@ -318,7 +319,7 @@ with tempfile.TemporaryDirectory() as directory:
         object(), feather_screen.FEATURE_SPECS)
     feature = manager.get('calibration')
     feature_module = sys.modules[type(feature).__module__]
-    assert feature_module.Page is feather_screen.Page
+    assert feature_module.ScreenPage is feather_screen.ScreenPage
 """
         environment = dict(os.environ)
         environment.pop("PYTHONPATH", None)
@@ -452,8 +453,8 @@ class ControllerFeatureRoutingTest(unittest.TestCase):
         })()
         controller.renderer = FEATHER.FeatherRenderer()
         controller.renderer.send = lambda commands: None
-        controller.page = FEATHER.Page.CONTROL_HOME
-        controller.previous_page = FEATHER.Page.IDLE_HOME
+        controller.page = FEATHER.ScreenPage.CONTROL_HOME
+        controller.previous_page = FEATHER.ScreenPage.IDLE_HOME
         controller.print_state = FEATHER.PrintState.IDLE
         controller.last_action_time = -1.0
         controller.pending_action = None
@@ -477,14 +478,14 @@ class ControllerFeatureRoutingTest(unittest.TestCase):
         controller = self.controller()
         manager = controller.feature_manager
 
-        controller._show_page(FEATHER.Page.CALIBRATION_HOME)
+        controller._show_page(FEATHER.ScreenPage.CALIBRATION_HOME)
         common = manager.peek("calibration")
         self.assertIsNotNone(common)
         self.assertIsNone(manager.peek("z"))
         self.assertNotIn("calibration_kind", controller.__dict__)
 
         controller._dispatch_action("cal.z")
-        self.assertEqual(controller.page, FEATHER.Page.CALIBRATION_CONFIRM)
+        self.assertEqual(controller.page, FEATHER.ScreenPage.CALIBRATION_CONFIRM)
         self.assertEqual(common.calibration_kind, "z")
         self.assertIsNone(manager.peek("z"))
 
@@ -517,13 +518,13 @@ class ControllerFeatureRoutingTest(unittest.TestCase):
         manager = controller.feature_manager
 
         self.assertIsNone(manager.peek("filament"))
-        controller._show_page(FEATHER.Page.FILAMENT_MATERIAL)
+        controller._show_page(FEATHER.ScreenPage.FILAMENT_MATERIAL)
 
         self.assertIsNotNone(manager.peek("filament"))
-        self.assertEqual(controller.page, FEATHER.Page.FILAMENT_MATERIAL)
+        self.assertEqual(controller.page, FEATHER.ScreenPage.FILAMENT_MATERIAL)
 
-        controller._show_page(FEATHER.Page.FILAMENT_ACTION)
-        self.assertEqual(controller.page, FEATHER.Page.FILAMENT_ACTION)
+        controller._show_page(FEATHER.ScreenPage.FILAMENT_ACTION)
+        self.assertEqual(controller.page, FEATHER.ScreenPage.FILAMENT_ACTION)
 
     def test_z_motion_pages_arm_abort_only_after_homing(self):
         controller = self.controller()
@@ -533,11 +534,11 @@ class ControllerFeatureRoutingTest(unittest.TestCase):
         })()
         feature = controller.feature_manager.get("z")
         pages = (
-            FEATHER.Page.Z_OFFSET_PAPER_BRIEFING,
-            FEATHER.Page.Z_OFFSET_PAPER,
-            FEATHER.Page.SAFE_Z_BRIEFING,
-            FEATHER.Page.SAFE_Z_CALIBRATION,
-            FEATHER.Page.LIVE_Z_OFFSET,
+            FEATHER.ScreenPage.Z_OFFSET_PAPER_BRIEFING,
+            FEATHER.ScreenPage.Z_OFFSET_PAPER,
+            FEATHER.ScreenPage.SAFE_Z_BRIEFING,
+            FEATHER.ScreenPage.SAFE_Z_CALIBRATION,
+            FEATHER.ScreenPage.LIVE_Z_OFFSET,
         )
 
         for page in pages:
@@ -553,7 +554,7 @@ class ControllerFeatureRoutingTest(unittest.TestCase):
         controller.params = type("Params", (), {"variables": {}})()
         controller.chamber_light = None
 
-        controller._show_page(FEATHER.Page.SETTINGS)
+        controller._show_page(FEATHER.ScreenPage.SETTINGS)
         settings = controller.feature_manager.peek("settings")
 
         self.assertIsNotNone(settings)

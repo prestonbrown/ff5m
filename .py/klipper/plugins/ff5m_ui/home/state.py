@@ -8,9 +8,10 @@ import os
 import time
 from collections import namedtuple
 
-from ui import PrintState
 from ui.bindings import state
 from ui.identity import StateKey
+
+from ..print_state import PrintState
 
 
 class HomeState(StateKey):

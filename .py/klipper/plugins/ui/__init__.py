@@ -1,6 +1,6 @@
 ## Public Feather UI package.
 
-__version__ = "2.2.0"
+__version__ = "2.3.0"
 FRAMEWORK_API_VERSION = 2
 REFLECTION_SCHEMA_VERSION = "2.1.0"
 FRAMEWORK_CAPABILITIES = (
@@ -43,7 +43,7 @@ _EXPORT_GROUPS = (
         "CONTENT_BOTTOM", "FOOTER_HEIGHT", "FOOTER_Y",
         "HEADER_BOTTOM", "MAX_ATOMIC_DRAW", "MAX_PENDING_DRAW",
         "SCREEN_HEIGHT", "SCREEN_WIDTH",
-        "FeatherRenderer", "Page", "PrintState", "rectangles_overlap",
+        "FeatherRenderer", "rectangles_overlap",
     )),
     ("render_worker", (
         "MAX_BATCHES", "MAX_BATCH_BYTES", "RenderBatch",
@@ -60,7 +60,8 @@ _EXPORT_GROUPS = (
     )),
     ("actions", (
         "Action", "Back", "CancellationHint", "Command", "CompletionHint",
-        "ContinuousMovementHint", "CoolingHint", "DispatchResult",
+        "ContinuousMovementHint", "CoolingHint", "DismissToast",
+        "DispatchResult",
         "EditText", "HeatingHint", "HomingHint", "Increment", "MotorStateHint",
         "MovementHint", "Navigate", "ProgressHint", "ProbingHint",
         "Replace", "Router", "SetValue", "SimulationHint", "Toggle",
@@ -132,9 +133,9 @@ __all__ = (
     "PendingReceipt", "ReceiptMeasurement", "ReceiptTracker",
     "RenderReceipt", "parse_render_receipt",
     "validate_render_receipt_token",
-    "rectangles_overlap", "FeatherRenderer", "Page", "PrintState",
+    "rectangles_overlap", "FeatherRenderer",
     "FrameworkKey", "PageKey", "StateKey", "CommandKey", "serialize_key",
-    "Action", "Navigate", "Back", "Replace", "SetValue", "Toggle", "EditText",
+    "Action", "Navigate", "Back", "DismissToast", "Replace", "SetValue", "Toggle", "EditText",
     "Increment", "Command", "SimulationHint", "HomingHint",
     "MovementHint", "ContinuousMovementHint", "MotorStateHint", "HeatingHint",
     "CoolingHint", "ProbingHint", "ProgressHint", "CompletionHint",

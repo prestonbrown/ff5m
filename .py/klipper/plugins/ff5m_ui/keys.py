@@ -1,4 +1,8 @@
 ## Typed page identities for Feather product pages.
+##
+## Copyright (C) 2026, Alexander K <https://github.com/drA1ex>
+##
+## This file may be distributed under the terms of the GNU GPLv3 license
 
 from ui.identity import PageKey
 

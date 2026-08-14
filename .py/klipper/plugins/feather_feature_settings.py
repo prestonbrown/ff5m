@@ -7,7 +7,7 @@ ParameterOption = namedtuple(
     "ParameterOption", ("value", "label", "description", "enabled"))
 
 
-from ui import Page
+from ff5m_ui.screen import ScreenPage
 from feather_feature_manager import FeatureHostProxy
 from feather_screen_pages import FeatherPagesMixin
 from feather_keyboard import is_keyboard_action
@@ -21,7 +21,7 @@ class SettingsFeature(FeatherPagesMixin, FeatureHostProxy):
         FeatureHostProxy.__init__(self, host)
         self.mod_page = 0
         self.mod_parameter = None
-        self.mod_return_page = Page.MOD_SETTINGS
+        self.mod_return_page = ScreenPage.MOD_SETTINGS
         self.mod_edit_value = ""
         self.selected_parameter_option = None
         self._parameter_options_snapshot = ()
@@ -48,7 +48,7 @@ class SettingsFeature(FeatherPagesMixin, FeatureHostProxy):
         if self._benchmark_taps < 5:
             return
         self._reset_benchmark_taps()
-        self._show_page(Page.RENDER_BENCHMARK)
+        self._show_page(ScreenPage.RENDER_BENCHMARK)
 
     @property
     def parameter_options(self):
@@ -76,33 +76,33 @@ class SettingsFeature(FeatherPagesMixin, FeatureHostProxy):
 
     def render(self, page):
         {
-            Page.SETTINGS: self._render_settings,
-            Page.MOD_SETTINGS: self._render_mod_settings,
-            Page.PARAMETER_OPTIONS: self._render_parameter_options,
-            Page.MOD_VALUE: self._render_mod_value,
+            ScreenPage.SETTINGS: self._render_settings,
+            ScreenPage.MOD_SETTINGS: self._render_mod_settings,
+            ScreenPage.PARAMETER_OPTIONS: self._render_parameter_options,
+            ScreenPage.MOD_VALUE: self._render_mod_value,
         }[page]()
 
     def allows_action(self, page, action):
         exact = {
-            Page.SETTINGS: (
+            ScreenPage.SETTINGS: (
                 "nav.back", "settings.brightness.minus",
                 "settings.brightness.plus", "settings.led.minus",
                 "settings.led.plus", "settings.sound", "settings.theme",
                 "settings.mod", "settings.benchmark.tap"),
-            Page.MOD_SETTINGS: ("nav.back", "mod.prev", "mod.next"),
-            Page.PARAMETER_OPTIONS: (
+            ScreenPage.MOD_SETTINGS: ("nav.back", "mod.prev", "mod.next"),
+            ScreenPage.PARAMETER_OPTIONS: (
                 "nav.back", "mod.cancel", "mod.apply", "mod.options.prev",
                 "mod.options.next"),
-            Page.MOD_VALUE: (
+            ScreenPage.MOD_VALUE: (
                 "nav.back", "mod.cancel", "mod.save", "mod.backspace",
                 "mod.sign", "mod.dot"),
         }
         return (action in exact.get(page, ()) or
-                (page == Page.MOD_SETTINGS and
+                (page == ScreenPage.MOD_SETTINGS and
                  action.startswith("mod.item.")) or
-                (page == Page.PARAMETER_OPTIONS and
+                (page == ScreenPage.PARAMETER_OPTIONS and
                  action.startswith("mod.option.")) or
-                (page == Page.MOD_VALUE and
+                (page == ScreenPage.MOD_VALUE and
                  (action.startswith("mod.key.") or
                   is_keyboard_action(action))))
 
@@ -113,18 +113,18 @@ class SettingsFeature(FeatherPagesMixin, FeatureHostProxy):
             self._handle_settings_action(action)
             return True
         if action.startswith("mod.") or (
-                page == Page.MOD_VALUE and is_keyboard_action(action)):
+                page == ScreenPage.MOD_VALUE and is_keyboard_action(action)):
             self._handle_mod_action(action)
             return True
         return False
 
     def back(self, page):
         self._reset_benchmark_taps()
-        if page == Page.SETTINGS:
-            self._show_page(Page.CONTROL_HOME)
-        elif page == Page.MOD_SETTINGS:
-            self._show_page(Page.SETTINGS)
-        elif page in (Page.PARAMETER_OPTIONS, Page.MOD_VALUE):
+        if page == ScreenPage.SETTINGS:
+            self._show_page(ScreenPage.CONTROL_HOME)
+        elif page == ScreenPage.MOD_SETTINGS:
+            self._show_page(ScreenPage.SETTINGS)
+        elif page in (ScreenPage.PARAMETER_OPTIONS, ScreenPage.MOD_VALUE):
             self.mod_parameter = None
             self._show_page(self.mod_return_page)
         else:

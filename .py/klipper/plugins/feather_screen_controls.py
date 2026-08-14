@@ -10,11 +10,13 @@ import re
 import time
 
 from ui import (
-        Back, Command, Increment, Navigate, Page, PrintState, Replace,
-        SetValue, ThemeColor, Toggle,
+        Back, Command, Increment, Navigate, Replace, SetValue, ThemeColor,
+        Toggle,
     )
 from ui.lazy import LazyModule
 from ff5m_ui.keys import AppPage
+from ff5m_ui.print_state import PrintState
+from ff5m_ui.screen import ScreenPage
 from ff5m_ui.home.actions import HomeNavigate, HomeRoute
 from ff5m_ui.move.geometry import (
         JOYSTICK_XY_CENTER, JOYSTICK_XY_RADIUS,
@@ -194,7 +196,7 @@ class FeatherControlsMixin:
     def _joystick_tick(self, eventtime):
         try:
             planner = self.joystick
-            if (planner is None or self.page != Page.CONTROL_MOVE
+            if (planner is None or self.page != ScreenPage.CONTROL_MOVE
                     or self.move_mode != "joystick"
                     or self.print_state != PrintState.IDLE):
                 self._stop_joystick()
@@ -454,7 +456,7 @@ class FeatherControlsMixin:
         return round(sum(float(value) ** 2 for value in velocity) ** 0.5, 1)
 
     def _update_joystick_feedback(self, eventtime, position=None, force=False):
-        if (self.page != Page.CONTROL_MOVE
+        if (self.page != ScreenPage.CONTROL_MOVE
                 or getattr(self, "move_mode", "step") != "joystick"):
             return
         renderer = getattr(self, "renderer", None)
@@ -492,23 +494,23 @@ class FeatherControlsMixin:
                 self.renderer.send(commands)
 
     def _semantic_ui_page(self):
-        if self.page == Page.IDLE_HOME:
+        if self.page == ScreenPage.IDLE_HOME:
             return home_ui.PAGE
-        if self.page == Page.CONTROL_HEAT:
+        if self.page == ScreenPage.CONTROL_HEAT:
             return heat_ui.get_page(self.heating_materials)
-        if self.page == Page.CONTROL_MOVE:
+        if self.page == ScreenPage.CONTROL_MOVE:
             return (move_ui.JOYSTICK_PAGE
                     if getattr(self, "move_mode", "step") == "joystick"
                     else move_ui.STEP_PAGE)
-        if self.page == Page.SAFE_Z_BRIEFING:
+        if self.page == ScreenPage.SAFE_Z_BRIEFING:
             return z_offset_ui.SAFE_BRIEFING_PAGE
-        if self.page == Page.SAFE_Z_CALIBRATION:
+        if self.page == ScreenPage.SAFE_Z_CALIBRATION:
             return z_offset_ui.SAFE_PAGE
-        if self.page == Page.Z_OFFSET_SUMMARY:
+        if self.page == ScreenPage.Z_OFFSET_SUMMARY:
             return z_offset_ui.SUMMARY_PAGE
-        if self.page == Page.Z_OFFSET_PAPER_BRIEFING:
+        if self.page == ScreenPage.Z_OFFSET_PAPER_BRIEFING:
             return z_offset_ui.PAPER_BRIEFING_PAGE
-        if self.page == Page.Z_OFFSET_PAPER:
+        if self.page == ScreenPage.Z_OFFSET_PAPER:
             return z_offset_ui.PAPER_PAGE
         return None
 
@@ -530,31 +532,22 @@ class FeatherControlsMixin:
             self.move_mode = "joystick"
             self._render_move()
             return
-        targets = {
-            AppPage.Z_OFFSET_SUMMARY: Page.Z_OFFSET_SUMMARY,
-            AppPage.Z_OFFSET_PAPER_BRIEFING: Page.Z_OFFSET_PAPER_BRIEFING,
-            AppPage.Z_OFFSET_PAPER: Page.Z_OFFSET_PAPER,
-            AppPage.SAFE_Z_BRIEFING: Page.SAFE_Z_BRIEFING,
-            AppPage.SAFE_Z_CALIBRATION: Page.SAFE_Z_CALIBRATION,
-        }
-        if target not in targets:
-            raise KeyError("Unknown application page: %s" % target)
-        self._show_page(targets[target])
+        raise KeyError("Unsupported application page navigation: %s" % target)
 
     def _handle_home_navigation(self, route):
         if route == HomeRoute.MENU:
-            self._show_page(Page.MAIN_MENU)
+            self._show_page(ScreenPage.MAIN_MENU)
             return
         if route == HomeRoute.MOVE:
             self._require_idle()
             self.move_return_page = self.page
             self._cancel_delayed_tasks()
-            self._show_page(Page.CONTROL_MOVE)
+            self._show_page(ScreenPage.CONTROL_MOVE)
             return
         if route == HomeRoute.HEAT:
             self.heat_return_page = self.page
             self._cancel_delayed_tasks()
-            self._show_page(Page.CONTROL_HEAT)
+            self._show_page(ScreenPage.CONTROL_HEAT)
             return
         if route == HomeRoute.FILAMENT:
             self._open_filament(False)
@@ -572,7 +565,7 @@ class FeatherControlsMixin:
             else:
                 self.file_page = 0
                 self.file_source = "internal"
-                self._show_page(Page.FILE_BROWSER)
+                self._show_page(ScreenPage.FILE_BROWSER)
             return
         if route == HomeRoute.LAST_JOB:
             stats = self.print_stats.get_status(
@@ -881,7 +874,7 @@ class FeatherControlsMixin:
             state = self.print_stats.get_status(
                 self.reactor.monotonic())["state"]
             if (state != "paused" or self.cancel_requested
-                    or self.page == Page.CANCEL_CONFIRM):
+                    or self.page == ScreenPage.CANCEL_CONFIRM):
                 logging.info(
                     "[feather_screen] filament page ignored in state=%s "
                     "page=%s cancel=%s",
@@ -890,7 +883,7 @@ class FeatherControlsMixin:
         now = self.reactor.monotonic()
         self.filament_from_pause = from_pause
         self.filament_original_target = self.extruder.get_status(now)["target"]
-        self._show_page(Page.FILAMENT_MATERIAL)
+        self._show_page(ScreenPage.FILAMENT_MATERIAL)
         return True
 
     def _filament_temperature_ready(self, status):
@@ -915,7 +908,7 @@ class FeatherControlsMixin:
             target = self._limited_preheat(self.filament_material)[0]
             self._run_script("SET_MATERIAL MATERIAL=%s\nM104 S%.0f" %
                              (self.filament_material, target))
-            self._show_page(Page.FILAMENT_ACTION)
+            self._show_page(ScreenPage.FILAMENT_ACTION)
             return
         now = self.reactor.monotonic()
         if action in ("filament.load", "filament.unload", "filament.purge"):
@@ -939,13 +932,13 @@ class FeatherControlsMixin:
     def _finish_filament(self, resume):
         if not self.filament_from_pause:
             self._run_script("M104 S%.0f" % self.filament_original_target)
-            self._show_page(Page.IDLE_HOME)
+            self._show_page(ScreenPage.IDLE_HOME)
             return
         state = self.print_stats.get_status(
             self.reactor.monotonic())["state"]
         if state not in ("printing", "paused"):
             self.filament_from_pause = False
-            self._show_page(Page.IDLE_HOME)
+            self._show_page(ScreenPage.IDLE_HOME)
             return
         target = self.filament_original_target
         if target > 0:
@@ -1137,13 +1130,13 @@ class FeatherControlsMixin:
                       if self.heating_materials else "n/a"))
             self.calibration_clean_nozzle = True
             self.calibration_repeat_probe = False
-            self._show_page(Page.CALIBRATION_CONFIRM)
+            self._show_page(ScreenPage.CALIBRATION_CONFIRM)
         elif action == "cal.extruder":
             self._start_extruder_calibration()
         elif action == "cal.axes":
             self._require_idle()
             self.calibration_guide_kind = action.split(".", 1)[1]
-            self._show_page(Page.CALIBRATION_GUIDE)
+            self._show_page(ScreenPage.CALIBRATION_GUIDE)
         elif action.startswith("cal.material."):
             material = action.rsplit(".", 1)[1]
             if material not in self.heating_materials:
@@ -1177,18 +1170,18 @@ class FeatherControlsMixin:
                 self._start_calibration(repeat_probe=True)
             else:
                 self.calibration_repeat_probe = False
-                self._show_page(Page.CALIBRATION_CONFIRM)
+                self._show_page(ScreenPage.CALIBRATION_CONFIRM)
         elif action == "cal.done":
-            self._show_page(Page.CALIBRATION_HOME)
+            self._show_page(ScreenPage.CALIBRATION_HOME)
         elif action == "cal.mesh.discard":
             if self._mesh_save_available():
-                self._show_page(Page.CALIBRATION_HOME)
+                self._show_page(ScreenPage.CALIBRATION_HOME)
         elif action == "cal.mesh.save":
             if self._mesh_save_available():
                 self._restart_klipper("SAVE_CONFIG")
         elif action == "cal.tuning.discard":
             if self._tuning_save_available():
-                self._show_page(Page.CALIBRATION_HOME)
+                self._show_page(ScreenPage.CALIBRATION_HOME)
         elif action == "cal.tuning.save":
             if self._tuning_save_available():
                 self._restart_klipper("SAVE_CONFIG")
@@ -1210,7 +1203,7 @@ class FeatherControlsMixin:
         self.calibration_cancelled = False
         self._reset_calibration_progress()
         self.calibration_starting_text = "STARTING..."
-        self._show_page(Page.CALIBRATION_PROGRESS)
+        self._show_page(ScreenPage.CALIBRATION_PROGRESS)
         self.reactor.register_callback(self._run_calibration)
 
     @staticmethod
@@ -1285,7 +1278,7 @@ class FeatherControlsMixin:
 
     def _update_z_weight_status(self, eventtime):
         gauge = self._update_z_weight_gauge(eventtime)
-        if getattr(self, "page", None) == Page.Z_OFFSET_PAPER:
+        if getattr(self, "page", None) == ScreenPage.Z_OFFSET_PAPER:
             self.renderer.send(z_offset_ui.update_paper_gauge(
                 self.renderer, None if gauge is None else dict(gauge)))
             self._check_z_pressure(eventtime)
@@ -1504,7 +1497,7 @@ class FeatherControlsMixin:
                 or getattr(self, "calibration_cancel_requested", False)):
             return
         self._open_operation_cancel(
-            Page.CALIBRATION_PROGRESS,
+            ScreenPage.CALIBRATION_PROGRESS,
             self._accept_calibration_cancel,
             self._clear_calibration_cancel)
 
@@ -1710,7 +1703,7 @@ class FeatherControlsMixin:
                     if not self.calibration_error:
                         self.calibration_error = (
                             "Unable to stop PID heating")
-        self._show_page(Page.CALIBRATION_RESULT)
+        self._show_page(ScreenPage.CALIBRATION_RESULT)
 
     @staticmethod
     def normalize_mesh_matrix(value):
@@ -1814,16 +1807,16 @@ class FeatherControlsMixin:
         title = str(title).strip()
         visible_prompt = (
             getattr(self, "action_prompt_visible", False)
-            and self.page == Page.ACTION_PROMPT)
+            and self.page == ScreenPage.ACTION_PROMPT)
         refresh_visible = (
             visible_prompt and self.action_prompt is not None
             and self.action_prompt.get("title") == title)
         if (getattr(self, "action_prompt_visible", False)
                 and self.page in (
-                    Page.ACTION_PROMPT, Page.RECOVERY_PROMPT,
-                    Page.RECOVERY_CONFIRM)):
+                    ScreenPage.ACTION_PROMPT, ScreenPage.RECOVERY_PROMPT,
+                    ScreenPage.RECOVERY_CONFIRM)):
             return_page = self.action_prompt_return_page
-        elif self.page in (Page.RECOVERY_PROMPT, Page.RECOVERY_CONFIRM):
+        elif self.page in (ScreenPage.RECOVERY_PROMPT, ScreenPage.RECOVERY_CONFIRM):
             return_page = self.page_for_print_state()
         else:
             return_page = self.page
@@ -1882,14 +1875,14 @@ class FeatherControlsMixin:
                 self.action_prompt = None
                 self.action_prompt_visible = False
                 return
-            page = Page.RECOVERY_PROMPT
+            page = ScreenPage.RECOVERY_PROMPT
         else:
-            page = Page.ACTION_PROMPT
+            page = ScreenPage.ACTION_PROMPT
         already_visible = (
             self.action_prompt_visible and self.page == page)
         self.action_prompt_visible = True
         self.action_prompt_page = 0
-        if already_visible and page == Page.ACTION_PROMPT:
+        if already_visible and page == ScreenPage.ACTION_PROMPT:
             self._render_action_prompt()
         else:
             self._show_page(page)
@@ -1897,20 +1890,20 @@ class FeatherControlsMixin:
     def _end_action_prompt(self):
         current_page = self.page
         mirrored_recovery = (
-            current_page in (Page.RECOVERY_PROMPT, Page.RECOVERY_CONFIRM))
+            current_page in (ScreenPage.RECOVERY_PROMPT, ScreenPage.RECOVERY_CONFIRM))
         prompt_cancel = (
-            current_page == Page.CANCEL_CONFIRM
+            current_page == ScreenPage.CANCEL_CONFIRM
             and getattr(
-                self, "operation_cancel_return_page", None) == Page.ACTION_PROMPT)
+                self, "operation_cancel_return_page", None) == ScreenPage.ACTION_PROMPT)
         prompt_error = (
-            current_page == Page.MESSAGE
-            and getattr(self, "message_return", None) == Page.ACTION_PROMPT)
+            current_page == ScreenPage.MESSAGE
+            and getattr(self, "message_return", None) == ScreenPage.ACTION_PROMPT)
         displayed = (getattr(self, "action_prompt_visible", False)
-                     and current_page == Page.ACTION_PROMPT)
+                     and current_page == ScreenPage.ACTION_PROMPT)
         overlaid = (getattr(self, "action_prompt_visible", False)
                     and (prompt_cancel or prompt_error))
         return_page = getattr(
-            self, "action_prompt_return_page", Page.IDLE_HOME)
+            self, "action_prompt_return_page", ScreenPage.IDLE_HOME)
         self.action_prompt = None
         self.action_prompt_visible = False
         self.action_prompt_page = 0
@@ -1951,7 +1944,7 @@ class FeatherControlsMixin:
         if manager is not None:
             manager.notify("on_gcode_output", message)
         elif (getattr(self, "calibration_kind", None) == "screws"
-              and self.page == Page.CALIBRATION_PROGRESS):
+              and self.page == ScreenPage.CALIBRATION_PROGRESS):
             result = self.parse_screw_result(message)
             if result:
                 self.calibration_results.append(result)

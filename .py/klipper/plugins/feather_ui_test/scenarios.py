@@ -12,7 +12,8 @@ import math
 import os
 import re
 
-from ui import Page, PrintState
+from ff5m_ui.screen import ScreenPage
+from ff5m_ui.print_state import PrintState
 from ff5m_ui.move import actions as move_actions
 from ff5m_ui.z_offset import actions as z_actions
 
@@ -186,45 +187,45 @@ class ScenarioCatalog:
         self._add_call(steps, "ui-pause-timer", self._pause_ui_timer)
         self._add_call(steps, "ui-home-filled", self._render_filled_home)
         self._add_capture(steps, "ui-home-filled")
-        self._add_call(steps, "ui-home", lambda: self._show(Page.IDLE_HOME))
+        self._add_call(steps, "ui-home", lambda: self._show(ScreenPage.IDLE_HOME))
         self._add_capture(steps, "ui-home")
-        self._add_tap(steps, "nav.filament", Page.FILAMENT_MATERIAL)
-        self._add_tap(steps, "nav.back", Page.IDLE_HOME)
-        self._add_tap(steps, "nav.move", Page.CONTROL_MOVE)
-        self._add_tap(steps, "nav.back", Page.IDLE_HOME)
-        self._add_tap(steps, "nav.menu", Page.MAIN_MENU)
+        self._add_tap(steps, "nav.filament", ScreenPage.FILAMENT_MATERIAL)
+        self._add_tap(steps, "nav.back", ScreenPage.IDLE_HOME)
+        self._add_tap(steps, "nav.move", ScreenPage.CONTROL_MOVE)
+        self._add_tap(steps, "nav.back", ScreenPage.IDLE_HOME)
+        self._add_tap(steps, "nav.menu", ScreenPage.MAIN_MENU)
         self._add_capture(steps, "ui-main-menu")
-        self._add_tap(steps, "nav.files", Page.FILE_BROWSER)
+        self._add_tap(steps, "nav.files", ScreenPage.FILE_BROWSER)
         self._add_capture(steps, "ui-files")
         self._add_call(steps, "ui-file-confirm", self._open_safe_file_confirm)
         self._add_capture(steps, "ui-file-confirm")
         self._add_call(steps, "ui-file-return", self._return_from_file_confirm)
         # The internal file browser belongs to the home screen, so its Back
         # action returns there rather than to the menu used to open it.
-        self._add_tap(steps, "nav.back", Page.IDLE_HOME)
-        self._add_tap(steps, "nav.menu", Page.MAIN_MENU)
-        self._add_tap(steps, "nav.control", Page.CONTROL_HOME)
+        self._add_tap(steps, "nav.back", ScreenPage.IDLE_HOME)
+        self._add_tap(steps, "nav.menu", ScreenPage.MAIN_MENU)
+        self._add_tap(steps, "nav.control", ScreenPage.CONTROL_HOME)
         self._add_capture(steps, "ui-control")
-        self._add_tap(steps, "nav.move", Page.CONTROL_MOVE)
+        self._add_tap(steps, "nav.move", ScreenPage.CONTROL_MOVE)
         self._add_capture(steps, "ui-move")
-        self._add_tap(steps, "nav.back", Page.CONTROL_HOME)
-        self._add_tap(steps, "nav.heat", Page.CONTROL_HEAT)
+        self._add_tap(steps, "nav.back", ScreenPage.CONTROL_HOME)
+        self._add_tap(steps, "nav.heat", ScreenPage.CONTROL_HEAT)
         self._add_capture(steps, "ui-heat")
-        self._add_tap(steps, "nav.back", Page.CONTROL_HOME)
-        self._add_tap(steps, "nav.calibration", Page.CALIBRATION_HOME)
+        self._add_tap(steps, "nav.back", ScreenPage.CONTROL_HOME)
+        self._add_tap(steps, "nav.calibration", ScreenPage.CALIBRATION_HOME)
         self._add_capture(steps, "ui-calibration")
         self._add_call(steps, "ui-calibration-pages",
                        self._render_calibration_variants)
         self._add_capture(steps, "ui-calibration-variants")
-        self._add_tap(steps, "nav.back", Page.CONTROL_HOME)
-        self._add_tap(steps, "nav.settings", Page.SETTINGS)
+        self._add_tap(steps, "nav.back", ScreenPage.CONTROL_HOME)
+        self._add_tap(steps, "nav.settings", ScreenPage.SETTINGS)
         self._add_capture(steps, "ui-settings")
-        self._add_tap(steps, "settings.mod", Page.MOD_SETTINGS)
+        self._add_tap(steps, "settings.mod", ScreenPage.MOD_SETTINGS)
         self._add_capture(steps, "ui-mod-parameters")
-        self._add_tap(steps, "nav.back", Page.SETTINGS)
-        self._add_tap(steps, "nav.back", Page.CONTROL_HOME)
-        self._add_tap(steps, "nav.back", Page.MAIN_MENU)
-        self._add_tap(steps, "nav.filament", Page.FILAMENT_MATERIAL)
+        self._add_tap(steps, "nav.back", ScreenPage.SETTINGS)
+        self._add_tap(steps, "nav.back", ScreenPage.CONTROL_HOME)
+        self._add_tap(steps, "nav.back", ScreenPage.MAIN_MENU)
+        self._add_tap(steps, "nav.filament", ScreenPage.FILAMENT_MATERIAL)
         self._add_capture(steps, "ui-filament-materials")
         self._add_call(steps, "ui-filament-action",
                        self._render_safe_filament_action)
@@ -234,15 +235,15 @@ class ScenarioCatalog:
         self._add_capture(steps, "ui-filament-cooling")
         self._add_call(steps, "ui-filament-target",
                        self._remember_ui_filament_target)
-        self._add_tap(steps, "nav.back", Page.FILAMENT_MATERIAL)
+        self._add_tap(steps, "nav.back", ScreenPage.FILAMENT_MATERIAL)
         self._add_call(steps, "ui-filament-target-preserved",
                        self._assert_ui_filament_target_preserved)
         self._add_capture(steps, "ui-filament-back-materials")
-        self._add_tap(steps, "nav.back", Page.MAIN_MENU)
-        self._add_tap(steps, "nav.network", Page.NETWORK_HOME)
+        self._add_tap(steps, "nav.back", ScreenPage.MAIN_MENU)
+        self._add_tap(steps, "nav.network", ScreenPage.NETWORK_HOME)
         self._add_capture(steps, "ui-network")
-        self._add_tap(steps, "nav.back", Page.MAIN_MENU)
-        self._add_tap(steps, "nav.back", Page.IDLE_HOME)
+        self._add_tap(steps, "nav.back", ScreenPage.MAIN_MENU)
+        self._add_tap(steps, "nav.back", ScreenPage.IDLE_HOME)
         self._add_call(steps, "ui-resume-timer", self._resume_ui_timer)
 
     @staticmethod
@@ -321,7 +322,7 @@ class ScenarioCatalog:
 
     def _render_component_footer(self):
         self.host.renderer.footer(
-            25.0, 0.0, 25.0, 0.0, "PREVIEW", "IDLE")
+            "NOZZLE 25/0C | BED 25/0C", "PREVIEW | IDLE")
 
     def _decode_component_cases(self, encoded):
         if not encoded:
@@ -435,11 +436,11 @@ class ScenarioCatalog:
                 setattr(host, name, value)
 
     def _steps_motion(self, steps):
-        self._add_call(steps, "motion-open", lambda: self._show(Page.CONTROL_MOVE))
+        self._add_call(steps, "motion-open", lambda: self._show(ScreenPage.CONTROL_MOVE))
         self._add_capture(steps, "motion-before-home")
         self._add_call(steps, "motion-caution", self._dismiss_move_caution)
         self._add_semantic_tap(
-            steps, move_actions.HOME_ALL, Page.CONTROL_MOVE)
+            steps, move_actions.HOME_ALL, ScreenPage.CONTROL_MOVE)
         self._add_call(steps, "motion-origin", self._save_motion_origin)
         self._add_capture(steps, "motion-homed")
         for axis in "xyz":
@@ -485,50 +486,50 @@ class ScenarioCatalog:
                 and status.get("worker_last_error", "") == before_error)
 
     def _steps_heat(self, steps):
-        self._add_call(steps, "heat-open", lambda: self._show(Page.CONTROL_HEAT))
+        self._add_call(steps, "heat-open", lambda: self._show(ScreenPage.CONTROL_HEAT))
         self._add_call(steps, "heat-initial", self._save_heat_initial)
         self._add_capture(steps, "heat-cold")
-        self._add_tap_label(steps, self.material, Page.CONTROL_HEAT)
+        self._add_tap_label(steps, self.material, ScreenPage.CONTROL_HEAT)
         self._add_wait(steps, "heat-targets", self._heat_targets_set, 10.0)
         self._add_capture(steps, "heat-target-accepted")
         self._add_wait(steps, "heat-rising", self._heat_is_rising, 120.0, 1.0)
         self._add_capture(steps, "heat-rising")
         self._add_wait(steps, "heat-stable", self._heat_is_stable, 900.0, 2.0)
         self._add_capture(steps, "heat-target-reached")
-        self._add_tap_label(steps, "COOLDOWN", Page.CONTROL_HEAT)
+        self._add_tap_label(steps, "COOLDOWN", ScreenPage.CONTROL_HEAT)
         self._add_wait(steps, "heat-off", self._heaters_off, 10.0)
         self._add_capture(steps, "heat-cooldown-start")
 
     def _steps_screws(self, steps):
         self._add_call(steps, "screws-open", self._open_calibration_home)
-        self._add_tap(steps, "cal.screws", Page.CALIBRATION_CONFIRM)
-        self._add_tap(steps, "cal.clean.skip", Page.CALIBRATION_CONFIRM)
+        self._add_tap(steps, "cal.screws", ScreenPage.CALIBRATION_CONFIRM)
+        self._add_tap(steps, "cal.clean.skip", ScreenPage.CALIBRATION_CONFIRM)
         self._add_capture(steps, "screws-confirm")
-        self._add_tap(steps, "cal.confirm", Page.CALIBRATION_PROGRESS)
+        self._add_tap(steps, "cal.confirm", ScreenPage.CALIBRATION_PROGRESS)
         self._add_wait(steps, "screws-result", self._calibration_result, 1200.0, 1.0)
         self._add_capture(steps, "screws-result")
-        self._add_tap(steps, "cal.done", Page.CALIBRATION_HOME)
+        self._add_tap(steps, "cal.done", ScreenPage.CALIBRATION_HOME)
         self._add_call(steps, "screws-cleanup", self._hardware_cleanup)
 
     def _steps_mesh(self, steps):
         self._add_call(steps, "mesh-snapshot", self._save_mesh_snapshot)
         self._add_call(steps, "mesh-open", self._open_calibration_home)
-        self._add_tap(steps, "cal.mesh", Page.CALIBRATION_CONFIRM)
+        self._add_tap(steps, "cal.mesh", ScreenPage.CALIBRATION_CONFIRM)
         self._add_capture(steps, "mesh-confirm")
-        self._add_tap(steps, "cal.confirm", Page.CALIBRATION_PROGRESS)
+        self._add_tap(steps, "cal.confirm", ScreenPage.CALIBRATION_PROGRESS)
         self._add_wait(steps, "mesh-result", self._calibration_result, 1800.0, 1.0)
         self._add_call(steps, "mesh-validate", self._validate_mesh)
         self._add_capture(steps, "mesh-result")
-        self._add_tap(steps, "cal.mesh.discard", Page.CALIBRATION_HOME)
+        self._add_tap(steps, "cal.mesh.discard", ScreenPage.CALIBRATION_HOME)
         self._add_call(steps, "mesh-restore", self._restore_mesh_snapshot)
         self._add_call(steps, "mesh-cleanup", self._hardware_cleanup)
 
     def _steps_z(self, steps):
         self._add_call(steps, "z-open", self._open_calibration_home)
-        self._add_tap(steps, "cal.z", Page.CALIBRATION_CONFIRM)
-        self._add_tap(steps, "cal.clean.skip", Page.CALIBRATION_CONFIRM)
+        self._add_tap(steps, "cal.z", ScreenPage.CALIBRATION_CONFIRM)
+        self._add_tap(steps, "cal.clean.skip", ScreenPage.CALIBRATION_CONFIRM)
         self._add_capture(steps, "z-confirm")
-        self._add_tap(steps, "cal.confirm", Page.SAFE_Z_BRIEFING)
+        self._add_tap(steps, "cal.confirm", ScreenPage.SAFE_Z_BRIEFING)
         self._add_capture(steps, "z-safe-briefing")
         self._add_semantic_tap(steps, z_actions.SAFE_SKIP)
         self._add_wait(steps, "z-preparation", self._z_summary_ready,
@@ -536,36 +537,36 @@ class ScenarioCatalog:
         self._add_capture(steps, "z-summary-empty")
         self._add_semantic_tap(
             steps, z_actions.ZONE_ACTIONS["center"],
-            Page.Z_OFFSET_PAPER_BRIEFING)
+            ScreenPage.Z_OFFSET_PAPER_BRIEFING)
         self._add_capture(steps, "z-paper-briefing")
         self._add_semantic_tap(steps, z_actions.ENTER_ZONE)
         self._add_wait(steps, "z-positioned", self._z_paper_ready,
                        120.0, 0.5)
         self._add_capture(steps, "z-paper-before-probe")
         self._add_semantic_tap(
-            steps, z_actions.PROBE, Page.Z_OFFSET_PAPER)
+            steps, z_actions.PROBE, ScreenPage.Z_OFFSET_PAPER)
         self._add_call(steps, "z-dismiss-pressure", self._dismiss_pressure)
         self._add_call(steps, "z-probe-position", self._save_z_probe_position)
         self._add_capture(steps, "z-paper-probed")
-        self._add_tap_label(steps, "0.100 MM", Page.Z_OFFSET_PAPER)
+        self._add_tap_label(steps, "0.100 MM", ScreenPage.Z_OFFSET_PAPER)
         # The real UI offers at most 0.100 mm. Ten FARTHER presses create the
         # requested 1 mm safety margin, then ten CLOSER presses return to the
         # post-probe point without ever crossing it.
         for _index in range(10):
             self._add_semantic_tap(
-                steps, z_actions.FARTHER, Page.Z_OFFSET_PAPER)
+                steps, z_actions.FARTHER, ScreenPage.Z_OFFSET_PAPER)
         self._add_call(steps, "z-farther-verify", self._verify_z_farther)
         self._add_capture(steps, "z-paper-farther-1mm")
         for _index in range(10):
             self._add_semantic_tap(
-                steps, z_actions.CLOSER, Page.Z_OFFSET_PAPER)
+                steps, z_actions.CLOSER, ScreenPage.Z_OFFSET_PAPER)
         self._add_call(steps, "z-return-verify", self._verify_z_return)
         self._add_capture(steps, "z-paper-returned")
         self._add_semantic_tap(steps, z_actions.ACCEPT)
         self._add_wait(steps, "z-summary-result", self._z_summary_ready,
                        120.0, 0.5)
         self._add_capture(steps, "z-summary-result")
-        self._add_tap(steps, "nav.back", Page.Z_OFFSET_SUMMARY)
+        self._add_tap(steps, "nav.back", ScreenPage.Z_OFFSET_SUMMARY)
         self._add_capture(steps, "z-discard-dialog")
         self._add_semantic_tap(steps, z_actions.DISCARD_CONFIRM)
         self._add_wait(steps, "z-discarded", self._z_discarded,
@@ -585,13 +586,13 @@ class ScenarioCatalog:
             steps, "filament-open",
             lambda: self.host._run_script("LOAD_MATERIAL"))
         self._add_capture(steps, "filament-material-prompt-screen")
-        self._add_prompt_tap(steps, self.material, Page.ACTION_PROMPT)
+        self._add_prompt_tap(steps, self.material, ScreenPage.ACTION_PROMPT)
         self._add_capture(steps, "filament-action-prompt-screen")
-        self._add_prompt_tap(steps, "Load", Page.ACTION_PROMPT)
+        self._add_prompt_tap(steps, "Load", ScreenPage.ACTION_PROMPT)
         self._add_capture(steps, "filament-loaded-screen")
-        self._add_prompt_tap(steps, "Purge", Page.ACTION_PROMPT)
+        self._add_prompt_tap(steps, "Purge", ScreenPage.ACTION_PROMPT)
         self._add_capture(steps, "filament-purged-screen")
-        self._add_prompt_tap(steps, "Unload", Page.ACTION_PROMPT)
+        self._add_prompt_tap(steps, "Unload", ScreenPage.ACTION_PROMPT)
         self._add_capture(steps, "filament-unloaded-screen")
         self._add_prompt_tap(steps, "Done")
         self._add_capture(steps, "filament-done-screen")
@@ -626,7 +627,7 @@ class ScenarioCatalog:
         self._add_call(
             steps, "print_mesh-file-open",
             lambda: self._open_context_file(self.context_fixture.files[1]))
-        self._add_tap(steps, "file.item0", Page.FILE_CONFIRM)
+        self._add_tap(steps, "file.item0", ScreenPage.FILE_CONFIRM)
         self._add_tap(steps, "file.start")
         self._add_wait(
             steps, "print_mesh-started", self._context_print_controls_ready,
@@ -666,7 +667,7 @@ class ScenarioCatalog:
             steps, "print_mesh-cancelled", self._context_cancelled,
             10.0, 0.1)
         self._add_capture(steps, "print_mesh-cancelled-screen")
-        self._add_tap(steps, "message.ok", Page.IDLE_HOME,
+        self._add_tap(steps, "message.ok", ScreenPage.IDLE_HOME,
                       "print_mesh-cancelled-dismiss")
         self._add_call(
             steps, "print_mesh-activate-recovery",
@@ -681,10 +682,10 @@ class ScenarioCatalog:
             lambda: self._start_context_scenario(
                 "recovery", ("recovery",)), delay=0.0)
         self._add_tap(
-            steps, "recovery.restore", Page.RECOVERY_CONFIRM)
+            steps, "recovery.restore", ScreenPage.RECOVERY_CONFIRM)
         self._add_capture(steps, "recovery-confirm-screen")
         self._add_tap(
-            steps, "recovery.confirm", Page.CALIBRATION_PROGRESS)
+            steps, "recovery.confirm", ScreenPage.CALIBRATION_PROGRESS)
         self._add_capture(steps, "recovery-progress-screen")
         self._add_wait(
             steps, "recovery-printing", self._context_printing,
@@ -694,7 +695,7 @@ class ScenarioCatalog:
             steps, "recovery-complete", self._context_print_complete,
             1900.0, 0.5)
         self._add_capture(steps, "recovery-complete-screen")
-        self._add_tap(steps, "message.ok", Page.IDLE_HOME,
+        self._add_tap(steps, "message.ok", ScreenPage.IDLE_HOME,
                       "recovery-finished-dismiss")
         self._add_call(
             steps, "recovery-context-verify",
@@ -707,7 +708,7 @@ class ScenarioCatalog:
         self._add_call(
             steps, "print_kamp-file-open",
             lambda: self._open_context_file(self.context_fixture.files[0]))
-        self._add_tap(steps, "file.item0", Page.FILE_CONFIRM)
+        self._add_tap(steps, "file.item0", ScreenPage.FILE_CONFIRM)
         self._add_capture(steps, "print_kamp-confirm-screen")
         self._add_tap(steps, "file.start")
         self._add_wait(
@@ -718,7 +719,7 @@ class ScenarioCatalog:
             steps, "print_kamp-complete", self._context_print_complete,
             1900.0, 0.5)
         self._add_capture(steps, "print_kamp-complete-screen")
-        self._add_tap(steps, "message.ok", Page.IDLE_HOME,
+        self._add_tap(steps, "message.ok", ScreenPage.IDLE_HOME,
                       "print_kamp-finished-dismiss")
         self._add_call(
             steps, "print_kamp-context-verify",
@@ -772,12 +773,12 @@ class ScenarioCatalog:
 
     def _open_context_file(self, path):
         self.context_fixture.open_file(
-            path, self._show, Page.FILE_BROWSER)
+            path, self._show, ScreenPage.FILE_BROWSER)
 
     def _context_printing(self):
         state = str(self.host.print_stats.get_status(
             self.reactor.monotonic()).get("state", "")).lower()
-        return state == "printing" and self.host.page == Page.PRINTING
+        return state == "printing" and self.host.page == ScreenPage.PRINTING
 
     def _context_print_controls_ready(self):
         return (self._context_printing()
@@ -786,7 +787,7 @@ class ScenarioCatalog:
     def _context_paused(self):
         state = str(self.host.print_stats.get_status(
             self.reactor.monotonic()).get("state", "")).lower()
-        return (state == "paused" and self.host.page == Page.PAUSED
+        return (state == "paused" and self.host.page == ScreenPage.PAUSED
                 and "print.resume" in self.host.renderer._buttons)
 
     def _context_print_complete(self):
@@ -795,7 +796,7 @@ class ScenarioCatalog:
         return (state not in ("printing", "paused")
                 and not self.host.virtual_sdcard.is_active()
                 and self.host.print_state == PrintState.IDLE
-                and self.host.page == Page.MESSAGE
+                and self.host.page == ScreenPage.MESSAGE
                 and "message.ok" in self.host.renderer._buttons)
 
     def _context_cancelled(self):
@@ -804,7 +805,7 @@ class ScenarioCatalog:
         return (state == "cancelled"
                 and not self.host.virtual_sdcard.is_active()
                 and self.host.print_state == PrintState.IDLE
-                and self.host.page == Page.MESSAGE
+                and self.host.page == ScreenPage.MESSAGE
                 and "message.ok" in self.host.renderer._buttons)
 
     def _context_idle_timeout(self):
@@ -845,7 +846,7 @@ class ScenarioCatalog:
                 "// action:prompt_footer_button Later|RESPOND TYPE=command MSG=action:prompt_end",
                 "// action:prompt_show"):
             resurrection.gcode.respond_raw(line)
-        if self.host.page != Page.RECOVERY_PROMPT:
+        if self.host.page != ScreenPage.RECOVERY_PROMPT:
             raise RuntimeError("Recovery action prompt did not open")
 
     def _show(self, page):
@@ -864,7 +865,7 @@ class ScenarioCatalog:
         # page. Hardware phases must be independent from that presentation
         # state and the three tested entries all live on page zero.
         calibration.calibration_page = 0
-        self._show(Page.CALIBRATION_HOME)
+        self._show(ScreenPage.CALIBRATION_HOME)
 
     def _open_safe_file_confirm(self):
         entries = list(getattr(self.host, "file_entries", ()))
@@ -878,8 +879,8 @@ class ScenarioCatalog:
             return
 
     def _return_from_file_confirm(self):
-        if self.host.page == Page.FILE_CONFIRM:
-            self.host._show_page(Page.FILE_BROWSER)
+        if self.host.page == ScreenPage.FILE_CONFIRM:
+            self.host._show_page(ScreenPage.FILE_BROWSER)
 
     def _pause_ui_timer(self):
         timer = getattr(self.host, "timer", None)
@@ -925,7 +926,7 @@ class ScenarioCatalog:
         self.host.extruder = SnapshotExtruder()
         try:
             if update:
-                if self.host.page != Page.FILAMENT_ACTION:
+                if self.host.page != ScreenPage.FILAMENT_ACTION:
                     raise RuntimeError(
                         "Filament telemetry update requires action page")
                 # Exercise the same declarative dirty-tree path used by live
@@ -935,7 +936,7 @@ class ScenarioCatalog:
                 self.host.feature_manager.get("filament").update(
                     self.reactor.monotonic())
             else:
-                self._show(Page.FILAMENT_ACTION)
+                self._show(ScreenPage.FILAMENT_ACTION)
         finally:
             self.host.extruder = extruder
 
@@ -1038,17 +1039,17 @@ class ScenarioCatalog:
         return values["nozzle_target"] <= 0.0 and values["bed_target"] <= 0.0
 
     def _calibration_result(self):
-        return self.host.page == Page.CALIBRATION_RESULT
+        return self.host.page == ScreenPage.CALIBRATION_RESULT
 
     def _z_summary_ready(self):
-        return self.host.page == Page.Z_OFFSET_SUMMARY
+        return self.host.page == ScreenPage.Z_OFFSET_SUMMARY
 
     def _z_paper_ready(self):
-        return self.host.page == Page.Z_OFFSET_PAPER
+        return self.host.page == ScreenPage.Z_OFFSET_PAPER
 
     def _z_discarded(self):
         feature = self.host.feature_manager.get("z")
-        return (self.host.page == Page.CALIBRATION_HOME
+        return (self.host.page == ScreenPage.CALIBRATION_HOME
                 and not feature.z_calibration.active)
 
     def _save_mesh_snapshot(self):

@@ -16,7 +16,8 @@ import shutil
 import time
 from datetime import datetime
 
-from ui import Page, PrintState
+from ff5m_ui.screen import ScreenPage
+from ff5m_ui.print_state import PrintState
 from ff5m_ui.z_offset import actions as z_actions
 from .artifacts import (
     ACTIVE_MARKER, ARTIFACT_ROOT, ArtifactWorker,
@@ -771,10 +772,10 @@ class UITestRun:
             if self.abort_requested:
                 self._complete("aborted", "abort requested")
                 return
-            if self.host.page == Page.MESSAGE and expected != Page.MESSAGE:
+            if self.host.page == ScreenPage.MESSAGE and expected != ScreenPage.MESSAGE:
                 raise RuntimeError(str(getattr(
                     self.host, "message", "Action opened a message")))
-            if self.host.page == Page.ERROR:
+            if self.host.page == ScreenPage.ERROR:
                 raise RuntimeError(str(getattr(
                     self.host, "error_message", "Action opened an error")))
             expected_seen = self.step_runtime.get(

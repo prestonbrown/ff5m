@@ -12,6 +12,7 @@ sys.path.insert(0, str(PLUGINS))
 
 import ui  # noqa: E402
 from ff5m_ui.keys import AppPage  # noqa: E402
+from ff5m_ui.screen import ScreenPage  # noqa: E402
 from ff5m_ui.filament.actions import FilamentCommand  # noqa: E402
 from ff5m_ui.filament.state import FilamentState  # noqa: E402
 from ff5m_ui.heat.actions import HeatCommand  # noqa: E402
@@ -31,20 +32,20 @@ class FrameworkContractTest(unittest.TestCase):
         self.assertTrue((PLUGINS / "ui" / "__init__.py").is_file())
         self.assertTrue((PLUGINS / "ff5m_ui" / "__init__.py").is_file())
 
-    def test_manifest_is_framework_v2_2(self):
-        self.assertEqual(ui.__version__, "2.2.0")
+    def test_manifest_is_framework_v2_3(self):
+        self.assertEqual(ui.__version__, "2.3.0")
         self.assertEqual(ui.FRAMEWORK_API_VERSION, 2)
         self.assertEqual(ui.REFLECTION_SCHEMA_VERSION, "2.1.0")
         self.assertEqual(ui.framework_manifest(), {
             "name": "feather-ui",
-            "version": "2.2.0",
+            "version": "2.3.0",
             "api_version": 2,
             "reflection_schema_version": "2.1.0",
             "capabilities": list(ui.FRAMEWORK_CAPABILITIES),
         })
 
     def test_vendored_framework_contract(self):
-        self.assertEqual(ui.__version__, "2.2.0")
+        self.assertEqual(ui.__version__, "2.3.0")
         self.assertEqual(ui.FRAMEWORK_API_VERSION, 2)
         self.assertEqual(ui.REFLECTION_SCHEMA_VERSION, "2.1.0")
         self.assertIn("binding-source-authoring", ui.FRAMEWORK_CAPABILITIES)
@@ -54,6 +55,8 @@ class FrameworkContractTest(unittest.TestCase):
                 "ArrowButton", "ToggleSwitch", "EditText", "StateCase",
                 "CreationIdentityContract", "RenderReceipt"):
             self.assertTrue(hasattr(ui, name), name)
+        self.assertFalse(hasattr(ui, "Page"))
+        self.assertFalse(hasattr(ui, "PrintState"))
         self.assertTrue((PLUGINS / "ui" / "themes" / "theme.schema.json").is_file())
 
     def test_klipper_package_entry_uses_canonical_ui_namespaces(self):
@@ -138,23 +141,15 @@ assert "ui.source" in sys.modules
                 self.assertEqual(ui.serialize_key(member),
                                  "%s.%s" % (namespace, member.name))
 
-    def test_all_navigation_targets_keep_original_page_symbols(self):
+    def test_controller_screen_state_is_not_a_declarative_page_key(self):
+        self.assertIsInstance(AppPage.HOME, ui.PageKey)
+        self.assertNotIsInstance(ScreenPage.IDLE_HOME, ui.PageKey)
         self.assertEqual(
-            {ui.serialize_key(page) for page in AppPage},
-            {
-                "ui.pages.keys.AppPage.HOME",
-                "ui.pages.keys.AppPage.HEAT",
-                "ui.pages.keys.AppPage.FILAMENT_MATERIAL",
-                "ui.pages.keys.AppPage.FILAMENT_ACTION",
-                "ui.pages.keys.AppPage.MOVE_STEP",
-                "ui.pages.keys.AppPage.MOVE_JOYSTICK",
-                "ui.pages.keys.AppPage.Z_OFFSET_SUMMARY",
-                "ui.pages.keys.AppPage.Z_OFFSET_PAPER_BRIEFING",
-                "ui.pages.keys.AppPage.Z_OFFSET_PAPER",
-                "ui.pages.keys.AppPage.SAFE_Z_BRIEFING",
-                "ui.pages.keys.AppPage.SAFE_Z_CALIBRATION",
-                "ui.pages.keys.AppPage.RENDER_BENCHMARK",
-            })
+            ui.serialize_key(AppPage.HOME),
+            "ui.pages.keys.AppPage.HOME")
+        self.assertEqual(
+            ui.serialize_key(AppPage.HEAT),
+            "ui.pages.keys.AppPage.HEAT")
 
     def test_framework_subtree_has_no_product_or_designer_imports(self):
         framework = PLUGINS / "ui"
