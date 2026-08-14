@@ -1611,7 +1611,12 @@ class FeatherControlsMixin:
             phase = "PREP"
         if phase not in stages:
             phase = stages[0]
-        current = stages.index(phase)
+        # A temporary state may describe an earlier kind of work, such as
+        # post-clean cooling. The ordered progress cursor remains monotonic.
+        current = max(
+            [stages.index(phase)] + [
+                stages.index(seen) for seen in self.calibration_seen_phases])
+        phase = stages[current]
         self.calibration_seen_phases.add(phase)
 
         left, right, gap = 55, 745, 12

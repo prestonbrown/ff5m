@@ -965,6 +965,32 @@ class ControllerSafetyTest(unittest.TestCase):
         self.assertEqual(colors["CLEAN"], UI.ThemeColor.BRIGHT)
         self.assertEqual(colors["LEVEL"], UI.ThemeColor.TEXT)
 
+    def test_mesh_progress_does_not_regress_during_post_clean_cooling(self):
+        controller = ScenarioController.__new__(ScenarioController)
+        controller.renderer = FEATHER.FeatherRenderer()
+        controller.calibration_kind = "mesh"
+        operation = {
+            "context_path": ("Bed Level", "Bed Mesh", "Nozzle Cleaning"),
+            "current_state": None,
+        }
+
+        def active_phase(state):
+            operation["current_state"] = state
+            with mock.patch.object(
+                    controller.renderer, "text",
+                    wraps=controller.renderer.text) as text:
+                controller._calibration_stage_commands("", operation)
+            return next(
+                call.args[2] for call in text.call_args_list
+                if call.args[3] == UI.ThemeColor.BRIGHT)
+
+        self.assertEqual([
+            active_phase("HEATING NOZZLE"),
+            active_phase("CLEANING"),
+            active_phase("COOLING NOZZLE"),
+            active_phase("LEVELING"),
+        ], ["HEAT", "CLEAN", "CLEAN", "LEVEL"])
+
     def test_context_name_without_state_does_not_advance_progress(self):
         controller = ScenarioController.__new__(ScenarioController)
         controller.renderer = FEATHER.FeatherRenderer()
