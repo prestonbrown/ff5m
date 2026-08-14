@@ -6,8 +6,8 @@
 
 from enum import Enum, IntEnum
 
-from .bindings import StateStore, page_state_keys, resolve
-from .actions import collect_actions
+from .bindings import StateStore, derived, page_state_keys, resolve
+from .actions import action_wire_id, collect_actions
 from .identity import PageKey, serialize_key
 from .properties import (
     CreationFieldSpec, EditorSpec, Invalidation, PropertySpec, SourceSpec,
@@ -494,19 +494,55 @@ class LayoutResult:
         return self._names.keys()
 
 
+class CreationIdentityContract:
+    """Framework-owned stable identity emitted after node construction."""
+
+    __slots__ = (
+        "strategy", "field", "method", "required", "suggestion", "pattern",
+    )
+
+    def __init__(self, strategy="core.fluent_ref", field="ref", method="ref",
+                 required=True, suggestion="type_counter",
+                 pattern=r"^[A-Za-z][A-Za-z0-9_.-]*$"):
+        self.strategy = str(strategy)
+        self.field = str(field)
+        self.method = str(method)
+        self.required = bool(required)
+        self.suggestion = str(suggestion)
+        self.pattern = str(pattern)
+
+    def as_dict(self):
+        return {
+            "strategy": self.strategy,
+            "field": self.field,
+            "method": self.method,
+            "required": self.required,
+            "suggestion": self.suggestion,
+            "pattern": self.pattern,
+        }
+
+
 class CreationSourceContract:
     """Framework-owned source generation strategy for a creatable node."""
 
-    __slots__ = ("strategy", "callable")
+    __slots__ = ("strategy", "callable", "identity")
 
-    def __init__(self, strategy, callable=None):
+    def __init__(self, strategy, callable=None, identity=None):
         self.strategy = str(strategy)
         self.callable = None if callable is None else str(callable)
+        if identity is not None and not isinstance(
+                identity, CreationIdentityContract):
+            raise TypeError(
+                "CreationSourceContract identity must be a "
+                "CreationIdentityContract")
+        self.identity = identity
 
     def as_dict(self):
         return {
             "strategy": self.strategy,
             "callable": self.callable,
+            "identity": (
+                None if self.identity is None else self.identity.as_dict()),
         }
 
 
@@ -616,8 +652,11 @@ _OVERLAY_STRUCTURE = StructureContract(
         "absolute_move", "absolute_resize", "align", "distribute",
         "snapping", "multi_select"))
 
-_KEYWORD_CREATION_SOURCE = CreationSourceContract("core.keyword_call")
-_GRID_CREATION_SOURCE = CreationSourceContract("core.grid_matrix")
+_STABLE_CREATION_IDENTITY = CreationIdentityContract()
+_KEYWORD_CREATION_SOURCE = CreationSourceContract(
+    "core.keyword_call", identity=_STABLE_CREATION_IDENTITY)
+_GRID_CREATION_SOURCE = CreationSourceContract(
+    "core.grid_matrix", identity=_STABLE_CREATION_IDENTITY)
 
 
 _SEQUENCE_CREATION_FIELDS = (
@@ -636,6 +675,19 @@ _COLUMN_CREATION = CreationContract(
 _OVERLAY_CREATION = CreationContract(
     "Layout", "absolute", (), children=True,
     source=_KEYWORD_CREATION_SOURCE)
+_STATE_CASE_CREATION = CreationContract(
+    "Conditions", "absolute", (
+        CreationFieldSpec(
+            "selector", object, required=True,
+            editor=EditorSpec(
+                "state_binding", label="State selector", group="Condition"),
+            bindings=("direct",)),
+        CreationFieldSpec(
+            "expected", (str, int, float, bool), required=True,
+            editor=EditorSpec(
+                "text", label="Expected value", group="Condition"),
+            bindings=()),
+    ), children=True, source=_KEYWORD_CREATION_SOURCE)
 _GRID_CREATION = CreationContract("Layout", "grid", (
     CreationFieldSpec(
         "row_count", int, default=2,
@@ -1498,6 +1550,46 @@ class When(SingleChild):
         return []
 
 
+class StateCase(When):
+    """Designer-friendly conditional Overlay selected by a state value.
+
+    Children are ordinary positional source arguments while ``selector`` and
+    ``expected`` stay explicit keyword fields. This makes empty creation and
+    later contract-driven insertion deterministic without parsing a lambda.
+    """
+
+    creation_contract = _STATE_CASE_CREATION
+    structure_contract = _OVERLAY_STRUCTURE
+
+    def __init__(self, *children, **kwargs):
+        if "selector" not in kwargs or "expected" not in kwargs:
+            raise TypeError("StateCase requires selector and expected")
+        self.selector = kwargs.pop("selector")
+        self.expected = kwargs.pop("expected")
+        if kwargs.keys() - {"key"}:
+            raise TypeError("Unknown StateCase arguments: %s" %
+                            ", ".join(sorted(kwargs)))
+        predicate = derived(
+            lambda current, expected=self.expected: current == expected,
+            self.selector)
+        super().__init__(predicate, Overlay(*children), key=kwargs.get("key"))
+
+    def state_signature(self, state):
+        return resolve(self.selector, state) == resolve(self.expected, state)
+
+    def render(self, renderer, state, layout):
+        if self.state_signature(state):
+            return self.child.render(renderer, state, layout)
+        return []
+
+    def render_children(self):
+        return self.child.render_children()
+
+    def replace_preview_children(self, children, placements=None):
+        self.child.replace_preview_children(children, placements)
+        self._adopt(*tuple(children))
+
+
 class Override:
     """Apply explicit inherited defaults to an existing object subtree."""
 
@@ -1567,13 +1659,31 @@ PAGE_DISCOVERY_CONTRACT = PageDiscoveryContract(
 )
 
 
+class PageMetadataSourceContract:
+    """Framework-owned source grammar for editable page metadata."""
+
+    __slots__ = ("strategy", "fields")
+
+    def __init__(self, strategy, fields):
+        self.strategy = str(strategy)
+        self.fields = tuple(str(value) for value in fields)
+
+    def as_dict(self):
+        return {"strategy": self.strategy, "fields": list(self.fields)}
+
+
+PAGE_METADATA_SOURCE_CONTRACT = PageMetadataSourceContract(
+    "core.module_page_assignments", ("title", "show_back"))
+
+
 class DeclarativePage(Tree):
     """An arranged page that discovers and redraws dirty subtrees."""
 
     discovery_contract = PAGE_DISCOVERY_CONTRACT
+    metadata_source_contract = PAGE_METADATA_SOURCE_CONTRACT
 
     def __init__(self, content, bounds, state=None, page_id=None,
-                 state_schema=()):
+                 state_schema=(), actions=()):
         if not isinstance(page_id, PageKey):
             raise TypeError("DeclarativePage page_id must be a PageKey member")
         self._source = _capture_construction(
@@ -1582,7 +1692,14 @@ class DeclarativePage(Tree):
         self.page_key = page_id
         self.page_id = serialize_key(page_id)
         self.state_schema = page_state_keys(self.root, state_schema)
-        self.actions = collect_actions(self.root)
+        self.actions = {}
+        for action in tuple(actions or ()):
+            self.actions[action_wire_id(action)] = action
+        for wire_id, action in collect_actions(self.root).items():
+            existing = self.actions.get(wire_id)
+            if existing is not None and existing != action:
+                raise ValueError("Semantic action wire collision: %s" % wire_id)
+            self.actions[wire_id] = action
         self.state = StateStore(self.state_schema, state)
         self.initialized = state is not None
         if self.initialized:

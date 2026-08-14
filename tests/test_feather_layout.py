@@ -15,17 +15,18 @@ PLUGINS = (pathlib.Path(__file__).parents[1] / ".py" / "klipper" /
 sys.path.insert(0, str(PLUGINS))
 
 from ui import (  # noqa: E402
-    EMPTY, FLEX, Button, ButtonStyle, Column, Command, CommandKey, Equal,
-    FALLBACK_THEME, FeatherRenderer, Fill, Flex, Grid, Overlay, Override,
-    PageKey, PageTree, Rect, Spacer, StateKey, Text, ThemeColor, ThemeRole,
-    Tree, resolve_theme,
-    WrapPanel, bind, state, subdivision_positions,
+    EMPTY, FLEX, ArrowButton, Back, Button, ButtonStyle, Column, Command,
+    CommandKey, Equal, FALLBACK_THEME, FeatherRenderer, Fill, Flex, Grid,
+    NumericKeypad, Overlay, Override, PageKey, PageTree, Rect, Spacer,
+    StateCase, StateKey, Text, ThemeColor, ThemeRole, ToggleSwitch, Tree,
+    WrapPanel, bind, resolve_theme, state, subdivision_positions,
 )
 from ff5m_ui.move import runtime as move  # noqa: E402
 from ff5m_ui.move import geometry as move_geometry  # noqa: E402
 from ff5m_ui.heat import runtime as heat  # noqa: E402
 from ff5m_ui.filament import runtime as filament  # noqa: E402
 from ff5m_ui.z_offset import runtime as z_offset  # noqa: E402
+from ui.reflection import reflect_page  # noqa: E402
 
 
 class TestPage(PageKey):
@@ -67,6 +68,53 @@ class RectLayoutTest(unittest.TestCase):
         self.assertEqual(positions[0][2], -1)
         self.assertEqual(positions[4][2], 0)
         self.assertEqual(positions[-1][2], -1)
+
+
+class FrameworkAuthoringContractTest(unittest.TestCase):
+    def test_new_semantic_components_render_through_existing_primitives(self):
+        page = PageTree(
+            Overlay(
+                ArrowButton(Back(), direction="down").ref("next"),
+                ToggleSwitch(Back(), active=True).ref("toggle"),
+            ), Rect(0, 0, 120, 80), page_id=TestPage.LAYOUT)
+
+        drawing = "\n".join(page.draw(FeatherRenderer()))
+
+        self.assertIn("--id 0:nav.back", drawing)
+        self.assertIn("--batch hitbox", drawing)
+
+    def test_state_case_and_explicit_actions_are_portable_page_contracts(self):
+        external_action = Command(TestCommand.THREE)
+        page = PageTree(
+            StateCase(
+                Text("A").ref("first"),
+                selector=bind(TestState.LEFT), expected="A",
+            ).ref("case"),
+            Rect(0, 0, 120, 80), page_id=TestPage.LAYOUT,
+            actions=(external_action,))
+
+        visible = reflect_page(page)
+        hidden = reflect_page(page, {TestState.LEFT: "B"})
+
+        self.assertTrue(visible["tree"]["visible"])
+        self.assertFalse(hidden["tree"]["visible"])
+        self.assertIs(page.resolve_action(external_action.wire_id),
+                      external_action)
+        self.assertEqual(page.metadata_source_contract.as_dict(), {
+            "strategy": "core.module_page_assignments",
+            "fields": ["title", "show_back"],
+        })
+
+    def test_creation_contracts_publish_stable_refs_and_compound_actions(self):
+        fill = Fill.creation_contract.as_dict()
+        keypad = NumericKeypad.creation_contract.as_dict()
+
+        self.assertTrue(fill["fields"][0]["required"])
+        self.assertEqual(fill["source"]["identity"]["method"], "ref")
+        action_map = next(
+            field for field in keypad["fields"] if field["name"] == "actions")
+        self.assertTrue(action_map["required"])
+        self.assertEqual(action_map["editor"]["kind"], "semantic_action_map")
 
 
 class DeclarativeContainerTest(unittest.TestCase):

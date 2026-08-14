@@ -50,7 +50,9 @@ class FrameworkContractTest(unittest.TestCase):
         self.assertIn("binding-source-authoring", ui.FRAMEWORK_CAPABILITIES)
         for name in (
                 "ThemeColor", "ThemeRole", "FeatherRenderer", "PageKey",
-                "Action", "StateStore", "DeclarativePage", "Button"):
+                "Action", "StateStore", "DeclarativePage", "Button",
+                "ArrowButton", "ToggleSwitch", "EditText", "StateCase",
+                "CreationIdentityContract", "RenderReceipt"):
             self.assertTrue(hasattr(ui, name), name)
         self.assertTrue((PLUGINS / "ui" / "themes" / "theme.schema.json").is_file())
 

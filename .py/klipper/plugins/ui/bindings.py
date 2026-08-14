@@ -90,7 +90,8 @@ BINDING_EXPRESSION_CONTRACT = BindingExpressionContract(
     ("inline_lambda", "same_module_single_return"),
     (
         "Expression", "BoolOp", "BinOp", "UnaryOp", "IfExp", "Compare",
-        "Name", "Load", "Constant", "Attribute", "Tuple", "List", "Dict",
+        "Name", "Load", "Constant", "Attribute", "Subscript", "Slice",
+        "Tuple", "List", "Dict",
         "Set", "JoinedStr", "FormattedValue", "And", "Or", "Not", "UAdd",
         "USub", "Add", "Sub", "Mult", "Div", "FloorDiv", "Mod", "Pow",
         "Eq", "NotEq", "Lt", "LtE", "Gt", "GtE", "Is", "IsNot", "In",

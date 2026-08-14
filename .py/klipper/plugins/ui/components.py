@@ -12,7 +12,7 @@ from .actions import Action, action_wire_id
 from .bindings import resolve, resolve_deep
 from .font_metrics import get_font_metrics
 from .layout import (
-    CreationContract, CreationSourceContract, Node, Rect,
+    CreationContract, CreationIdentityContract, CreationSourceContract, Node, Rect,
     subdivision_positions,
 )
 from .numeric_input import NumericInputSpec
@@ -224,6 +224,62 @@ class Button(Component):
         return renderer.button(
             resolve(self.action, state), *bounds,
             resolve(self.label, state), **kwargs)
+
+
+class ArrowButton(Component):
+    """Theme-aware vertical paging button rendered as geometry."""
+
+    covers_bounds = True
+    property_schema = property_schema(
+        _property(
+            "action", Action, None, kind="semantic_action",
+            group="Behavior", bindings=(), live=False),
+        _select("direction", ("up", "down"), "up", group="Content"),
+        _select(
+            "state", ("enabled", "disabled", "busy"), "enabled",
+            group="Behavior"))
+
+    def __init__(self, action, direction="up", state="enabled", key=None):
+        super().__init__(key=key)
+        if not isinstance(action, Action):
+            raise TypeError("ArrowButton action must be a semantic Action")
+        if direction not in ("up", "down"):
+            raise ValueError("ArrowButton direction must be 'up' or 'down'")
+        self.action = action
+        self.direction = direction
+        self.state = state
+
+    def draw(self, renderer, state, bounds):
+        return renderer.arrow_button(
+            resolve(self.action, state), *bounds,
+            direction=resolve(self.direction, state),
+            state=resolve(self.state, state))
+
+
+class ToggleSwitch(Component):
+    """Rectangular boolean switch with renderer-owned hitbox and animation."""
+
+    covers_bounds = True
+    property_schema = property_schema(
+        _property(
+            "action", Action, None, kind="semantic_action",
+            group="Behavior", bindings=(), live=False),
+        _property("active", bool, False, kind="checkbox", group="Behavior"),
+        _property("enabled", bool, True, kind="checkbox", group="Behavior"))
+
+    def __init__(self, action, active=False, enabled=True, key=None):
+        super().__init__(key=key)
+        if not isinstance(action, Action):
+            raise TypeError("ToggleSwitch action must be a semantic Action")
+        self.action = action
+        self.active = active
+        self.enabled = enabled
+
+    def draw(self, renderer, state, bounds):
+        return renderer.toggle(
+            resolve(self.action, state), *bounds,
+            active=resolve(self.active, state),
+            enabled=resolve(self.enabled, state))
 
 
 class Hitbox(Component):
@@ -887,12 +943,16 @@ def _action_creation(name="action", required=True):
             catalog="actions"), bindings=(), nullable=not required)
 
 
-def _publish_creation(component, names=(), extra=(), category="Components"):
+def _publish_creation(component, names=(), extra=(), category="Components",
+                      required=()):
     specs = {item.name: item for item in component.property_schema}
+    required = set(str(value) for value in required)
     component.creation_contract = CreationContract(
         category, fields=tuple(extra) + tuple(
-            _creation_field(specs[name]) for name in names),
-        source=CreationSourceContract("core.keyword_call"))
+            _creation_field(specs[name], required=name in required)
+            for name in names),
+        source=CreationSourceContract(
+            "core.keyword_call", identity=CreationIdentityContract()))
 
 
 _publish_property_source_positions(Fill, color=0)
@@ -900,6 +960,10 @@ _publish_property_source_positions(Stroke, color=0, line_width=1)
 _publish_property_source_positions(Panel, border=0, background=1, line_width=2)
 _publish_property_source_positions(Section, title=0, border=1)
 _publish_property_source_positions(Button, action=0, label=1, state=2)
+_publish_property_source_positions(
+    ArrowButton, action=0, direction=1, state=2)
+_publish_property_source_positions(
+    ToggleSwitch, action=0, active=1, enabled=2)
 _publish_property_source_positions(Hitbox, action=0, continuous=1)
 _publish_property_source_positions(
     Text, value=0, color=1, font=2, horizontal=3, vertical=4, auto_height=6)
@@ -925,15 +989,33 @@ _publish_property_source_positions(
     Dialog, title=0, lines=1, buttons=2, tone=3, modal=4)
 
 
-_publish_creation(Fill, ("color",))
+_publish_creation(Fill, ("color",), required=("color",))
 _publish_creation(Stroke, ("color", "line_width"))
 _publish_creation(Panel, ("border", "background", "line_width"))
 _publish_creation(Section, ("title", "border"))
-_publish_creation(Button, ("label", "state", "font"), (_action_creation(),))
+_publish_creation(Button, (
+    "label", "subtitle", "font", "state", "accent", "button_layout"),
+    (_action_creation(),))
+_publish_creation(ArrowButton, ("direction", "state"), (_action_creation(),))
+_publish_creation(ToggleSwitch, ("active", "enabled"), (_action_creation(),))
 _publish_creation(Hitbox, ("continuous",), (_action_creation(),))
 _publish_creation(Text, (
-    "value", "font", "color", "horizontal", "vertical", "auto_height"))
+    "value", "font", "color", "horizontal", "vertical", "max_width",
+    "max_height", "wrap", "truncate", "auto_height"))
 _publish_creation(Metric, ("label", "value", "unit"))
+_publish_creation(NumericKeypad, (
+    "title", "value", "subtitle", "mode", "minimum", "maximum",
+    "max_length", "fraction_digits", "confirm_label", "border",
+    "background", "title_color", "subtitle_color", "input_border",
+    "value_color"), (
+        CreationFieldSpec(
+            "actions", dict, required=True,
+            editor=EditorSpec(
+                "semantic_action_map", label="Key actions", group="Behavior",
+                keys=tuple("0123456789") + (
+                    "decimal", "backspace", "confirm")),
+            bindings=()),
+    ), required=("title", "value"))
 _publish_creation(DotGrid, ("columns", "rows", "color"))
 _publish_creation(CornerMarks, ("length", "color"))
 _publish_creation(Crosshair, ("color",))
