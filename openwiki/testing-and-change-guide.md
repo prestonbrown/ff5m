@@ -198,6 +198,15 @@ video. A periodic snapshot reads the active framebuffer once and stores only
 minimal timeline metadata; it does not wait for the UI to become visually
 quiet. If the previous periodic snapshot is still pending, the next tick is
 skipped instead of building an artifact backlog inside the Klipper process.
+A periodic tick is also skipped while the toolhead has queued move time or an
+unfinished lookahead, and while the operation context reports a state that
+drives the toolhead against the bed: `HOMING`, `PROBING`, `LEVELING`,
+`CHECKING MESH`, or `TARING`. Reading 1.5 MiB from the framebuffer during those
+states competes with Klipper for the host and can end the run with an MCU
+"Timer too close" shutdown. Every accepted semantic, stage, or periodic capture
+first writes a `CAPTURE_QUEUED <label> eventtime=<t>` line to `run.log`, so a
+post-mortem can distinguish a queued request from one the guard declined. The
+reactor counters described below record whether the worker actually started it.
 The worker writes each BMP as a small header plus the framebuffer payload and
 publishes `manifest.json` once during finalization. It deliberately does not
 fsync and rewrite the growing manifest after every periodic frame, because
@@ -208,7 +217,14 @@ files. Each completed capture is appended immediately, without `fsync`, to
 `artifact_timing.csv`. Its queued, worker-started, and worker-finished wall and
 monotonic timestamps, queue delay, duration, kind, phase, and page survive a
 later Klipper failure and distinguish scheduling delay from framebuffer and
-file work.
+file work. The kind separates the three request paths: `semantic` for a test
+step's own capture, `stage` for one the printer's operation context triggered,
+and `periodic` for the timeline interval.
+Settled semantic and stage captures wait for a quiet framebuffer by comparing
+the interpreter's own `hash()` of each sampled frame, not a digest: SHA-256 is
+computed exactly once, on the frame the loop finally accepts. The printer's
+Python is built without `zlib`, so `crc32` is unavailable, and hashing 1.5 MiB
+per 50 ms sample on the Cortex-A7 is host time taken from Klipper.
 Use `--screen-capture-interval <seconds>` to select an interval from 5 to 300
 seconds, or `--screen-capture-interval 0` to keep semantic captures only.
 Capture remains inside the lazy test runner and its existing background
@@ -218,7 +234,14 @@ While a suite is active, the host records `telemetry.jsonl` at 1 Hz by
 default. Each timestamped sample contains the live XYZ position and velocity,
 homed axes, nozzle and bed temperatures/targets/power, print state and
 progress, Feather page/generation, current suite/phase/step, and semantic
-operation context. `--telemetry-rate <hz>` accepts 1-10 Hz, while
+operation context. Each sample also records the motion buffer margin
+(`toolhead.print_time` minus `estimated_print_time`), Klipper's `stalls`
+counter, and the MCU's own `last_stats` load (`mcu_awake`, `mcu_task_avg`,
+`bytes_retransmit`, `srtt`). Those are the host-side numbers that describe how
+close a run came to a "Timer too close" shutdown, and they survive it because
+the recorder flushes every line. A printer that publishes no `[mcu]` status
+records a `null` block rather than failing the sample.
+`--telemetry-rate <hz>` accepts 1-10 Hz, while
 `--telemetry-rate 0` disables collection. Physical suites reject rates above
 1 Hz because every query executes object status callbacks in the Klipper
 reactor; higher rates remain available for non-physical UI, component, and
@@ -247,16 +270,44 @@ Typer itself. The sampler neither imports nor calls Klipper and therefore keeps
 recording if the Klipper process or reactor fails. The host owns one persistent
 foreground SSH transport for the sampler instead of repeatedly opening
 Dropbear sessions, stops that exact local process after the physical suite,
-copies the exact remote file, and removes it only after the local header is
-verified. Preflight, launch ownership, active waiting, and post-suite safety
+copies the exact remote file, and removes it only after the local file is
+verified to carry both the expected header and at least one sample row — a
+header-only file means the printer-side pass never produced anything and is
+reported as a failure rather than as an idle host.
+Preflight, launch ownership, active waiting, and post-suite safety
 observation use Moonraker and do not open additional SSH sessions.
+
+Because this sampler observes host overload, its own cost is part of the
+measurement. Each iteration therefore spawns one awk pass, one `tr` per Python
+process it inspects, and `sleep`: the wall clock is anchored once with
+`date` and advanced from the `/proc/uptime` delta, and every value in the row —
+system memory and CPU ticks plus each process's `stat`, `status`, `schedstat`,
+`io` and `wchan` — is produced by that awk pass in
+`.shell/printer_resource_sample.awk`. That awk pass takes its tree from `root`,
+so `tests/test_printer_resource_monitor.py` runs it against a `/proc` fixture;
+the shell loop itself only gets a syntax check and a guard that no new command
+substitution appears inside it. Classification stays in the shell because
+busybox awk truncates strings at the NUL separators `/proc/<pid>/cmdline` uses,
+which would make every Python process look identical to it.
+
+`--no-resource-monitor` leaves the sampler out entirely and records the report's
+resource status as `disabled`. Because the sampler is the only observer that
+runs for the whole run — and even in its reduced form it reads the Klipper
+process's `status` and `wchan` every second — excluding it is how a host
+overload investigation isolates its cost from the capture and telemetry paths.
 
 While the hidden test runner is active, a temporary 5 Hz reactor timer measures
 its own scheduling lag. It aggregates one row per second into `reactor.csv`
 through the existing artifact worker: average/max lag, longest callback
 interval, exact eventtimes for both maxima, current phase/step, pending capture
-state, sample count, and missed 200 ms deadlines. The timer is owned by the
-single `UITestRun`, returns an explicit next wake time, and is unregistered on
+state, sample count, and missed 200 ms deadlines. Each row also carries the
+worker's cumulative `captures_queued`, `captures_started`, and
+`captures_finished` counts. `queued > started` means a request was still
+waiting in the artifact queue; `started > finished` means framebuffer work had
+actually begun while the reactor was late. This is evidence
+`artifact_timing.csv` cannot give for an interrupted capture, because its row
+is written only after the capture returns. The timer is owned by the single
+`UITestRun`, returns an explicit next wake time, and is unregistered on
 completion, setup failure, or deactivation. It is not active during normal
 Feather operation.
 

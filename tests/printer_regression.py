@@ -86,11 +86,13 @@ EVENT_STALL_TIMEOUT = 30.0
 PROGRESS_INTERVAL = 10.0
 LINUX_USER_HZ = 100.0
 TELEMETRY_QUERY = (
-    "/printer/objects/query?toolhead=homed_axes,position"
+    "/printer/objects/query?toolhead=homed_axes,position,print_time,"
+    "estimated_print_time,stalls"
     "&motion_report=live_position,live_velocity,live_extruder_velocity"
     "&extruder=temperature,target,power"
     "&heater_bed=temperature,target,power"
     "&print_stats=state,filename&virtual_sdcard=progress"
+    "&mcu=last_stats"
     "&feather_screen=page,generation,context_path,context_types,"
     "current_state,ui_test"
 )
@@ -264,6 +266,45 @@ class TelemetryRecorder:
             "power": _finite_number(status.get("power")),
         }
 
+    @staticmethod
+    def _buffer(toolhead):
+        # "Timer too close" fires when the host stops feeding the MCU ahead of
+        # time, so the only host-side number that describes how close the run
+        # came to that is the lookahead margin: print_time is how far the queue
+        # is planned to, estimated_print_time is where the MCU clock is now.
+        # Klipper shuts the MCU down when the margin runs out, and `stalls`
+        # counts the lookahead already having run dry.  Both are idle-valued
+        # between moves, hence recorded raw instead of interpreted here.
+        planned = _finite_number(toolhead.get("print_time"))
+        elapsed = _finite_number(toolhead.get("estimated_print_time"))
+        margin = None
+        if planned is not None and elapsed is not None:
+            margin = round(planned - elapsed, 6)
+        return {
+            "print_time": planned,
+            "estimated_print_time": elapsed,
+            "margin": margin,
+            "stalls": _finite_number(toolhead.get("stalls")),
+        }
+
+    @staticmethod
+    def _mcu(mcu):
+        # mcu.last_stats is the MCU's own view of the same overload: mcu_awake
+        # and mcu_task_avg say how loaded the microcontroller was, srtt and
+        # bytes_retransmit say whether the serial link was the bottleneck
+        # instead.  The object is absent on hosts that expose no [mcu] status,
+        # so a missing block is recorded as None rather than treated as an
+        # invalid snapshot.
+        stats = mcu.get("last_stats") if isinstance(mcu, dict) else None
+        if not isinstance(stats, dict):
+            return None
+        return {
+            "awake": _finite_number(stats.get("mcu_awake")),
+            "task_avg": _finite_number(stats.get("mcu_task_avg")),
+            "bytes_retransmit": _finite_number(stats.get("bytes_retransmit")),
+            "srtt": _finite_number(stats.get("srtt")),
+        }
+
     def _record(self, observed, test):
         toolhead = observed.get("toolhead", {})
         motion = observed.get("motion_report", {})
@@ -315,6 +356,8 @@ class TelemetryRecorder:
                 motion.get("live_extruder_velocity")),
             "nozzle": self._heater(extruder),
             "bed": self._heater(bed),
+            "buffer": self._buffer(toolhead),
+            "mcu": self._mcu(observed.get("mcu", {})),
             "context": {
                 "path": [str(item) for item in context_path],
                 "types": [str(item) for item in context_types],
@@ -741,11 +784,20 @@ class ResourceMonitor:
         try:
             with destination.open(encoding="utf-8") as stream:
                 header = stream.readline().strip()
+                first_row = stream.readline().strip()
         except OSError as exc:
             raise RegressionError(
                 "printer resource monitor artifact is invalid") from exc
         if not header.startswith("epoch\tuptime\tload1\t"):
             raise RegressionError("printer resource monitor artifact is invalid")
+        # The sampler writes the header before its loop, so a file that carries
+        # only a header means the sampling pass itself never produced anything
+        # on this printer.  Without this check that failure reads as "the
+        # sampler ran and the host was idle", which is the one conclusion the
+        # report must never invent.
+        if not first_row:
+            raise RegressionError(
+                "printer resource monitor recorded no samples")
         try:
             self.connection.ssh(
                 "rm -f %s && test ! -e %s" % (self.remote, self.remote),
@@ -1654,7 +1706,13 @@ class RegressionRun:
                 self.output, self.args.telemetry_rate,
                 self.client.telemetry_snapshot,
                 clock=self.clock, wall_clock=self.wall_clock)
-        if self.resource_monitor is None and self.connection is not None:
+        if self.args.no_resource_monitor:
+            # Declared rather than silently skipped, so the report cannot read
+            # like the sampler ran and observed nothing.  Clearing the monitor
+            # here keeps one owner for "is it running" below.
+            self.resource_monitor = None
+            self.report["resources"] = {"status": "disabled", "file": None}
+        elif self.resource_monitor is None and self.connection is not None:
             self.resource_monitor = ResourceMonitor(
                 self.connection, self.output,
                 len(self.specs) * self.args.run_timeout + 120.0,
@@ -1830,6 +1888,11 @@ def _arguments(argv=None):
         "--connection-timeout", type=_positive_seconds, default=10)
     parser.add_argument("--output")
     parser.add_argument("--no-camera", action="store_true")
+    parser.add_argument(
+        "--no-resource-monitor", action="store_true",
+        help="skip the printer-side /proc sampler; it is the only observer "
+             "that runs for the whole run, so leaving it out isolates its own "
+             "cost when bisecting host overload")
     parser.add_argument(
         "--confirm-unattended-physical-test", action="store_true",
         help="confirm an observed idle printer, prepared bed, and unattended "

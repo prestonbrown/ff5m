@@ -35,6 +35,16 @@ CAPTURE_RECEIPT_TIMEOUT = 6.0
 TAP_OPERATION_TIMEOUT = 1900.0
 REACTOR_PROBE_INTERVAL = 0.2
 REACTOR_PROBE_FLUSH_INTERVAL = 1.0
+# Operation states that drive the toolhead against the bed.  A framebuffer
+# capture during one of these competes with Klipper for the host, so periodic
+# captures wait.  The names are the ones the macros and plugins actually
+# publish: PROBING and LEVELING from [gcode_macro] bed_screws/bed_level,
+# "CHECKING MESH" from the mesh validation macro, and TARING from the load cell
+# probe in feather_z_calibration.  HOMING is included because _HOME_IF_NEEDED
+# publishes it before several of these.
+PROBING_STATES = frozenset((
+    "HOMING", "PROBING", "LEVELING", "CHECKING MESH", "TARING",
+))
 PERSISTENT_ACTIONS = frozenset((
     "cal.mesh.save", "cal.tuning.save", "z.save", "live_z.save",
     "live_z.save.yes", "mod.apply", "mod.save", "error.restart",
@@ -157,6 +167,12 @@ class UITestRun:
         except Exception:
             logging.exception("[feather_ui_test] unable to snapshot stage")
             return
+        # Stage captures settle the framebuffer like semantic ones but are
+        # driven by the printer's own operation context, not by a test step.
+        # artifact_timing.csv has to separate the two, or a cost measured
+        # there cannot be attributed to a capture path.
+        metadata["capture_kind"] = "stage"
+        self._event("CAPTURE_QUEUED %s eventtime=%.6f" % (label, eventtime))
         self.worker.capture(number, label, metadata,
                             self._stage_capture_finished)
 
@@ -177,7 +193,7 @@ class UITestRun:
             state = str(operation.get("current_state") or "").upper()
         except Exception as exc:
             return "operation state unavailable: %s" % exc
-        if state in ("HOMING", "PROBING", "LEVELING"):
+        if state in PROBING_STATES:
             return "operation state %s" % state
         return None
 
@@ -278,7 +294,8 @@ class UITestRun:
                  "average_lag_ms", "max_lag_ms", "max_lag_eventtime",
                  "max_interval_ms", "max_interval_eventtime",
                  "missed_deadlines", "samples", "phase", "step_index",
-                 "step", "periodic_capture_pending"),
+                 "step", "periodic_capture_pending", "captures_queued",
+                 "captures_started", "captures_finished"),
                 {
                     "time": time.time(), "eventtime": eventtime,
                     "scheduled": scheduled, "lag_ms": lag * 1000.0,
@@ -298,6 +315,9 @@ class UITestRun:
                     "step": None if step is None else step.get("label"),
                     "periodic_capture_pending": (
                         self.periodic_capture_pending),
+                    "captures_queued": self.worker.captures_queued,
+                    "captures_started": self.worker.captures_started,
+                    "captures_finished": self.worker.captures_finished,
                 })
             self.reactor_probe_window = eventtime
             self.reactor_probe_samples = 0

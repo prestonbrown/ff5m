@@ -569,6 +569,33 @@ class OrchestrationTest(unittest.TestCase):
         self.assertEqual(report["camera"]["status"], "disabled")
         self.assertEqual(report["warnings"], [])
 
+    def test_no_resource_monitor_option_declares_the_missing_sampler(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            output = pathlib.Path(temporary) / "run"
+            args = arguments(output, suite="core",
+                             extra=("--no-resource-monitor",))
+
+            class Sampler:
+                @staticmethod
+                def start():
+                    raise AssertionError("resource monitor was started")
+
+            run = REGRESSION.RegressionRun(
+                args, client=FakeClient(), media=FakeMedia(),
+                telemetry=FakeTelemetry(args.telemetry_rate),
+                resource_monitor=Sampler(), progress=lambda _message: None)
+            with mock.patch.object(
+                    REGRESSION, "_host_preflight",
+                    side_effect=fake_host_preflight):
+                report, _output = run.run()
+
+        # The /proc sampler is the only observer that runs for the whole run,
+        # so leaving it out has to read as a deliberate exclusion instead of a
+        # sampler that ran and collected nothing.
+        self.assertEqual(report["resources"]["status"], "disabled")
+        self.assertEqual(
+            [item for item in report["warnings"] if "resource" in item], [])
+
     def test_zero_telemetry_rate_does_not_query_printer(self):
         with tempfile.TemporaryDirectory() as temporary:
             client = FakeClient()
@@ -735,7 +762,8 @@ class ResourceMonitorTest(unittest.TestCase):
                 @staticmethod
                 def command_runner(command, **_kwargs):
                     pathlib.Path(command[-1]).write_text(
-                        "epoch\tuptime\tload1\tmem_available_kb\n",
+                        "epoch\tuptime\tload1\tmem_available_kb\n"
+                        "1770000000\t12345.67\t1.42\t45120\n",
                         encoding="utf-8")
                     return subprocess.CompletedProcess(command, 0, "", "")
 
@@ -773,6 +801,46 @@ class ResourceMonitorTest(unittest.TestCase):
         self.assertEqual(popen_commands[0][-3:], [monitor.remote, "1", "124"])
         self.assertTrue(process.terminated)
         self.assertIn(monitor.remote, commands[0][0])
+
+    def test_monitor_rejects_an_artifact_that_holds_no_samples(self):
+        # The header is written before the sampling loop, so a header-only file
+        # means the printer-side pass never emitted a row.  That has to surface
+        # as a failure: a report that shows an empty resource timeline reads as
+        # "the host was idle", which is the opposite conclusion.
+        with tempfile.TemporaryDirectory() as temporary:
+            output = pathlib.Path(temporary)
+
+            class Connection:
+                ssh_target = "root@printer.invalid"
+                scp_target = "root@printer.invalid"
+
+                @staticmethod
+                def ssh(command, timeout=None):
+                    del command, timeout
+                    return ""
+
+                @staticmethod
+                def command_runner(command, **_kwargs):
+                    pathlib.Path(command[-1]).write_text(
+                        "epoch\tuptime\tload1\tmem_available_kb\n",
+                        encoding="utf-8")
+                    return subprocess.CompletedProcess(command, 0, "", "")
+
+            class Process:
+                returncode = 0
+
+                def poll(self):
+                    return self.returncode
+
+            monitor = REGRESSION.ResourceMonitor(
+                Connection(), output, 10.0, clock=lambda: 1000.0,
+                popen=lambda *_args, **_kwargs: Process(),
+                sleeper=lambda _delay: None)
+            monitor.process = Process()
+            with self.assertRaises(REGRESSION.RegressionError) as caught:
+                monitor.finish()
+
+        self.assertIn("no samples", str(caught.exception))
 
 
 class TelemetryContractTest(unittest.TestCase):
@@ -952,6 +1020,45 @@ class TelemetryContractTest(unittest.TestCase):
         self.assertEqual(record["homed_axes"], "XYZ")
         self.assertEqual(record["test"]["step"], "cold_pull-open")
         self.assertEqual(record["context"]["state"], "COOLING NOZZLE")
+        # A printer that publishes no [mcu] status still has to produce a valid
+        # record, and an absent lookahead reads as unknown rather than zero.
+        self.assertIsNone(record["mcu"])
+        self.assertIsNone(record["buffer"]["margin"])
+
+    def test_recorder_keeps_the_lookahead_margin_and_mcu_load(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            output = pathlib.Path(temporary)
+            recorder = REGRESSION.TelemetryRecorder(
+                output, 5.0,
+                snapshot=lambda: {
+                    "toolhead": {
+                        "homed_axes": "xyz", "position": [9, 8, 7, 0],
+                        "print_time": 812.5, "estimated_print_time": 811.25,
+                        "stalls": 3,
+                    },
+                    "motion_report": {},
+                    "extruder": {}, "heater_bed": {},
+                    "print_stats": {"state": "standby"},
+                    "virtual_sdcard": {},
+                    "mcu": {"last_stats": {
+                        "mcu_awake": 0.412, "mcu_task_avg": 0.000031,
+                        "bytes_retransmit": 12, "srtt": 0.002,
+                    }},
+                    "feather_screen": {"page": "IDLE_HOME"},
+                }, clock=lambda: 10.0, wall_clock=lambda: 1000.0)
+            recorder.start(10.0)
+            recorder.sample({})
+            recorder.finish()
+            record = json.loads(
+                (output / "telemetry.jsonl").read_text(encoding="utf-8"))
+
+        # "Timer too close" is the host running out of planned move time, so the
+        # margin between print_time and the MCU clock is the number that has to
+        # survive the shutdown in the report.
+        self.assertAlmostEqual(record["buffer"]["margin"], 1.25)
+        self.assertEqual(record["buffer"]["stalls"], 3)
+        self.assertAlmostEqual(record["mcu"]["awake"], 0.412)
+        self.assertEqual(record["mcu"]["bytes_retransmit"], 12)
 
     def test_recorder_failure_is_reported_without_raising(self):
         with tempfile.TemporaryDirectory() as temporary:

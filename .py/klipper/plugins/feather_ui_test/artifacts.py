@@ -87,6 +87,17 @@ class ArtifactWorker:
         self.tasks = queue.SimpleQueue()
         self.records = []
         self.log_start = self._file_size(printer_log)
+        # Cumulative capture accounting, so a reactor sample can distinguish a
+        # queued request from framebuffer work that actually started while the
+        # reactor was late.  Only the reactor thread advances captures_queued;
+        # only the artifact thread advances captures_started and
+        # captures_finished, so none of the counters needs a lock.  The
+        # per-capture artifact_timing.csv row is written only after a capture
+        # returns and therefore cannot describe one interrupted by an MCU
+        # shutdown.
+        self.captures_queued = 0
+        self.captures_started = 0
+        self.captures_finished = 0
         self.thread = threading.Thread(
             target=self._work, name="feather-ui-artifacts")
         self.thread.daemon = True
@@ -119,6 +130,7 @@ class ArtifactWorker:
         self.tasks.put(("telemetry", (name, fields, values), None))
 
     def capture(self, number, label, metadata, callback, settle=True):
+        self.captures_queued += 1
         self.tasks.put((
             "capture", (
                 number, label, metadata, bool(settle),
@@ -149,6 +161,7 @@ class ArtifactWorker:
                     continue
                 if kind == "capture":
                     capture_started = (time.time(), time.monotonic())
+                    self.captures_started += 1
                     value = self._capture(*payload[:4])
                 elif kind == "finish":
                     value = self._finish(payload)
@@ -191,6 +204,7 @@ class ArtifactWorker:
                         "[feather_ui_test] capture timing write failed")
                     if not isinstance(value, Exception):
                         value = exc
+                self.captures_finished += 1
             if callback is not None:
                 self._reactor_callback(callback, value)
 
@@ -308,21 +322,30 @@ class ArtifactWorker:
         data = None
         while True:
             data = self._read_frame()
-            digest = hashlib.sha256(data).hexdigest()
+            # Settling only needs to notice that the framebuffer moved, so it
+            # uses the interpreter's own bytes hash: it runs in C over the
+            # whole frame, costs a fraction of SHA-256 on the printer's
+            # Cortex-A7 and keeps one integer instead of a second 1.5 MiB
+            # frame to diff against.  zlib is absent from this Python build,
+            # so crc32 is not available here.  The value is process-local by
+            # design; the published digest is still SHA-256, taken once below
+            # on the frame the loop accepts.
+            token = hash(data)
             now = time.monotonic()
-            if digest != previous:
-                previous = digest
+            if token != previous:
+                previous = token
                 changed_at = now
             elif now - changed_at >= FRAME_SETTLE_INTERVAL:
-                return data, digest
+                break
             if now >= deadline:
-                return data, digest
+                break
             # Typer may still be consuming later protocol frames after the
             # render worker has completed its FIFO writes.  Require a quiet
             # framebuffer window instead of accepting the first equal pair;
             # this wait belongs only to the artifact thread, never Klipper's
             # reactor.
             time.sleep(FRAME_SAMPLE_INTERVAL)
+        return data, hashlib.sha256(data).hexdigest()
 
     @staticmethod
     def _bmp_header(data_size):

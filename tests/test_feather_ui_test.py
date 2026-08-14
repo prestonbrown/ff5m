@@ -68,6 +68,29 @@ class ArtifactWorkerTest(unittest.TestCase):
         self.assertEqual(worker._read_frame.call_count, 6)
         self.assertEqual(sleep.call_count, 5)
 
+    def test_settling_hashes_only_the_frame_it_accepts(self):
+        worker = object.__new__(ARTIFACTS.ArtifactWorker)
+        frames = [b"first", b"first", b"second", b"second",
+                  b"second", b"second"]
+        worker._read_frame = mock.Mock(side_effect=frames)
+        real_sha256 = ARTIFACTS.hashlib.sha256
+
+        with mock.patch.object(ARTIFACTS, "FRAME_SETTLE_INTERVAL", 0.15), \
+                mock.patch.object(ARTIFACTS, "FRAME_SETTLE_TIMEOUT", 2.0), \
+                mock.patch.object(ARTIFACTS.time, "monotonic", side_effect=(
+                    0.0, 0.0, 0.05, 0.10, 0.15, 0.20, 0.25, 0.30)), \
+                mock.patch.object(ARTIFACTS.time, "sleep"), \
+                mock.patch.object(ARTIFACTS.hashlib, "sha256",
+                                  side_effect=real_sha256) as sha256:
+            data, digest = worker._stable_frame()
+
+        # Change detection must not cost a SHA-256 pass over 1.5 MiB per
+        # sample: the printer's Cortex-A7 shares its cores with Klipper, and
+        # the loop samples every 50 ms until the screen goes quiet.
+        self.assertEqual(sha256.call_count, 1)
+        self.assertEqual(data, b"second")
+        self.assertEqual(digest, real_sha256(b"second").hexdigest())
+
     def test_one_shot_capture_does_not_wait_for_a_quiet_framebuffer(self):
         worker = object.__new__(ARTIFACTS.ArtifactWorker)
         worker.run_directory = "/unused"
@@ -190,6 +213,64 @@ class ArtifactWorkerTest(unittest.TestCase):
             self.assertTrue(summary["operation_context"]["passed"])
             self.assertFalse(active.exists())
 
+    def test_capture_started_counter_brackets_frame_work(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = pathlib.Path(temporary)
+            run = root / "20260729-120000-ui"
+            run.mkdir()
+            printer_log = root / "printer.log"
+            printer_log.write_text("", encoding="utf-8")
+            worker = ARTIFACTS.ArtifactWorker(
+                AsyncReactor(), str(run), str(root / "unused-fb"),
+                str(printer_log))
+            started = threading.Event()
+            release = threading.Event()
+            done = threading.Event()
+
+            def capture(*_args):
+                started.set()
+                release.wait(3.0)
+                return {"file": "screen.bmp"}
+
+            worker._capture = capture
+            worker.capture(1, "held", {}, lambda _value: done.set())
+            self.assertEqual(worker.captures_queued, 1)
+            self.assertTrue(started.wait(3.0))
+            self.assertEqual(worker.captures_started, 1)
+            self.assertEqual(worker.captures_finished, 0)
+            release.set()
+            self.assertTrue(done.wait(3.0))
+            worker.stop()
+
+        self.assertEqual(worker.captures_finished, 1)
+
+    def test_capture_finished_counter_includes_failed_frame_work(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = pathlib.Path(temporary)
+            run = root / "20260729-120000-ui"
+            run.mkdir()
+            framebuffer = root / "fb0"
+            framebuffer.write_bytes(bytes(ARTIFACTS.FRAME_BYTES))
+            printer_log = root / "printer.log"
+            printer_log.write_text("", encoding="utf-8")
+
+            worker = ARTIFACTS.ArtifactWorker(
+                AsyncReactor(), str(run), str(framebuffer), str(printer_log))
+            results = []
+            done = threading.Event()
+            worker.capture(
+                1, "blank", {},
+                lambda value: (results.append(value), done.set()),
+                settle=False)
+            self.assertTrue(done.wait(3.0))
+            worker.stop()
+
+        # An all-zero framebuffer fails the capture. The finished counter still
+        # has to move, otherwise a failed capture and a hung one look the same.
+        self.assertIsInstance(results[0], Exception)
+        self.assertEqual(worker.captures_started, 1)
+        self.assertEqual(worker.captures_finished, 1)
+
     def test_retention_preserves_newest_failure(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = pathlib.Path(temporary)
@@ -259,6 +340,15 @@ class RunnerContractTest(unittest.TestCase):
             ("bed_level", "nozzle_clean"))
         self.assertEqual(
             run.calibration_stages[1]["context_path"], ("Bed Mesh",))
+        # Stage captures settle the framebuffer, so a post-mortem has to see
+        # that one was requested and be able to tell it from a semantic one.
+        logged = [str(call[0][0]) for call in run.worker.log.call_args_list]
+        self.assertEqual(
+            len([line for line in logged
+                 if line.startswith("CAPTURE_QUEUED")]), 2)
+        self.assertEqual(
+            run.worker.capture.call_args_list[0][0][2]["capture_kind"],
+            "stage")
 
     def test_tap_waits_for_active_gcode_before_advancing(self):
         callbacks = []
@@ -564,6 +654,35 @@ class RunnerContractTest(unittest.TestCase):
         self.assertNotIn(UI_TEST.z_actions.SAVE.wire_id, actions)
         self.assertFalse(any("pid" in label.lower() for label in labels))
 
+    def test_periodic_capture_waits_for_every_probing_operation_state(self):
+        class Toolhead:
+            @staticmethod
+            def check_busy(_eventtime):
+                # Idle toolhead: lookahead empty and no queued move time, so
+                # only the operation state can block the capture here.
+                return 0.0, 1.0, True
+
+        host = type("Host", (), {"reactor": None})()
+        host.toolhead = Toolhead()
+        state = {"current_state": None}
+        host._operation_context_status = lambda _eventtime: state
+        run = UI_TEST.UITestRun(host)
+
+        blocked = {}
+        for name in ("HOMING", "PROBING", "LEVELING", "CHECKING MESH",
+                     "TARING", "checking mesh"):
+            state["current_state"] = name
+            blocked[name] = run._periodic_capture_block_reason(1.0)
+        state["current_state"] = "PREPARING"
+        idle_reason = run._periodic_capture_block_reason(1.0)
+
+        # Every state that drives the toolhead against the bed must block a
+        # framebuffer capture, including the two-word one the mesh validation
+        # macro publishes and the load-cell TARING state.
+        for name, reason in blocked.items():
+            self.assertIsNotNone(reason, name)
+        self.assertIsNone(idle_reason)
+
     def test_reactor_probe_records_delay_and_unregisters_its_timer(self):
         telemetry = []
         unregistered = []
@@ -590,6 +709,9 @@ class RunnerContractTest(unittest.TestCase):
         run.worker = type("Worker", (), {
             "telemetry": lambda self, name, fields, values:
                 telemetry.append((name, fields, values)),
+            "captures_queued": 7,
+            "captures_started": 7,
+            "captures_finished": 6,
         })()
         run._start_reactor_probe()
         wake = run._reactor_probe_tick(11.45)
@@ -604,6 +726,15 @@ class RunnerContractTest(unittest.TestCase):
         self.assertEqual(telemetry[0][2]["max_interval_eventtime"], 11.45)
         self.assertEqual(telemetry[0][2]["phase"], "idle")
         self.assertIsNone(telemetry[0][2]["step"])
+        # A late reactor sample has to distinguish a queued request from frame
+        # work that actually started; artifact_timing.csv only gains its row
+        # once a capture returns, so an interrupted one leaves no trace there.
+        self.assertEqual(telemetry[0][2]["captures_queued"], 7)
+        self.assertEqual(telemetry[0][2]["captures_started"], 7)
+        self.assertEqual(telemetry[0][2]["captures_finished"], 6)
+        self.assertIn("captures_queued", telemetry[0][1])
+        self.assertIn("captures_started", telemetry[0][1])
+        self.assertIn("captures_finished", telemetry[0][1])
         self.assertEqual(unregistered, [timer])
 
     def test_ui_file_browser_returns_home_before_reopening_menu(self):
