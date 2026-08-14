@@ -75,7 +75,7 @@ EXACT_ACTIONS = {
         "operation.cancel.continue", "operation.cancel.force"),
     Page.CONTROL_MOVE: ("nav.back",),
     Page.CONTROL_HEAT: ("nav.back",),
-    Page.NETWORK_HOME: ("nav.back", "net.scan", "net.ethernet", "net.retry"),
+    Page.NETWORK_HOME: ("nav.back", "net.scan", "net.ethernet"),
     Page.WIFI_SCAN: ("nav.back", "net.prev", "net.next", "net.rescan"),
     Page.WIFI_PASSWORD: ("nav.back", "net.connect", "net.password.toggle"),
     Page.NETWORK_PROGRESS: ("net.cancel", "net.keep"),

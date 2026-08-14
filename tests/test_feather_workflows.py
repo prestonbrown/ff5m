@@ -2790,16 +2790,34 @@ class NetworkWorkflowTest(unittest.TestCase):
 
         self.assertEqual(sock.sent, [])
 
-    def test_reads_are_requested_from_the_daemon_never_computed(self):
+    def test_network_home_omits_retry_and_labels_selected_ethernet(self):
         controller = base_controller()
-        controller.page = FEATHER.Page.NETWORK_HOME
-        controller._render_network_home = lambda: None
-        sock = attach_network(controller)
+        controller.renderer = FEATHER.FeatherRenderer()
+        batches = []
+        controller.renderer.send = batches.append
+        attach_network(controller)
+        controller.network_status.update({
+            "mode": "ETHERNET", "state": "CONNECTED",
+            "ip": "192.168.2.124"})
 
-        controller._handle_network_action("net.retry")
+        controller._render_network_home()
 
-        self.assertEqual(sock.sent, ["GET"])
-        self.assertIsNone(controller.network_operation)
+        rendered = "\n".join(batches[-1])
+        self.assertNotIn("RETRY STATUS", rendered)
+        self.assertNotIn("net.retry", rendered)
+        self.assertIn("(ALREADY SELECTED)", rendered)
+        self.assertNotIn("net.ethernet", controller.renderer._buttons)
+
+        controller.renderer = FEATHER.FeatherRenderer()
+        controller.renderer.send = batches.append
+        controller.network_status.update({
+            "mode": "WIFI", "state": "CONNECTED", "ssid": "Workshop"})
+
+        controller._render_network_home()
+
+        rendered = "\n".join(batches[-1])
+        self.assertNotIn("(ALREADY SELECTED)", rendered)
+        self.assertIn("net.ethernet", controller.renderer._buttons)
 
     def test_boot_attempt_is_visible_as_state_not_as_a_marker_file(self):
         # A connect started at boot or from the CLI is simply CONNECTING in the

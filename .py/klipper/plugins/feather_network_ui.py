@@ -109,16 +109,14 @@ class FeatherNetworkPagesMixin:
         commands += self.renderer.button(
             "net.scan", 55, 190, 320, 150, "WI-FI", active=available,
             font="JetBrainsMono 12pt")
-        ethernet_available = not (
+        ethernet_selected = (
             status.get("mode") == "ETHERNET"
             and status.get("state") == "CONNECTED")
         commands += self.renderer.button(
             "net.ethernet", 425, 190, 320, 150, "ETHERNET DHCP",
-            active=available and ethernet_available,
-            font="JetBrainsMono 12pt")
-        commands += self.renderer.button(
-            "net.retry", 270, 365, 260, 60, "RETRY STATUS",
-            active=available)
+            active=available and not ethernet_selected,
+            font="JetBrainsMono 12pt",
+            subtitle="(ALREADY SELECTED)" if ethernet_selected else None)
         self.renderer.send(commands)
 
     def _open_network_page(self):
@@ -134,9 +132,6 @@ class FeatherNetworkPagesMixin:
     def _handle_network_action(self, action):
         if action in ("net.scan", "net.rescan"):
             self._start_scan()
-        elif action == "net.retry":
-            self._request_network_snapshot()
-            self._render_network_home()
         elif action == "net.ethernet":
             self._start_ethernet()
         elif action in ("net.prev", "net.next"):
