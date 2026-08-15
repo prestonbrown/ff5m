@@ -31,14 +31,42 @@ VAR_PATH="$MOD_DATA/variables.cfg"
 
 FLASHED_VERSION_F="$MOD"/version.txt
 VERSION_F=/opt/config/mod/version.txt
+FIRMWARE_VERSION_F=/root/version
+VERSION_PATCH_F=/tmp/version_patch
 
-LOAD_IMG_XZ="/opt/config/mod/load.img.xz"
-[ -f /opt/config/mod_data/load.img.xz ] && LOAD_IMG_XZ="/opt/config/mod_data/load.img.xz"
+SCREEN_THEME_BUILTIN_DIR="/opt/config/mod/.bin/themes"
+SCREEN_THEME_USER_DIR="/opt/config/mod_data/themes/splash"
+SPLASH_CONTROL_FIFO="/tmp/forge_x_splash_control"
 
-SPLASH_IMG_XZ="/opt/config/mod/splash.img.xz"
-[ -f /opt/config/mod_data/splash.img.xz ] && SPLASH_IMG_XZ="/opt/config/mod_data/splash.img.xz"
 
 PATH="$BINS:$PATH"
+
+screen_theme_name() {
+    if [ -f "$VAR_PATH" ]; then
+        "$CFG_SCRIPT" "$VAR_PATH" --get "feather_theme" "DEFAULT"
+    else
+        echo "DEFAULT"
+    fi
+}
+
+screen_theme_args() {
+    local theme
+    theme="$(screen_theme_name)"
+    [ -n "$theme" ] || theme="DEFAULT"
+
+    SCREEN_THEME_ARGS=(
+        --themes-path "$SCREEN_THEME_BUILTIN_DIR"
+        --themes-path "$SCREEN_THEME_USER_DIR"
+        --theme "$theme"
+    )
+}
+
+# All shell callers get the same theme lookup and override semantics without
+# repeating screen theme paths at every logging callsite.
+logged() {
+    screen_theme_args
+    "$BINS/logged" "${SCREEN_THEME_ARGS[@]}" "$@"
+}
 
 # One-shot shell screen rendering can run while another process (notably logged)
 # is mapped to a specific framebuffer page. Keep Typer double-buffered to avoid
