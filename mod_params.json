@@ -383,7 +383,7 @@
     {
       "key": "backlight",
       "type": "int",
-      "default": 50,
+      "default": 80,
       "label": "Screen brightness",
       "description": "Set normal display brightness percent.",
       "order": 50001
