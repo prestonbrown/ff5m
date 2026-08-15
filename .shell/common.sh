@@ -40,6 +40,14 @@ SPLASH_IMG_XZ="/opt/config/mod/splash.img.xz"
 
 PATH="$BINS:$PATH"
 
+# One-shot shell screen rendering can run while another process (notably logged)
+# is mapped to a specific framebuffer page. Keep Typer double-buffered to avoid
+# visible intermediate drawing, but publish by copying to the currently visible
+# page only. A short-lived Typer must never leave FBIOPAN_DISPLAY on another page.
+screen_typer() {
+    "$BINS/typer" -db --framebuffer-copy-only "$@"
+}
+
 unset LD_PRELOAD
 unset LD_LIBRARY_PATH
 

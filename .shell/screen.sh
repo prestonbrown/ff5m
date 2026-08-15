@@ -31,13 +31,13 @@ print_versions() {
         )
     fi
 
-    "$BINS/typer" -db batch "${batches[@]}"
+    screen_typer batch "${batches[@]}"
 }
 
 print_message() {
     local text="$1"
     
-    "$BINS/typer" -db batch \
+    screen_typer batch \
         --batch fill -p 0 370 -s 800 50 -c 0 \
         --batch text -ha center -p 400 400 -c 35d9e6 -f "JetBrainsMono 12pt" --max-width 760 --truncate -t "$text"
 }
@@ -48,7 +48,7 @@ print_progress() {
     value=$((value > 100 ? 100 : value))
     local progress_width=$(( value * 380 / 100 ))
     
-    "$BINS/typer" -db batch \
+    screen_typer batch \
         --batch fill    -c 0         -p 200 420 -s 400 40 \
         --batch stroke  -c 35d9e6    -p 200 420 -s 400 40 -lw 2 -sd inner \
         --batch fill    -c b47aff    -p 210 430 -s $progress_width 20 \
@@ -59,7 +59,7 @@ print_progress() {
 print_prepare_status() {
     local text="$1"
     
-    "$BINS/typer" -db batch \
+    screen_typer batch \
         --batch fill -p 205 425 -s 390 30 -c 0 \
         --batch text -p 400 440 -ha center -va middle -c 35d9e6 -f "JetBrainsMono 8pt" -b 0 --max-width 370 --truncate -t "${text}"
 }
@@ -78,11 +78,11 @@ print_time() {
 
 print_left_panel() {
     if [ -z "$1" ]; then
-        "$BINS/typer" fill -c 0 -p 0 400 -s 200 80
+        screen_typer fill -c 0 -p 0 400 -s 200 80
         return
     fi
 
-    "$BINS/typer" -db batch\
+    screen_typer batch \
         --batch fill -c 0 -p 0 400 -s 200 80 \
         --batch text -p 180 440 -va middle -ha right -c 00f0f0 -b 0 -t "$1"
 }
@@ -177,7 +177,7 @@ case "$1" in
             --batch text -p $x $y  -c "$servo_color"    -ha right    -va middle -f  "Typicons 12pt"      -t "$icon_servo"
         ) && x=$((x - x_offset))
         
-        "$BINS/typer" -db batch "${batches[@]}"
+        screen_typer batch "${batches[@]}"
     ;;
     
     print_file)
