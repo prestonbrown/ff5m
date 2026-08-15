@@ -57,10 +57,7 @@ else
 fi
 
 DISPLAY_MODE=$("$CFG_SCRIPT" "$VAR_PATH" --get "display" "STOCK")
-if [ "$DISPLAY_MODE" = "FEATHER" ]; then
-    /opt/config/mod/.root/S35tslib start
-elif [ "$DISPLAY_MODE" = "GUPPY" ]; then
-    /opt/config/mod/.root/S35tslib start
+if [ "$DISPLAY_MODE" = "GUPPY" ]; then
     /opt/config/mod/.root/S80guppyscreen start
 fi
 

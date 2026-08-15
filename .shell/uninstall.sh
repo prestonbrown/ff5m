@@ -103,7 +103,6 @@ uninstall() {
     
     rm -f /etc/init.d/S00fix
     rm -f /etc/init.d/S00init
-    rm -f /etc/init.d/S50znetwork
     rm -f /etc/init.d/S55boot
     rm -f /etc/init.d/S99root
     rm -f /etc/init.d/S99moon

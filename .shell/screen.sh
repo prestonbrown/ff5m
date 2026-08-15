@@ -121,7 +121,8 @@ case "$1" in
 
         print_versions
 
-        if [ -f "$NET_IP_F" ]; then
+        DISPLAY_MODE="$("$CMDS"/zdisplay.sh test)"
+        if [ "$DISPLAY_MODE" == "HEADLESS" ] && [ -f "$NET_IP_F" ]; then
             print_prepare_status "IP: $(cat "$NET_IP_F")"
         fi
     ;;

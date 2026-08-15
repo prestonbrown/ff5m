@@ -81,9 +81,6 @@ initialize() {
 
     echo "// Update links..."
 
-    # The network service wrapper was removed; clean an older installation's
-    # symlink so init cannot try to invoke a stale second networking path.
-    rm -f /etc/init.d/S50znetwork
     ln -fs /opt/config/mod/.shell/S55boot /etc/init.d/
     ln -fs /opt/config/mod/.shell/S60dropbear /etc/init.d/
     ln -fs /opt/config/mod/.shell/S98camera /etc/init.d/
