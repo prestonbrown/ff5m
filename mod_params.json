@@ -399,7 +399,7 @@
     {
       "key": "backlight_eco",
       "type": "int",
-      "default": 10,
+      "default": 30,
       "label": "Screen brightness in ECO mode",
       "description": "Set dimmed display brightness percent.",
       "order": 50003
