@@ -2002,7 +2002,8 @@ class MotionHeatSettingsTest(unittest.TestCase):
         controller.params = type("Params", (), {
             "variables": {
                 "backlight": 50, "backlight_eco": 10, "sound": 1,
-                "chamber_light": 42}})()
+                "chamber_light": 42,
+                "chamber_light_mode": "AT_BOOT"}})()
         controller.chamber_light = StatusObject({
             "color_data": [(0.0, 0.0, 0.0, 0.0)]})
 
@@ -2010,10 +2011,21 @@ class MotionHeatSettingsTest(unittest.TestCase):
 
         drawing = "\n".join(batches[0])
         self.assertIn('-t "42%"', drawing)
+        self.assertIn('-t "APPLIES AT BOOT"', drawing)
         self.assertIn("settings.led.minus",
                       dict(controller.renderer._buttons))
         self.assertIn("settings.led.plus",
                       dict(controller.renderer._buttons))
+
+        controller.params.variables["chamber_light_mode"] = "MANUAL"
+        controller._render_settings()
+        drawing = "\n".join(batches[1])
+        self.assertIn('-t "APPLIES IMMEDIATELY"', drawing)
+
+        controller.params.variables["chamber_light_mode"] = "PRINT_ONLY"
+        controller._render_settings()
+        drawing = "\n".join(batches[2])
+        self.assertIn('-t "APPLIES DURING PRINTING"', drawing)
 
     def test_backlight_enable_is_separate_from_brightness(self):
         controller = base_controller()

@@ -50,6 +50,14 @@
         "HEADLESS": 2,
         "GUPPY": 3
       }
+    },
+    "ChamberLightModeEnum": {
+      "type": "str",
+      "values": {
+        "MANUAL": "MANUAL",
+        "AT_BOOT": "AT_BOOT",
+        "PRINT_ONLY": "PRINT_ONLY"
+      }
     }
   },
   "ui": {
@@ -69,7 +77,8 @@
           "safe_z",
           "m600_z_min",
           "filament_switch_sensor",
-          "chamber_light"
+          "chamber_light",
+          "chamber_light_mode"
         ]
       },
       {
@@ -413,13 +422,26 @@
       "order": 50003
     },
     {
+      "key": "chamber_light_mode",
+      "type": "ChamberLightModeEnum",
+      "default": "AT_BOOT",
+      "label": "Chamber light mode",
+      "description": "Choose when saved chamber brightness is applied.",
+      "options": {
+        "MANUAL": "change the light only when adjusted manually",
+        "AT_BOOT": "restore saved brightness at startup",
+        "PRINT_ONLY": "turn on only during printing"
+      },
+      "order": 50004
+    },
+    {
       "key": "current_material",
       "type": "str",
       "default": "n/a",
       "label": "Current material",
       "description": "Last selected filament material.",
       "hidden": true,
-      "order": 50004
+      "order": 50005
     },
     {
       "key": "midi_on",

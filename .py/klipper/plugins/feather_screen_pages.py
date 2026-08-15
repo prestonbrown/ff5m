@@ -829,6 +829,12 @@ class FeatherPagesMixin(FeatherNetworkPagesMixin):
     def _render_settings(self):
         brightness = int(self._setting("backlight", 50))
         sound = bool(self._setting("sound", 1))
+        light_mode = str(self._setting("chamber_light_mode", "AT_BOOT"))
+        light_subtitle = {
+            "MANUAL": "APPLIES IMMEDIATELY",
+            "AT_BOOT": "APPLIES AT BOOT",
+            "PRINT_ONLY": "APPLIES DURING PRINTING",
+        }.get(light_mode, "APPLIES AT BOOT")
         light_available = getattr(self, "chamber_light", None) is not None
         light = (self._chamber_light_brightness()
                  if light_available else None)
@@ -840,20 +846,27 @@ class FeatherPagesMixin(FeatherNetworkPagesMixin):
         commands.append(self.renderer.action_hitbox(
             "settings.benchmark.tap", 170, 7, 450, 46))
         rows = (
-            ("SCREEN BRIGHTNESS", brightness, "settings.brightness", 67, True),
-            ("CHAMBER LIGHT", light, "settings.led", 151, light_available),
+            ("SCREEN BRIGHTNESS", None, brightness,
+             "settings.brightness", 67, True),
+            ("CHAMBER LIGHT", light_subtitle, light,
+             "settings.led", 151, light_available),
         )
-        for label, value, prefix, y, enabled in rows:
+        for label, subtitle, value, prefix, y, enabled in rows:
             commands += [
                 self.renderer.fill(25, y, 750, 70, ThemeColor.PANEL),
                 self.renderer.stroke(25, y, 750, 70, ThemeColor.BORDER, 1),
-                self.renderer.text(44, y + 22, label, ThemeColor.PRIMARY,
+                self.renderer.text(44, y + (18 if subtitle else 35), label,
+                                   ThemeColor.PRIMARY,
                                    "JetBrainsMono Bold 8pt"),
                 self.renderer.text(425, y + 36,
                                    "%d%%" % value if enabled else "--",
-                                   ThemeColor.TEXT if enabled else ThemeColor.DIM,
+                                   ThemeColor.TEXT if enabled else ThemeColor.MUTED,
                                    "JetBrainsMono 12pt", "center"),
             ]
+            if subtitle:
+                commands.append(self.renderer.text(
+                    44, y + 46, subtitle, ThemeColor.DIM,
+                    "JetBrainsMono 8pt"))
             commands += self.renderer.button(prefix + ".minus", 525, y + 12,
                                              105, 46, "-5",
                                              state=("enabled" if enabled

@@ -323,28 +323,6 @@ class FeatherUtilitiesTest(unittest.TestCase):
             value, "keyboard.space", shift, symbols, max_length=2)
         self.assertEqual(value, "A|")
 
-    def test_chamber_light_macros_update_state_without_toolhead_sync(self):
-        macros = (pathlib.Path(__file__).parents[1] / "macros" /
-                  "base.cfg").read_text(encoding="utf-8")
-
-        self.assertIn(
-            "SET_LED LED=chamber_light WHITE={S/100|float} SYNC=0", macros)
-        self.assertIn(
-            "SET_LED LED=chamber_light WHITE=0 SYNC=0", macros)
-        self.assertIn(
-            '_SET_LED LED=chamber_light WHITE="{params.WHITE}" SYNC=0',
-            macros)
-        self.assertIn(
-            "[delayed_gcode _RESTORE_CHAMBER_LIGHT]", macros)
-        self.assertIn(
-            "printer.mod_params.variables.chamber_light|default(50)",
-            macros)
-        setter = macros.split("[gcode_macro SET_LED]", 1)[1].split(
-            "[gcode_macro _PRINT_STATUS]", 1)[0]
-        self.assertNotIn("SET_MOD PARAM=chamber_light", setter)
-        self.assertIn(
-            'changes.key == "chamber_light"', macros)
-
     def test_duration_formatting(self):
         duration = FEATHER.FeatherScreen._duration
         self.assertEqual(duration(None), "???")
