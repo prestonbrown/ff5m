@@ -185,10 +185,14 @@ needed; otherwise material selection remains owned by Feather.
 
 The default recording rate is 10 FPS and the accepted range is 1-30 FPS. The
 host discovers enabled webcams through Moonraker and records the camera
-directly with FFmpeg. Relative webcam URLs resolve to the printer's HTTP port
-80. `--no-camera` explicitly disables camera capture. An absent or failed
-camera leaves the printer outcomes intact and produces screen-only media when
-semantic screenshots are available.
+directly with FFmpeg. Because MJPEG does not provide a reliable media clock,
+FFmpeg timestamps incoming frames by their host arrival time before normalizing
+the recording to start at zero. A fluctuating or lower-than-declared camera FPS
+therefore changes frame cadence without stretching the camera away from the
+screen and telemetry timelines. Relative webcam URLs resolve to the printer's
+HTTP port 80. `--no-camera` explicitly disables camera capture. An absent or
+failed camera leaves the printer outcomes intact and produces screen-only media
+when semantic screenshots are available.
 
 The host also requests one coherent Feather framebuffer snapshot every 5
 seconds by default. These periodic timeline records complement rather than
@@ -219,7 +223,10 @@ monotonic timestamps, queue delay, duration, kind, phase, and page survive a
 later Klipper failure and distinguish scheduling delay from framebuffer and
 file work. The kind separates the three request paths: `semantic` for a test
 step's own capture, `stage` for one the printer's operation context triggered,
-and `periodic` for the timeline interval.
+and `periodic` for the timeline interval. Stage capture follows every real
+operation-context state change regardless of the current test phase. A long
+action therefore updates the screen timeline while it remains active, and a
+new workflow does not need to be added to a capture whitelist.
 Settled semantic and stage captures wait for a quiet framebuffer by comparing
 the interpreter's own `hash()` of each sampled frame, not a digest: SHA-256 is
 computed exactly once, on the frame the loop finally accepts. The printer's
@@ -321,9 +328,12 @@ state, integer motion/heater values, operation context, and time-aligned
 Klipper/Typer/Dropbear CPU plus RSS, available memory, and load from
 `resources.tsv`. Screen transitions use printer-relative capture times
 anchored only after the lazy runner is observed active; setup latency therefore
-cannot advance the screen track ahead of the continuously recorded camera. A
-missing screen or camera gets an explicit placeholder so the layout and
-timeline remain stable.
+cannot advance the screen track ahead of the continuously recorded camera. Each
+manifest timestamp describes when the artifact worker accepted the framebuffer,
+not when the reactor queued the request. The screen area remains neutral until
+the first observed frame instead of showing that future frame from time zero. A
+missing screen or camera gets an explicit placeholder so the layout and timeline
+remain stable.
 
 Before any mutable printer command, the entry point verifies local FFmpeg,
 SSH, SCP, artifact-root write access, disk capacity, Moonraker/Klipper

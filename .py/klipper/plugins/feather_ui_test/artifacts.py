@@ -345,7 +345,8 @@ class ArtifactWorker:
             # this wait belongs only to the artifact thread, never Klipper's
             # reactor.
             time.sleep(FRAME_SAMPLE_INTERVAL)
-        return data, hashlib.sha256(data).hexdigest()
+        observed_time = time.time()
+        return data, hashlib.sha256(data).hexdigest(), observed_time
 
     @staticmethod
     def _bmp_header(data_size):
@@ -358,9 +359,10 @@ class ArtifactWorker:
 
     def _capture(self, number, label, metadata, settle):
         if settle:
-            data, digest = self._stable_frame()
+            data, digest, observed_time = self._stable_frame()
         else:
             data = self._read_frame()
+            observed_time = time.time()
             digest = hashlib.sha256(data).hexdigest()
         if not any(data):
             raise RuntimeError("Framebuffer is blank")
@@ -374,6 +376,7 @@ class ArtifactWorker:
         record = dict(metadata)
         record.update({
             "number": number, "label": label, "file": filename,
+            "time": observed_time,
             "sha256": digest, "frame_bytes": len(data), "passed": True,
             "framebuffer": getattr(self, "last_frame_geometry", None),
         })

@@ -338,6 +338,26 @@ class CameraContractTest(unittest.TestCase):
         self.assertIn("hflip", value)
         self.assertIn("transpose=1", value)
         self.assertIn("fps=10", value)
+        self.assertTrue(value.startswith("setpts=PTS-STARTPTS,"))
+
+    def test_camera_uses_host_arrival_time_for_missing_mjpeg_timestamps(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            process = mock.Mock()
+            process.poll.return_value = None
+            popen = mock.Mock(return_value=process)
+            media = REGRESSION.MediaPipeline(
+                temporary, 10, popen=popen, sleeper=lambda _delay: None)
+            media.start_camera({
+                "url": "http://printer.invalid/camera",
+                "metadata": {"rotation": 0},
+            })
+            command = popen.call_args.args[0]
+
+        timestamp_option = command.index("-use_wallclock_as_timestamps")
+        input_option = command.index("-i")
+        self.assertEqual(command[timestamp_option + 1], "1")
+        self.assertLess(timestamp_option, input_option)
+        self.assertEqual(media.camera["status"], "recording")
 
 
 class LaunchContractTest(unittest.TestCase):
@@ -1125,7 +1145,7 @@ class TimelineAndReportTest(unittest.TestCase):
 
         self.assertEqual([item[0] for item in frames], [7.0, 9.5])
 
-    def test_first_semantic_screen_is_held_from_video_start(self):
+    def test_screen_is_blank_until_first_observed_semantic_frame(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = pathlib.Path(temporary)
             artifact = root / "suite"
@@ -1133,7 +1153,10 @@ class TimelineAndReportTest(unittest.TestCase):
             for name in ("001.bmp", "002.bmp"):
                 (artifact / name).write_bytes(b"BMsynthetic")
 
+            commands = []
+
             def runner(command, **_kwargs):
+                commands.append(command)
                 pathlib.Path(command[-1]).write_bytes(b"synthetic video")
                 return subprocess.CompletedProcess(command, 0, "", "")
 
@@ -1151,10 +1174,11 @@ class TimelineAndReportTest(unittest.TestCase):
             }], 12.0)
             concat = (media.work / "screen.ffconcat").read_text(
                 encoding="utf-8")
+            screen_filter = commands[-1][commands[-1].index("-vf") + 1]
 
         self.assertIsNotNone(screen)
-        self.assertIn("duration 9.500000", concat)
-        self.assertIn("duration 2.500000", concat)
+        self.assertEqual(concat.count("duration 2.500000"), 2)
+        self.assertIn("start_duration=7.000000", screen_filter)
 
     def test_no_camera_finalizes_screen_only_without_prior_work_directory(self):
         with tempfile.TemporaryDirectory() as temporary:

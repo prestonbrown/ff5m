@@ -146,8 +146,7 @@ class UITestRun:
             operation.get("current_state"),
         )
         if (not self.running or self.finalizing
-                or signature == self._last_stage_signature
-                or self.phase not in ("screws", "mesh", "z")):
+                or signature == self._last_stage_signature):
             return
         self._last_stage_signature = signature
         status = self.host._operation_context_text(status=operation)

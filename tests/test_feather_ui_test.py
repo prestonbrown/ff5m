@@ -60,9 +60,10 @@ class ArtifactWorkerTest(unittest.TestCase):
                 mock.patch.object(ARTIFACTS.time, "monotonic", side_effect=(
                     0.0, 0.0, 0.05, 0.10, 0.15, 0.20, 0.25, 0.30)), \
                 mock.patch.object(ARTIFACTS.time, "sleep") as sleep:
-            data, digest = worker._stable_frame()
+            data, digest, observed_time = worker._stable_frame()
 
         self.assertEqual(data, b"second")
+        self.assertIsInstance(observed_time, float)
         self.assertEqual(
             digest, ARTIFACTS.hashlib.sha256(b"second").hexdigest())
         self.assertEqual(worker._read_frame.call_count, 6)
@@ -82,7 +83,7 @@ class ArtifactWorkerTest(unittest.TestCase):
                 mock.patch.object(ARTIFACTS.time, "sleep"), \
                 mock.patch.object(ARTIFACTS.hashlib, "sha256",
                                   side_effect=real_sha256) as sha256:
-            data, digest = worker._stable_frame()
+            data, digest, observed_time = worker._stable_frame()
 
         # Change detection must not cost a SHA-256 pass over 1.5 MiB per
         # sample: the printer's Cortex-A7 shares its cores with Klipper, and
@@ -90,6 +91,7 @@ class ArtifactWorkerTest(unittest.TestCase):
         self.assertEqual(sha256.call_count, 1)
         self.assertEqual(data, b"second")
         self.assertEqual(digest, real_sha256(b"second").hexdigest())
+        self.assertIsInstance(observed_time, float)
 
     def test_one_shot_capture_does_not_wait_for_a_quiet_framebuffer(self):
         worker = object.__new__(ARTIFACTS.ArtifactWorker)
@@ -100,12 +102,16 @@ class ArtifactWorkerTest(unittest.TestCase):
         worker.records = []
 
         with mock.patch.object(ARTIFACTS, "_atomic_json") as atomic_json, \
+                mock.patch.object(ARTIFACTS.time, "time",
+                                  return_value=1234.5), \
                 mock.patch("builtins.open", mock.mock_open()):
-            record = worker._capture(1, "periodic", {}, settle=False)
+            record = worker._capture(
+                1, "periodic", {"time": 1000.0}, settle=False)
 
         self.assertEqual(
             record["sha256"],
             ARTIFACTS.hashlib.sha256(b"current").hexdigest())
+        self.assertEqual(record["time"], 1234.5)
         worker._read_frame.assert_called_once_with()
         worker._stable_frame.assert_not_called()
         atomic_json.assert_not_called()
@@ -349,6 +355,50 @@ class RunnerContractTest(unittest.TestCase):
         self.assertEqual(
             run.worker.capture.call_args_list[0][0][2]["capture_kind"],
             "stage")
+
+    def test_operation_stage_changes_are_not_limited_by_test_phase(self):
+        operation = {
+            "revision": 1,
+            "context_types": ("recovery",),
+            "context_path": ("Recovery",),
+            "current_state": "HEATING NOZZLE",
+        }
+        host = type("Host", (), {
+            "_operation_context_status":
+                lambda self, eventtime: dict(operation),
+            "_operation_context_text":
+                lambda self, eventtime=None, status=None:
+                " -> ".join(tuple(status["context_path"]) +
+                            (status["current_state"],)),
+        })()
+        run = UI_TEST.UITestRun(host)
+        run.running = True
+        run.phase = "recovery"
+        run.worker = mock.Mock()
+        run._screen_metadata = lambda: {"page": "CALIBRATION_PROGRESS"}
+
+        run.update(1.0)
+        operation.update(revision=2, current_state="HOMING")
+        run.update(2.0)
+        operation.update(revision=3, current_state="POSITIONING")
+        run.update(3.0)
+        run.phase = "future_workflow"
+        operation.update(revision=4, current_state="RESTORING")
+        run.update(4.0)
+
+        labels = [call[0][1] for call in run.worker.capture.call_args_list]
+        self.assertEqual(labels, [
+            "recovery-stage-Recovery -> HEATING NOZZLE",
+            "recovery-stage-Recovery -> HOMING",
+            "recovery-stage-Recovery -> POSITIONING",
+            "future_workflow-stage-Recovery -> RESTORING",
+        ])
+        self.assertEqual(
+            [stage["current_state"] for stage in run.calibration_stages],
+            ["HEATING NOZZLE", "HOMING", "POSITIONING", "RESTORING"])
+        self.assertTrue(all(
+            call[0][2]["capture_kind"] == "stage"
+            for call in run.worker.capture.call_args_list))
 
     def test_tap_waits_for_active_gcode_before_advancing(self):
         callbacks = []

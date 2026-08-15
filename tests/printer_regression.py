@@ -826,7 +826,7 @@ class MediaPipeline:
 
     @staticmethod
     def _camera_filter(metadata, fps):
-        filters = []
+        filters = ["setpts=PTS-STARTPTS"]
         if metadata.get("flip_horizontal"):
             filters.append("hflip")
         if metadata.get("flip_vertical"):
@@ -854,7 +854,8 @@ class MediaPipeline:
         metadata = camera["metadata"]
         command = [
             "ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
-            "-i", camera["url"], "-an", "-vf",
+            "-use_wallclock_as_timestamps", "1", "-i", camera["url"],
+            "-an", "-vf",
             self._camera_filter(metadata, self.fps),
             "-c:v", "libx264", "-preset", "veryfast", "-crf", "28",
             "-pix_fmt", "yuv420p", str(self.camera_path),
@@ -955,11 +956,12 @@ class MediaPipeline:
             return None
         concat = self.work / "screen.ffconcat"
         screen = self.work / "screen.mp4"
+        first_offset = frames[0][0]
         lines = ["ffconcat version 1.0"]
         for index, (_offset, path) in enumerate(frames):
             next_offset = (
                 frames[index + 1][0] if index + 1 < len(frames) else duration)
-            active_offset = 0.0 if index == 0 else frames[index][0]
+            active_offset = frames[index][0]
             frame_duration = max(0.001, next_offset - active_offset)
             lines.append("file '%s'" % self._concat_path(path))
             lines.append("duration %.6f" % frame_duration)
@@ -968,7 +970,9 @@ class MediaPipeline:
         command = [
             "ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
             "-f", "concat", "-safe", "0", "-i", str(concat),
-            "-vf", "fps=%d,scale=800:480" % self.fps,
+            "-vf", (
+                "tpad=start_mode=add:start_duration=%.6f:color=0x090d12,"
+                "fps=%d,scale=800:480" % (first_offset, self.fps)),
             "-t", "%.6f" % duration,
             "-c:v", "libx264", "-preset", "veryfast", "-crf", "24",
             "-pix_fmt", "yuv420p", str(screen),
