@@ -1349,8 +1349,11 @@ class FeatherRenderer:
                       max_width=440, truncate=True),
             self.fill(18, HEADER_BOTTOM, 764, 1, ThemeRole.HEADER_BORDER),
             self.fill(18, FOOTER_Y - 2, 764, 1, ThemeColor.BORDER),
-            self.text(400, 190, message, ThemeColor.TEXT, "JetBrainsMono Bold 16pt",
-                      "center", "middle"),
+            # Bottom-aligned so a second line grows into the free band under
+            # the header; below it there is no room. 93 px = two lines.
+            self.text(400, 215, message, ThemeColor.TEXT, "JetBrainsMono Bold 16pt",
+                      "center", "bottom", max_width=704, max_height=93,
+                      wrap=True, truncate=True),
             self.text(400, 235, "PLEASE WAIT", ThemeColor.DIM, "JetBrainsMono 12pt",
                       "center", "middle"),
         ]
