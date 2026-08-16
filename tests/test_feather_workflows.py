@@ -951,6 +951,58 @@ class PrintWorkflowTest(unittest.TestCase):
             controller.operation_context.status["cancel_pending"])
         self.assertEqual(controller.cancel_mode, "pending")
 
+    def test_accepted_cancel_is_painted_before_the_safe_point_dispatch(self):
+        controller = base_controller("printing")
+        controller.start_print_macro.variables["print_started"] = True
+        controller._handle_print_action("print.cancel")
+        events = []
+        controller._render_cancel_confirm = lambda: events.append("render")
+        controller._run_script = lambda command, show_notice=True: (
+            events.append(command))
+
+        controller._handle_operation_cancel_action(
+            "operation.cancel.confirm")
+
+        self.assertEqual(events, ["render", "_CONTEXT_CANCEL_POINT"])
+
+    def test_delivered_cancellation_is_not_reported_as_an_action_failure(self):
+        controller = base_controller("printing")
+        controller.start_print_macro.variables["print_started"] = True
+        messages = []
+        controller._show_message = lambda message, page: messages.append(
+            message)
+
+        def deliver(command, show_notice=True):
+            raise RuntimeError("Operation cancelled: Print")
+
+        controller._run_script = deliver
+        controller._handle_print_action("print.cancel")
+
+        controller._handle_operation_cancel_action(
+            "operation.cancel.confirm")
+
+        self.assertEqual(messages, [])
+        self.assertEqual(controller.cancel_mode, "pending")
+
+    def test_continue_that_lost_the_race_reports_it_instead_of_doing_nothing(
+            self):
+        controller = base_controller("printing")
+        controller.start_print_macro.variables["print_started"] = True
+        controller._handle_print_action("print.cancel")
+        controller._handle_operation_cancel_action(
+            "operation.cancel.confirm")
+        # The safe point consumed the request before the tap arrived.
+        controller.operation_context.status["cancel_pending"] = False
+        toasts = []
+        controller._toast = toasts.append
+
+        controller._handle_operation_cancel_action(
+            "operation.cancel.continue")
+
+        self.assertEqual(toasts, ["CANCELLATION ALREADY STARTED"])
+        self.assertEqual(controller.cancel_mode, "pending")
+        self.assertTrue(controller.cancel_requested)
+
     def test_cancel_during_preparation_wait_dispatches_immediate_m108(self):
         controller = base_controller("printing")
         controller.start_print_macro.variables["print_started"] = False
@@ -2139,6 +2191,33 @@ class FilamentAndCalibrationWorkflowTest(unittest.TestCase):
                          "SET_FAN_SPEED FAN=fanM106 SPEED=0.00")
         self.assertFalse(feature._cooling_fan_active)
         self.assertIsNone(feature._selected_target)
+
+    def test_filament_action_paint_waits_for_a_loader_but_cooling_does_not(
+            self):
+        controller = base_controller()
+        controller.page = FEATHER.Page.FILAMENT_ACTION
+        controller.filament_from_pause = False
+        controller.filament_material = "PETG"
+        controller.extruder = StatusObject({
+            "temperature": 260.0, "target": 250.0})
+        controller.extruder.min_extrude_temp = 170.0
+        controller.fan = StatusObject({"speed": 0.0})
+        controller.busy_message = "PURGING..."
+        commands = []
+        painted = []
+        controller._run_script = commands.append
+        controller.renderer = FEATHER.FeatherRenderer()
+        controller.renderer.send = lambda batch: painted.append(batch)
+        feature = FilamentFeature(controller)
+        feature._selected_target = 250.0
+
+        feature.update(1.0)
+
+        self.assertEqual(commands, [
+            "SET_FAN_SPEED FAN=fanM106 SPEED=1.00"])
+        self.assertEqual(painted, [])
+        # The value stays unconsumed, so it repaints once the loader is gone.
+        self.assertIsNone(feature._last_signature)
 
     def test_filament_cooling_fan_stops_at_five_degree_threshold(self):
         controller = base_controller()
@@ -3468,6 +3547,25 @@ class TouchEventBridgeTest(unittest.TestCase):
 
         self.assertEqual(pages, [])
         self.assertFalse(controller.touch_feedback_pending)
+
+    def test_blocking_loader_also_stops_periodic_page_painters(self):
+        controller = base_controller("printing")
+        controller.page = FEATHER.Page.PRINTING
+        controller.renderer = FEATHER.FeatherRenderer()
+        painted = []
+        controller.renderer.send = lambda commands: painted.append(commands)
+        controller.busy_message = "HOMING..."
+        controller.operation_context.status["revision"] = 1
+
+        controller._update_operation_context(controller.reactor.monotonic())
+
+        self.assertEqual(painted, [])
+
+        controller.busy_message = None
+        controller.operation_context.status["revision"] = 2
+        controller._update_operation_context(controller.reactor.monotonic())
+
+        self.assertEqual(len(painted), 1)
 
     def test_calibration_progress_rejects_back_during_dispatcher_macro(self):
         controller = base_controller()

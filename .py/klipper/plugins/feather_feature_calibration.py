@@ -89,7 +89,7 @@ class CalibrationFeature(FeatherControlsMixin, FeatureHostProxy):
         self.print_status_text = status
 
     def update(self, eventtime):
-        if (self.page == Page.CALIBRATION_PROGRESS and
+        if (self._page_paint_allowed(Page.CALIBRATION_PROGRESS) and
                 self.calibration_kind in ("screws", "mesh", "z", "recovery")):
             self._update_calibration_progress()
 

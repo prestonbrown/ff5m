@@ -142,13 +142,17 @@ class ZCalibrationFeature(FeatherZCalibrationMixin, FeatherControlsMixin,
         return True
 
     def update(self, eventtime):
-        if self.page in (Page.CALIBRATION_Z, Page.Z_OFFSET_PAPER,
-                         Page.LIVE_Z_OFFSET):
-            if not (self.page == Page.LIVE_Z_OFFSET and
-                    self.live_z_dialog is not None) and not (
-                        self.page == Page.Z_OFFSET_PAPER and
-                        self.z_calibration.dialog is not None):
-                self._update_z_weight_status(eventtime)
+        if not self._page_paint_allowed(
+                Page.CALIBRATION_Z, Page.Z_OFFSET_PAPER,
+                Page.LIVE_Z_OFFSET):
+            return
+        if (self.page == Page.LIVE_Z_OFFSET and
+                self.live_z_dialog is not None):
+            return
+        if (self.page == Page.Z_OFFSET_PAPER and
+                self.z_calibration.dialog is not None):
+            return
+        self._update_z_weight_status(eventtime)
 
     def on_print_state_changed(self, old_state, new_state, stats_state):
         if new_state.name in ("PREPARING", "PRINTING") and old_state.name not in (

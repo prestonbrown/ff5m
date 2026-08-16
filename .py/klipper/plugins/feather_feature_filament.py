@@ -166,7 +166,7 @@ class FilamentFeature(FeatureHostProxy):
             return
         status, values, signature = self._values(eventtime)
         self._sync_cooling_fan(status)
-        if self._host.page != Page.FILAMENT_ACTION:
+        if not self._host._page_paint_allowed(Page.FILAMENT_ACTION):
             return
         if signature == self._last_signature:
             return

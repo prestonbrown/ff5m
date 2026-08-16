@@ -1509,6 +1509,16 @@ class FeatherScreen(FeatherPagesMixin, FeatherControlsMixin):
         """
         return bool(getattr(self, "busy_message", None))
 
+    def _page_paint_allowed(self, *pages):
+        """Whether a periodic painter may still update one of `pages`.
+
+        The output counterpart of _blocking_operation_active(): a loader owns
+        the whole surface, so an incremental paint would land on top of it and
+        be overdrawn by its next frame anyway.
+        """
+        return (self.page in pages
+                and not self._blocking_operation_active())
+
     def _run_blocking_gcode(self, command, message):
         # Unit tests and early startup may not have a live renderer yet.
         renderer = getattr(self, "renderer", None)

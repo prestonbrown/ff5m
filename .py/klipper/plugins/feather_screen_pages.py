@@ -544,7 +544,8 @@ class FeatherPagesMixin(FeatherNetworkPagesMixin):
         if revision == getattr(self, "_last_operation_revision", -1):
             return
         self._last_operation_revision = revision
-        self._draw_print_status(self._display_status_text(eventtime))
+        if not self._blocking_operation_active():
+            self._draw_print_status(self._display_status_text(eventtime))
 
     cmd_FEATHER_ABORT_help = "Request cancellation of the active operation"
     def _request_operation_cancel(self):
@@ -669,7 +670,10 @@ class FeatherPagesMixin(FeatherNetworkPagesMixin):
                 and self.cancel_mode == "pending"):
             result = self._clear_operation_cancel_request()
             if not result.get("cleared", False):
+                # Losing this race is normal: the safe point may already have
+                # taken the request. Repainting alone looked like a dead button.
                 self._render_cancel_confirm()
+                self._toast("CANCELLATION ALREADY STARTED")
                 return
             callback = self.operation_cancel_on_clear
             if callback is not None:
@@ -691,14 +695,20 @@ class FeatherPagesMixin(FeatherNetworkPagesMixin):
         self.operation_cancel_request_id = result.get("request_id")
         self.operation_cancel_target_name = result.get("target_name")
         self.operation_cancel_target_mode = result.get("target_mode")
+        # on_accept may block for seconds on the G-code mutex a running print
+        # holds, so paint first. An interrupted wait ends immediately and may
+        # close this page instead, so that path paints after the dispatch.
+        interrupting_wait = self._temperature_wait_active()
+        if not interrupting_wait:
+            self._render_cancel_confirm()
         callback = self.operation_cancel_on_accept
         if callback is not None:
             callback(result)
-        if self._temperature_wait_active():
+        if interrupting_wait:
             self._run_immediate_command("M108")
-        if (self.page == Page.CANCEL_CONFIRM
-                and self.cancel_mode == "pending"):
-            self._render_cancel_confirm()
+            if (self.page == Page.CANCEL_CONFIRM
+                    and self.cancel_mode == "pending"):
+                self._render_cancel_confirm()
 
     def _accept_print_operation_cancel(self, result):
         self._filament_request_token = getattr(
@@ -712,7 +722,12 @@ class FeatherPagesMixin(FeatherNetworkPagesMixin):
             getattr(self, "start_print_macro", None), "variables", {}
         ).get("print_started", False))
         if started and not self.cancel_waiting_for_heat:
-            self._run_script("_CONTEXT_CANCEL_POINT")
+            try:
+                self._run_script("_CONTEXT_CANCEL_POINT")
+            except Exception:
+                # Delivering the request aborts the print by raising. The print
+                # state transition reports it, so this is not an action failure.
+                logging.info("[feather_screen] print cancellation delivered")
 
     def _clear_print_operation_cancel(self, result):
         del result
