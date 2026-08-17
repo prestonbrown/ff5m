@@ -21,3 +21,4 @@ tests/artifacts/
 scripts/ui_preview/coverage/
 /feather-ui-designer/
 sql/version
+/.py/klipper/plugins/ui/themes/preview/

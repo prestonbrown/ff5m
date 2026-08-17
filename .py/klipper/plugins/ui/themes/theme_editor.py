@@ -1,0 +1,1214 @@
+#!/usr/bin/env python3
+"""Small zero-dependency local web editor for Feather UI themes.
+
+Typical zero-config use when this file itself lives in the themes directory:
+
+    cd themes
+    python3 feather_theme_editor_20260817_1532.py
+
+The editor:
+- discovers theme JSON files in the current directory;
+- finds theme.schema.json next to them;
+- searches upward for theme.py / framework/ui/theme.py;
+- serves only on 127.0.0.1;
+- opens the browser unless --no-open is supplied;
+- edits ThemeColor and ThemeRole values live;
+- validates and downloads a custom theme JSON.
+
+No mandatory third-party dependencies are required. If jsonschema is installed,
+theme.schema.json is additionally used for validation.
+"""
+
+from __future__ import annotations
+
+import argparse
+import importlib.util
+import json
+from pathlib import Path
+import re
+import threading
+import urllib.parse
+import webbrowser
+from http import HTTPStatus
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+
+HEX_RE = re.compile(r"^[0-9a-fA-F]{6}$")
+
+FALLBACK_COLORS = (
+    "background", "panel", "primary", "primary_dark", "secondary",
+    "secondary_dark", "warning", "danger", "danger_background", "text",
+    "bright", "dim", "border", "muted", "success", "pressed_background",
+    "overlay",
+)
+
+FALLBACK_ROLES = (
+    "button_background", "button_border", "button_text",
+    "button_selected_background", "button_selected_border",
+    "button_selected_text", "header_background", "header_text",
+    "header_border", "temperature_nozzle", "temperature_bed",
+    "temperature_fan",
+)
+
+FALLBACK_DEFAULTS = {
+    "button_background": "panel",
+    "button_border": "primary",
+    "button_text": "primary",
+    "button_selected_background": "panel",
+    "button_selected_border": "secondary",
+    "button_selected_text": "secondary",
+    "header_background": "panel",
+    "header_text": "primary",
+    "header_border": "border",
+    "temperature_nozzle": "primary",
+    "temperature_bed": "primary",
+    "temperature_fan": "primary",
+}
+
+
+def normalize_hex(value):
+    value = str(value).strip().lower().lstrip("#")
+    if HEX_RE.fullmatch(value) is None:
+        raise ValueError("expected six-digit HEX")
+    return value
+
+
+def parse_contract_source(path):
+    source = Path(path).read_text(encoding="utf-8")
+
+    color_match = re.search(
+        r"class\s+ThemeColor\s*\([^)]*\)\s*:(.*?)(?=\nclass\s|\Z)",
+        source, re.S)
+    colors = tuple(re.findall(
+        r'^\s+[A-Z][A-Z0-9_]*\s*=\s*"([^"]+)"',
+        color_match.group(1), re.M)) if color_match else ()
+
+    role_match = re.search(
+        r"class\s+ThemeRole\s*\([^)]*\)\s*:(.*?)(?=\n(?:class|DEFAULT_THEME_ROLES)\b|\Z)",
+        source, re.S)
+    if role_match:
+        role_body = role_match.group(1)
+    else:
+        # Also tolerate an in-progress source where the class name was lost but
+        # the enum members and DEFAULT_THEME_ROLES are still present.
+        anchor = source.find('BUTTON_BACKGROUND = "button_background"')
+        if anchor >= 0:
+            start = source.rfind("class ", 0, anchor)
+            end = source.find("DEFAULT_THEME_ROLES", anchor)
+            role_body = source[start:end if end >= 0 else None]
+        else:
+            role_body = ""
+
+    roles = tuple(re.findall(
+        r'^\s+[A-Z][A-Z0-9_]*\s*=\s*"([^"]+)"',
+        role_body, re.M))
+
+    defaults = {}
+    if color_match and role_body:
+        for role_symbol, color_symbol in re.findall(
+                r"ThemeRole\.([A-Z][A-Z0-9_]*)\s*:\s*ThemeColor\.([A-Z][A-Z0-9_]*)",
+                source):
+            role_name = re.search(
+                r'^\s*%s\s*=\s*"([^"]+)"' % re.escape(role_symbol),
+                role_body, re.M)
+            color_name = re.search(
+                r'^\s*%s\s*=\s*"([^"]+)"' % re.escape(color_symbol),
+                color_match.group(1), re.M)
+            if role_name and color_name:
+                defaults[role_name.group(1)] = color_name.group(1)
+
+    if not colors or not roles or any(role not in defaults for role in roles):
+        raise RuntimeError("could not recover complete theme contract")
+
+    return {
+        "colors": colors,
+        "roles": roles,
+        "defaults": defaults,
+        "mode": "parsed-source",
+    }
+
+
+def load_contract(theme_py):
+    if theme_py is None or not Path(theme_py).is_file():
+        return {
+            "colors": FALLBACK_COLORS,
+            "roles": FALLBACK_ROLES,
+            "defaults": dict(FALLBACK_DEFAULTS),
+            "mode": "embedded",
+        }
+
+    path = Path(theme_py)
+    try:
+        spec = importlib.util.spec_from_file_location(
+            "feather_theme_editor_contract", path)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        return {
+            "colors": tuple(item.value for item in module.ThemeColor),
+            "roles": tuple(item.value for item in module.ThemeRole),
+            "defaults": {
+                role.value: module.DEFAULT_THEME_ROLES[role].value
+                for role in module.ThemeRole
+            },
+            "mode": "imported",
+        }
+    except Exception:
+        try:
+            return parse_contract_source(path)
+        except Exception:
+            return {
+                "colors": FALLBACK_COLORS,
+                "roles": FALLBACK_ROLES,
+                "defaults": dict(FALLBACK_DEFAULTS),
+                "mode": "embedded-fallback",
+            }
+
+
+def directory_has_themes(path):
+    if not path.is_dir():
+        return False
+
+    for candidate in path.glob("*.json"):
+        if candidate.name == "theme.schema.json":
+            continue
+        try:
+            document = json.loads(candidate.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        if isinstance(document, dict) and isinstance(document.get("colors"), dict):
+            return True
+
+    return False
+
+
+def discover_themes_dir(base, explicit):
+    if explicit is not None:
+        path = Path(explicit).expanduser().resolve()
+        if not path.is_dir():
+            raise SystemExit("--themes-dir is not a directory: %s" % path)
+        return path
+
+    if directory_has_themes(base):
+        return base
+
+    child = base / "themes"
+    if directory_has_themes(child):
+        return child
+
+    return base
+
+
+def search_roots(base, max_parents=6):
+    roots = [base]
+    current = base
+    for _index in range(max_parents):
+        parent = current.parent
+        if parent == current:
+            break
+        roots.append(parent)
+        current = parent
+    return roots
+
+
+def discover_theme_py(base):
+    for root in search_roots(base):
+        for candidate in (
+                root / "theme.py",
+                root / "framework" / "ui" / "theme.py",
+                root / "src" / "theme.py"):
+            if candidate.is_file():
+                return candidate
+    return None
+
+
+def discover_schema(base, themes_dir):
+    direct = themes_dir / "theme.schema.json"
+    if direct.is_file():
+        return direct
+
+    for root in search_roots(base):
+        for candidate in (
+                root / "theme.schema.json",
+                root / "themes" / "theme.schema.json"):
+            if candidate.is_file():
+                return candidate
+    return None
+
+
+def load_theme_files(themes_dir):
+    result = []
+    for path in sorted(themes_dir.glob("*.json")):
+        try:
+            document = json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        if isinstance(document, dict) and isinstance(document.get("colors"), dict):
+            result.append({
+                "file": path.name,
+                "name": str(document.get("name") or path.stem),
+                "description": str(document.get("description") or ""),
+            })
+    return result
+
+
+def validate_basic(document, contract):
+    errors = []
+    if not isinstance(document, dict):
+        return ["Theme must be a JSON object."]
+
+    if not str(document.get("name") or "").strip():
+        errors.append("name is required")
+
+    colors = document.get("colors")
+    if not isinstance(colors, dict):
+        errors.append("colors must be an object")
+        colors = {}
+
+    expected_colors = set(contract["colors"])
+    actual_colors = set(colors)
+    for item in sorted(expected_colors - actual_colors):
+        errors.append("missing color: %s" % item)
+    for item in sorted(actual_colors - expected_colors):
+        errors.append("unknown color: %s" % item)
+
+    for key, value in colors.items():
+        try:
+            normalize_hex(value)
+        except Exception:
+            errors.append("%s must be six-digit HEX" % key)
+
+    roles = document.get("roles") or {}
+    if not isinstance(roles, dict):
+        errors.append("roles must be an object")
+        roles = {}
+
+    expected_roles = set(contract["roles"])
+    color_names = set(contract["colors"])
+    for item in sorted(set(roles) - expected_roles):
+        errors.append("unknown role: %s" % item)
+
+    for key, value in roles.items():
+        raw = str(value).strip().lower().lstrip("#")
+        if raw not in color_names and HEX_RE.fullmatch(raw) is None:
+            errors.append(
+                "%s must reference ThemeColor or contain six-digit HEX" % key)
+
+    return errors
+
+
+def schema_validate(document, schema_path):
+    if schema_path is None:
+        return [], False
+
+    try:
+        import jsonschema
+    except Exception:
+        return [], False
+
+    try:
+        schema = json.loads(Path(schema_path).read_text(encoding="utf-8"))
+        jsonschema.validate(document, schema)
+        return [], True
+    except Exception as exc:
+        return ["schema: %s" % exc], True
+
+
+def safe_filename(name):
+    value = str(name).strip().lower()
+    value = re.sub(r"[^a-z0-9._-]+", "-", value)
+    value = value.strip("-._")
+    return value or "custom-theme"
+
+
+HTML_PAGE = r'''<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Feather Theme Editor</title>
+<style>
+:root {
+  color-scheme: dark;
+  --app-bg:#121417;
+  --app-panel:#1b1e22;
+  --app-panel2:#22262b;
+  --app-border:#363c44;
+  --app-text:#e8edf2;
+  --app-dim:#9aa4ae;
+  --app-accent:#69c9ff;
+  --ok:#68d391;
+  --bad:#ff6b6b;
+}
+* { box-sizing:border-box; }
+html,body {
+  margin:0; width:100%; height:100%; overflow:hidden;
+  background:var(--app-bg); color:var(--app-text);
+}
+body { font:14px/1.45 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; }
+button,input,select,textarea { font:inherit; }
+button { cursor:pointer; }
+.app {
+  max-width:1600px; height:100vh; margin:0 auto; padding:16px 22px 22px;
+  display:grid; grid-template-rows:auto auto minmax(0,1fr); gap:12px;
+}
+.top {
+  display:flex; gap:16px; align-items:end; justify-content:space-between;
+  flex-wrap:wrap;
+}
+h1 { margin:0 0 4px; font-size:24px; }
+.sub { color:var(--app-dim); }
+.toolbar { display:flex; gap:10px; align-items:end; flex-wrap:wrap; }
+.field { display:grid; gap:5px; }
+.field label { color:var(--app-dim); font-size:12px; }
+.field input[type=text], .field select {
+  color:var(--app-text); background:var(--app-panel);
+  border:1px solid var(--app-border); padding:8px 10px; min-height:38px;
+}
+.name-field input { min-width:230px; }
+.desc-field input { min-width:320px; }
+.primary-action {
+  min-height:38px; padding:8px 14px; color:#071018;
+  background:var(--app-accent); border:0; font-weight:700;
+}
+.primary-action:disabled { opacity:.35; cursor:not-allowed; }
+.status {
+  border:1px solid var(--app-border); background:var(--app-panel);
+  padding:9px 12px; color:var(--app-dim); min-height:38px;
+}
+.status.ok { color:var(--ok); border-color:#355c45; }
+.status.bad { color:var(--bad); border-color:#6b3535; }
+.layout {
+  min-height:0; overflow:hidden;
+  display:grid; grid-template-columns:minmax(410px,.9fr) minmax(640px,1.6fr);
+  gap:18px; align-items:stretch;
+}
+.editor-stack,.preview-wrap {
+  min-height:0; overflow-y:auto; overscroll-behavior:contain;
+  scrollbar-gutter:stable; padding-right:6px;
+  display:grid; gap:18px; align-content:start;
+}
+.panel { background:var(--app-panel); border:1px solid var(--app-border); }
+.panel h2 {
+  margin:0; padding:13px 15px;
+  border-bottom:1px solid var(--app-border); font-size:15px;
+}
+.panel-body { padding:14px; }
+.color-grid { display:grid; gap:7px; }
+.color-row {
+  display:grid; grid-template-columns:175px 48px 1fr;
+  gap:8px; align-items:center;
+}
+.color-row code,.role-row code { color:var(--app-dim); }
+.color-row input[type=color],.role-color {
+  width:48px; height:34px; padding:2px;
+  background:transparent; border:1px solid var(--app-border);
+}
+.hex-input {
+  width:100%; min-width:0; color:var(--app-text); background:var(--app-panel2);
+  border:1px solid var(--app-border); padding:7px 8px;
+}
+.role-grid { display:grid; gap:8px; }
+.role-row {
+  display:grid; grid-template-columns:220px 1fr 112px;
+  gap:8px; align-items:center;
+}
+.role-row select,.role-row input[type=text] {
+  color:var(--app-text); background:var(--app-panel2);
+  border:1px solid var(--app-border); padding:7px 8px; min-width:0;
+}
+.role-color { display:none; width:112px; }
+.role-row.custom .role-color { display:block; }
+.note { color:var(--app-dim); font-size:12px; margin-top:8px; }
+.preview {
+  background:var(--c-background); color:var(--c-text);
+  border:1px solid var(--c-border); padding:18px;
+}
+.preview-title { color:var(--diag-background); font-size:12px; margin-bottom:10px; }
+.preview-header {
+  background:var(--r-header-background); color:var(--r-header-text);
+  border:2px solid var(--r-header-border); padding:16px;
+  text-align:center; font-size:20px; margin-bottom:16px;
+}
+.preview-grid { display:grid; grid-template-columns:1fr 1fr; gap:12px; }
+.preview-card {
+  background:var(--c-panel); border:1px solid var(--c-border); padding:12px;
+  min-height:120px;
+}
+.preview-card h3 { margin:0 0 10px; color:var(--diag-panel); font-size:12px; }
+.demo-button {
+  width:100%; min-height:58px; background:var(--r-button-background);
+  color:var(--r-button-text); border:2px solid var(--r-button-border);
+}
+.demo-button.selected {
+  background:var(--r-button-selected-background);
+  color:var(--r-button-selected-text);
+  border-color:var(--r-button-selected-border);
+}
+.temps { display:grid; gap:8px; }
+.temp-nozzle { color:var(--r-temperature-nozzle); }
+.temp-bed { color:var(--r-temperature-bed); }
+.temp-fan { color:var(--r-temperature-fan); }
+.statuses { display:flex; gap:8px; flex-wrap:wrap; }
+.chip { background:var(--c-panel); border:1px solid currentColor; padding:7px 9px; }
+.warning { color:var(--c-warning); }
+.danger { color:var(--c-danger); }
+.success { color:var(--c-success); }
+.tokens { display:grid; grid-template-columns:repeat(3,1fr); gap:8px; }
+.token {
+  min-height:58px; border:1px solid var(--c-border); padding:8px;
+  display:grid; align-content:space-between;
+}
+.token span { font-size:11px; }
+.t-text { color:var(--c-text); }
+.t-bright { color:var(--c-bright); }
+.t-primary { color:var(--c-primary); }
+.t-secondary { color:var(--c-secondary); }
+.t-dim { color:var(--c-dim); }
+.t-muted { color:var(--c-muted); }
+.runtime-block { margin-top:14px; padding-top:14px; border-top:1px solid var(--c-border); }
+.runtime-block > h3 { margin:0 0 10px; color:var(--diag-background); font-size:12px; }
+.runtime-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:10px; }
+.runtime-item { background:var(--c-panel); border:1px solid var(--c-border); padding:9px; }
+.runtime-head {
+  display:flex; gap:8px; align-items:center; justify-content:space-between;
+  color:var(--diag-panel); font-size:10px; margin-bottom:7px;
+}
+.runtime-ratio { border:1px solid currentColor; padding:2px 5px; white-space:nowrap; }
+.runtime-sample {
+  min-height:48px; display:flex; align-items:center; justify-content:center;
+  border:2px solid transparent; padding:8px; font-weight:700; text-align:center;
+}
+.runtime-detail { color:var(--diag-panel); opacity:.75; font-size:9px; margin-top:6px; }
+.palette-grid { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:8px; }
+.swatch {
+  min-height:82px; padding:8px; border:1px solid var(--app-border);
+  display:grid; align-content:space-between;
+}
+.swatch b,.swatch span { font-size:11px; }
+.swatch .meta { font-size:9px; opacity:.8; }
+.physical-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:8px; }
+.physical-item {
+  min-height:86px; background:var(--app-panel2); border:1px solid var(--app-border);
+  padding:8px; display:grid; grid-template-columns:70px 1fr; gap:9px;
+}
+.physical-color {
+  min-height:68px; border:1px solid var(--app-border); display:flex;
+  align-items:end; justify-content:center; padding:5px; font-size:9px;
+}
+.physical-meta { font-size:9px; color:var(--app-dim); overflow-wrap:anywhere; }
+.physical-meta b { color:var(--app-text); font-size:10px; }
+.role-specimens { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:9px; }
+.role-specimen {
+  border:1px solid var(--app-border); background:var(--app-panel2);
+  padding:9px; min-width:0;
+}
+.role-specimen-head {
+  display:flex; align-items:start; justify-content:space-between; gap:8px;
+  margin-bottom:7px; min-width:0;
+}
+.role-specimen-head code { color:var(--app-text); overflow-wrap:anywhere; font-size:10px; }
+.role-specimen-source { color:var(--app-dim); font-size:9px; text-align:right; white-space:nowrap; }
+.role-specimen-sample {
+  min-height:54px; display:flex; align-items:center; justify-content:center;
+  padding:7px; margin-bottom:7px;
+}
+.role-mini-button { width:100%; min-height:42px; font-weight:700; }
+.role-mini-header {
+  width:100%; min-height:42px; display:flex; align-items:center;
+  justify-content:center; font-weight:700;
+}
+.role-mini-temp {
+  width:100%; min-height:42px; display:flex; align-items:center;
+  padding:0 12px; font-weight:700;
+}
+.role-mini-generic {
+  width:100%; min-height:42px; display:flex; align-items:center;
+  justify-content:center; font-weight:700;
+}
+.role-specimen-foot {
+  display:grid; grid-template-columns:1fr 1fr; gap:6px;
+  color:var(--app-dim); font-size:9px;
+}
+.role-chip { display:flex; align-items:center; gap:5px; min-width:0; }
+.role-chip-color {
+  width:22px; height:22px; padding:0; border:1px solid var(--app-border);
+  border-radius:2px; flex:0 0 auto; cursor:pointer; background:transparent;
+}
+.role-chip-color::-webkit-color-swatch-wrapper { padding:1px; }
+.role-chip-color::-webkit-color-swatch { border:0; }
+.role-chip-color::-moz-color-swatch { border:0; }
+.role-chip:hover .role-chip-color { outline:2px solid var(--app-accent); outline-offset:1px; }
+.json-box {
+  width:100%; min-height:250px; resize:vertical; color:var(--app-text);
+  background:#0c0f12; border:1px solid var(--app-border); padding:12px;
+  white-space:pre; overflow:auto;
+}
+.small-actions { display:flex; gap:8px; margin-top:10px; }
+.secondary-action {
+  padding:7px 10px; color:var(--app-text); background:var(--app-panel2);
+  border:1px solid var(--app-border);
+}
+@media (max-width:1100px) {
+  html,body { height:auto; overflow:auto; }
+  .app { height:auto; min-height:100vh; display:block; }
+  .top,.status { margin-bottom:12px; }
+  .layout { grid-template-columns:1fr; overflow:visible; }
+  .editor-stack,.preview-wrap { overflow:visible; min-height:auto; padding-right:0; }
+  .preview-wrap { margin-top:18px; }
+}
+@media (max-width:720px) {
+  .app { padding:12px; }
+  .color-row { grid-template-columns:1fr 48px 120px; }
+  .role-row { grid-template-columns:1fr; }
+  .preview-grid,.runtime-grid,.role-specimens,.physical-grid { grid-template-columns:1fr; }
+  .palette-grid { grid-template-columns:repeat(2,1fr); }
+}
+</style>
+</head>
+<body>
+<div class="app">
+  <div class="top">
+    <div>
+      <h1>Feather Theme Editor</h1>
+      <div class="sub" id="sourceInfo">Loading…</div>
+    </div>
+    <div class="toolbar">
+      <div class="field">
+        <label>Base theme</label>
+        <select id="themeSelect"></select>
+      </div>
+      <div class="field name-field">
+        <label>Custom theme name</label>
+        <input id="themeName" type="text" placeholder="MY THEME">
+      </div>
+      <div class="field desc-field">
+        <label>Description</label>
+        <input id="themeDescription" type="text" placeholder="Custom palette">
+      </div>
+      <button id="downloadButton" class="primary-action">Download JSON</button>
+    </div>
+  </div>
+
+  <div id="validationStatus" class="status">Waiting for theme…</div>
+
+  <div class="layout">
+    <div class="editor-stack">
+      <section class="panel">
+        <h2>ThemeColor</h2>
+        <div class="panel-body"><div id="colorGrid" class="color-grid"></div></div>
+      </section>
+
+      <section class="panel">
+        <h2>ThemeRole</h2>
+        <div class="panel-body">
+          <div id="roleGrid" class="role-grid"></div>
+          <div class="note">A role may reference ThemeColor or use custom HEX. Omitted roles resolve through DEFAULT_THEME_ROLES.</div>
+        </div>
+      </section>
+
+      <section class="panel">
+        <h2>Export JSON</h2>
+        <div class="panel-body">
+          <textarea id="jsonBox" class="json-box" spellcheck="false"></textarea>
+          <div class="small-actions">
+            <button id="applyJson" class="secondary-action">Apply JSON</button>
+            <button id="copyJson" class="secondary-action">Copy</button>
+          </div>
+        </div>
+      </section>
+    </div>
+
+    <div class="preview-wrap">
+      <section class="panel">
+        <h2>Live controls</h2>
+        <div class="panel-body">
+          <div id="preview" class="preview">
+            <div class="preview-title">ROLE-BASED COMPONENT PREVIEW</div>
+            <div class="preview-header">HEADER</div>
+            <div class="preview-grid">
+              <div class="preview-card">
+                <h3>BUTTONS</h3>
+                <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+                  <button class="demo-button">BUTTON</button>
+                  <button class="demo-button selected">SELECTED</button>
+                </div>
+              </div>
+              <div class="preview-card">
+                <h3>TEMPERATURE ROLES</h3>
+                <div class="temps">
+                  <b class="temp-nozzle">NOZZLE 150C</b>
+                  <b class="temp-bed">BED 60C</b>
+                  <b class="temp-fan">FAN 80%</b>
+                </div>
+              </div>
+              <div class="preview-card">
+                <h3>STATUS COLORS</h3>
+                <div class="statuses">
+                  <span class="chip warning">WARNING</span>
+                  <span class="chip danger">DANGER</span>
+                  <span class="chip success">SUCCESS</span>
+                </div>
+              </div>
+              <div class="preview-card">
+                <h3>DIRECT BASE TOKENS</h3>
+                <div class="tokens">
+                  <div class="token t-text"><span>TEXT</span><b>Aa</b></div>
+                  <div class="token t-bright"><span>BRIGHT</span><b>Aa</b></div>
+                  <div class="token t-primary"><span>PRIMARY</span><b>Aa</b></div>
+                  <div class="token t-secondary"><span>SECONDARY</span><b>Aa</b></div>
+                  <div class="token t-dim"><span>DIM</span><b>Aa</b></div>
+                  <div class="token t-muted"><span>MUTED</span><b>Aa</b></div>
+                </div>
+              </div>
+            </div>
+            <div class="runtime-block">
+              <h3>RUNTIME COMBINATIONS / REGRESSION CASES</h3>
+              <div id="runtimeGrid" class="runtime-grid"></div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="panel">
+        <h2>All ThemeRole specimens</h2>
+        <div class="panel-body">
+          <div id="roleSpecimens" class="role-specimens"></div>
+          <div class="note">Every contract role is shown. Current/default chips are editable; editing default creates a current override without mutating the contract default.</div>
+        </div>
+      </section>
+
+      <section class="panel">
+        <h2>Resolved ThemeRole palette</h2>
+        <div class="panel-body"><div id="rolePalette" class="palette-grid"></div></div>
+      </section>
+
+      <section class="panel">
+        <h2>Base ThemeColor palette</h2>
+        <div class="panel-body"><div id="basePalette" class="palette-grid"></div></div>
+      </section>
+
+      <section class="panel">
+        <h2>Physical color map</h2>
+        <div class="panel-body">
+          <div id="physicalMap" class="physical-grid"></div>
+          <div class="note">Unique physical HEX values across both ThemeColor and resolved ThemeRole values.</div>
+        </div>
+      </section>
+    </div>
+  </div>
+</div>
+
+<script>
+"use strict";
+
+const state = { config:null, doc:null, resolvedRoles:{} };
+const $ = id => document.getElementById(id);
+
+function hex(value) { return String(value || "").trim().replace(/^#/, "").toLowerCase(); }
+function isHex(value) { return /^[0-9a-f]{6}$/i.test(hex(value)); }
+function css(value) { return "#" + hex(value); }
+function cssVarName(prefix, name) { return `--${prefix}-${String(name).replaceAll("_", "-")}`; }
+
+function rgbChannels(value) {
+  const raw = hex(value);
+  return [parseInt(raw.slice(0,2),16), parseInt(raw.slice(2,4),16), parseInt(raw.slice(4,6),16)];
+}
+function linearChannel(value) {
+  value /= 255;
+  return value <= 0.04045 ? value / 12.92 : Math.pow((value + 0.055) / 1.055, 2.4);
+}
+function luminance(value) {
+  const [r,g,b] = rgbChannels(value);
+  return 0.2126 * linearChannel(r) + 0.7152 * linearChannel(g) + 0.0722 * linearChannel(b);
+}
+function contrastRatio(foreground, background) {
+  const a = luminance(foreground), b = luminance(background);
+  return (Math.max(a,b) + 0.05) / (Math.min(a,b) + 0.05);
+}
+function diagnosticText(background) {
+  return contrastRatio("000000", background) >= contrastRatio("ffffff", background) ? "000000" : "ffffff";
+}
+
+function resolveRoleValue(value) {
+  const raw = String(value || "").trim().toLowerCase().replace(/^#/, "");
+  return state.doc.colors[raw] || raw;
+}
+function effectiveRoles() {
+  const out = {};
+  for (const role of state.config.roles) {
+    const source = (state.doc.roles || {})[role] ?? state.config.defaults[role];
+    out[role] = resolveRoleValue(source);
+  }
+  state.resolvedRoles = out;
+  return out;
+}
+function fallbackRoleValue(role) { return resolveRoleValue(state.config.defaults[role]); }
+function roleSource(role) { return (state.doc.roles || {})[role] ?? state.config.defaults[role]; }
+function exportDocument() {
+  const copy = JSON.parse(JSON.stringify(state.doc));
+  copy.name = $("themeName").value.trim();
+  copy.description = $("themeDescription").value.trim();
+  return copy;
+}
+
+function setCssVariables() {
+  const root = document.documentElement;
+  for (const name of state.config.colors) root.style.setProperty(cssVarName("c", name), css(state.doc.colors[name]));
+  const roles = effectiveRoles();
+  for (const name of state.config.roles) root.style.setProperty(cssVarName("r", name), css(roles[name]));
+  root.style.setProperty("--diag-background", css(diagnosticText(state.doc.colors.background)));
+  root.style.setProperty("--diag-panel", css(diagnosticText(state.doc.colors.panel)));
+}
+
+function swatchHtml(name, value, extra="") {
+  const raw = hex(value), label = diagnosticText(raw), ratio = contrastRatio(label, raw);
+  return `<div class="swatch" style="background:${css(raw)};color:${css(label)}">
+    <b>${name}</b><span>#${raw.toUpperCase()}</span>
+    <span class="meta">${extra || `label ${ratio.toFixed(2)}:1`}</span>
+  </div>`;
+}
+
+function renderBasePalette() {
+  $("basePalette").innerHTML = state.config.colors.map(name => swatchHtml(name, state.doc.colors[name])).join("");
+}
+function renderRolePalette() {
+  const roles = effectiveRoles();
+  $("rolePalette").innerHTML = state.config.roles.map(role => {
+    const source = roleSource(role);
+    return swatchHtml(role, roles[role], `${source} → #${hex(roles[role]).toUpperCase()}`);
+  }).join("");
+}
+function renderPhysicalMap() {
+  const clusters = new Map();
+  const add = (value, kind, name) => {
+    const raw = hex(value);
+    if (!clusters.has(raw)) clusters.set(raw, {colors:[],roles:[]});
+    clusters.get(raw)[kind].push(name);
+  };
+  for (const name of state.config.colors) add(state.doc.colors[name], "colors", name);
+  const roles = effectiveRoles();
+  for (const role of state.config.roles) add(roles[role], "roles", role);
+
+  const items = [...clusters.entries()].sort((a,b) => {
+    const ac = a[1].colors.length + a[1].roles.length;
+    const bc = b[1].colors.length + b[1].roles.length;
+    return bc - ac || a[0].localeCompare(b[0]);
+  });
+
+  $("physicalMap").innerHTML = items.map(([value, info]) => {
+    const label = diagnosticText(value);
+    return `<div class="physical-item">
+      <div class="physical-color" style="background:${css(value)};color:${css(label)}">#${value.toUpperCase()}</div>
+      <div class="physical-meta"><b>#${value.toUpperCase()}</b><br>
+        ThemeColor: ${info.colors.join(", ") || "—"}<br>
+        ThemeRole: ${info.roles.join(", ") || "—"}
+      </div>
+    </div>`;
+  }).join("");
+}
+
+function renderRuntimeCombinations() {
+  const c = state.doc.colors, r = effectiveRoles();
+  const cases = [
+    ["INFO / NETWORK", "BRIGHT ON BACKGROUND", c.bright, c.background, c.border, "BRIGHT → BACKGROUND"],
+    ["TOAST / ACCENT", "SECONDARY ON BACKGROUND", c.secondary, c.background, c.secondary, "SECONDARY → BACKGROUND"],
+    ["CALIBRATION CURRENT", "CURRENT STAGE", c.bright, c.secondary_dark, c.secondary, "BRIGHT / SECONDARY_DARK / SECONDARY border"],
+    ["CALIBRATION DONE", "DONE STAGE", c.primary, c.panel, c.primary, "PRIMARY → PANEL"],
+    ["FUTURE / DISABLED", "FUTURE STAGE", c.muted, c.panel, c.border, "MUTED → PANEL"],
+    ["TOGGLE OFF / AUX", "DIM / MUTED", c.dim, c.panel, c.muted, "DIM text + MUTED structure → PANEL"],
+    ["DANGER ACTION", "ABORT / CANCEL", c.danger, c.danger_background, c.danger, "DANGER → DANGER_BACKGROUND"],
+    ["SELECTED ROLE SET", "SELECTED", r.button_selected_text, r.button_selected_background, r.button_selected_border, "resolved selected button roles"],
+  ];
+
+  $("runtimeGrid").innerHTML = cases.map(([title,text,fg,bg,border,detail]) => {
+    const ratio = contrastRatio(fg,bg);
+    const ratioColor = ratio >= 4.5 ? c.success : ratio >= 3.0 ? c.warning : c.danger;
+    return `<div class="runtime-item"><div class="runtime-head"><b>${title}</b>
+      <span class="runtime-ratio" style="color:${css(ratioColor)}">${ratio.toFixed(2)}:1</span></div>
+      <div class="runtime-sample" style="color:${css(fg)};background:${css(bg)};border-color:${css(border)}">${text}</div>
+      <div class="runtime-detail">${detail}</div></div>`;
+  }).join("");
+}
+
+function roleFamily(role) {
+  if (role.startsWith("button_selected_")) return "button_selected";
+  if (role.startsWith("button_")) return "button";
+  if (role.startsWith("header_")) return "header";
+  if (role.startsWith("temperature_")) return "temperature";
+  return "generic";
+}
+
+function roleSampleHtml(role) {
+  const family = roleFamily(role);
+  if (family === "button") return `<button class="role-mini-button" style="background:var(--r-button-background);color:var(--r-button-text);border:2px solid var(--r-button-border)">BUTTON</button>`;
+  if (family === "button_selected") return `<button class="role-mini-button" style="background:var(--r-button-selected-background);color:var(--r-button-selected-text);border:2px solid var(--r-button-selected-border)">SELECTED</button>`;
+  if (family === "header") return `<div class="role-mini-header" style="background:var(--r-header-background);color:var(--r-header-text);border:2px solid var(--r-header-border)">HEADER</div>`;
+  if (family === "temperature") {
+    const label = role === "temperature_nozzle" ? "NOZZLE 150C" : role === "temperature_bed" ? "BED 60C" : role === "temperature_fan" ? "FAN 80%" : role.toUpperCase();
+    return `<div class="role-mini-temp" style="background:var(--c-panel);color:var(${cssVarName("r", role)});border:1px solid var(--c-border)">${label}</div>`;
+  }
+  return `<div class="role-mini-generic" data-generic-sample>GENERIC</div>`;
+}
+
+function renderRoleSpecimens() {
+  $("roleSpecimens").innerHTML = state.config.roles.map(role => `
+    <div class="role-specimen" data-role="${role}">
+      <div class="role-specimen-head"><code>${role}</code><span class="role-specimen-source"></span></div>
+      <div class="role-specimen-sample">${roleSampleHtml(role)}</div>
+      <div class="role-specimen-foot">
+        <span class="role-chip"><input class="role-chip-color role-current-picker" type="color" title="Edit current role color"><span class="current-label"></span></span>
+        <span class="role-chip"><input class="role-chip-color role-default-picker" type="color" title="Start override from default color"><span class="default-label"></span></span>
+      </div>
+    </div>`).join("");
+
+  for (const card of $("roleSpecimens").querySelectorAll(".role-specimen")) {
+    const role = card.dataset.role;
+    const currentPicker = card.querySelector(".role-current-picker");
+    const defaultPicker = card.querySelector(".role-default-picker");
+
+    const applyPicker = picker => {
+      state.doc.roles ||= {};
+      const value = hex(picker.value);
+      state.doc.roles[role] = value;
+      syncRoleEditorToCustom(role, value);
+      applyLiveState(picker);
+    };
+
+    currentPicker.addEventListener("input", () => applyPicker(currentPicker));
+    currentPicker.addEventListener("change", () => applyLiveState());
+    defaultPicker.addEventListener("input", () => applyPicker(defaultPicker));
+    defaultPicker.addEventListener("change", () => applyLiveState());
+  }
+  syncRoleSpecimens();
+}
+
+function syncRoleSpecimens(activePicker=null) {
+  const roles = effectiveRoles();
+  for (const card of $("roleSpecimens").querySelectorAll(".role-specimen")) {
+    const role = card.dataset.role;
+    const current = roles[role], fallback = fallbackRoleValue(role);
+    const source = roleSource(role);
+    const inherited = (state.doc.roles || {})[role] === undefined;
+    const currentPicker = card.querySelector(".role-current-picker");
+    const defaultPicker = card.querySelector(".role-default-picker");
+
+    card.querySelector(".role-specimen-source").textContent = `${inherited ? "fallback" : "override"}: ${source}`;
+    card.querySelector(".current-label").textContent = `current #${hex(current).toUpperCase()}`;
+    card.querySelector(".default-label").textContent = `default #${hex(fallback).toUpperCase()}`;
+    if (currentPicker !== activePicker) currentPicker.value = css(current);
+    if (defaultPicker !== activePicker) defaultPicker.value = css(fallback);
+
+    const generic = card.querySelector("[data-generic-sample]");
+    if (generic) {
+      generic.textContent = role.toUpperCase();
+      generic.style.background = css(current);
+      generic.style.color = css(diagnosticText(current));
+      generic.style.border = `1px solid ${css(state.doc.colors.border)}`;
+    }
+  }
+}
+
+function renderColorEditor() {
+  const root = $("colorGrid"); root.innerHTML = "";
+  for (const name of state.config.colors) {
+    const value = hex(state.doc.colors[name]);
+    const row = document.createElement("div"); row.className = "color-row"; row.dataset.color = name;
+    row.innerHTML = `<code>${name}</code><input class="picker" type="color" value="#${value}"><input class="hex-input" type="text" value="${value}" maxlength="7">`;
+    const picker = row.querySelector(".picker"), input = row.querySelector(".hex-input");
+    picker.addEventListener("input", () => {
+      const next = hex(picker.value); state.doc.colors[name] = next; input.value = next; applyLiveState(picker);
+    });
+    picker.addEventListener("change", () => applyLiveState());
+    input.addEventListener("input", () => {
+      const next = hex(input.value); if (!isHex(next)) return;
+      state.doc.colors[name] = next; picker.value = css(next); applyLiveState(input);
+    });
+    root.appendChild(row);
+  }
+}
+
+function roleOptions(selected) {
+  const raw = String(selected || "").trim().toLowerCase();
+  const isToken = state.config.colors.includes(raw);
+  return state.config.colors.map(name => `<option value="${name}" ${raw === name ? "selected" : ""}>${name}</option>`).join("") +
+    `<option value="__custom__" ${!isToken ? "selected" : ""}>custom HEX</option>`;
+}
+function renderRoleEditor() {
+  const root = $("roleGrid"); root.innerHTML = "";
+  for (const role of state.config.roles) {
+    const source = roleSource(role), raw = String(source).trim().toLowerCase(), custom = !state.config.colors.includes(raw);
+    const row = document.createElement("div"); row.className = "role-row" + (custom ? " custom" : ""); row.dataset.role = role;
+    row.innerHTML = `<code>${role}</code><select>${roleOptions(raw)}</select><input class="role-color" type="color" value="#${isHex(raw) ? hex(raw) : "ffffff"}">`;
+    const select = row.querySelector("select"), picker = row.querySelector(".role-color");
+    select.addEventListener("change", () => {
+      state.doc.roles ||= {};
+      if (select.value === "__custom__") {
+        row.classList.add("custom"); const value = state.resolvedRoles[role] || "ffffff";
+        picker.value = css(value); state.doc.roles[role] = hex(value);
+      } else {
+        row.classList.remove("custom"); state.doc.roles[role] = select.value;
+      }
+      applyLiveState();
+    });
+    picker.addEventListener("input", () => {
+      state.doc.roles ||= {}; state.doc.roles[role] = hex(picker.value); applyLiveState(picker);
+    });
+    picker.addEventListener("change", () => applyLiveState());
+    root.appendChild(row);
+  }
+}
+
+function syncRoleEditorToCustom(role, value) {
+  const row = [...document.querySelectorAll(".role-row")].find(item => item.dataset.role === role);
+  if (!row) return;
+  row.classList.add("custom");
+  row.querySelector("select").value = "__custom__";
+  row.querySelector(".role-color").value = css(value);
+}
+
+function syncColorEditors(active=null) {
+  for (const row of document.querySelectorAll(".color-row")) {
+    const name = row.dataset.color, value = hex(state.doc.colors[name]);
+    const picker = row.querySelector(".picker"), input = row.querySelector(".hex-input");
+    if (picker !== active) picker.value = css(value);
+    if (input !== active) input.value = value;
+  }
+}
+
+function updateJsonBox() { $("jsonBox").value = JSON.stringify(exportDocument(), null, 2) + "\n"; }
+let validationTimer = null;
+function scheduleValidation() { clearTimeout(validationTimer); validationTimer = setTimeout(validateCurrent, 120); }
+
+function applyLiveState(activeControl=null) {
+  // One authoritative update path. No role specimen DOM is rebuilt here, so
+  // an open native color picker remains open while every dependent view updates.
+  effectiveRoles();
+  setCssVariables();
+  syncColorEditors(activeControl);
+  syncRoleSpecimens(activeControl);
+  renderRolePalette();
+  renderBasePalette();
+  renderPhysicalMap();
+  renderRuntimeCombinations();
+  updateJsonBox();
+  scheduleValidation();
+}
+
+async function validateCurrent() {
+  const response = await fetch("/api/validate", {method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(exportDocument())});
+  const result = await response.json(), status = $("validationStatus"), button = $("downloadButton");
+  if (result.ok) {
+    status.className = "status ok";
+    status.textContent = "Valid • " + (result.schema_used ? "schema validation OK" : "basic validation OK");
+    button.disabled = false;
+  } else {
+    status.className = "status bad"; status.textContent = result.errors.join(" • "); button.disabled = true;
+  }
+}
+
+async function loadTheme(filename) {
+  const response = await fetch("/api/theme?file=" + encodeURIComponent(filename));
+  state.doc = await response.json(); state.doc.roles ||= {};
+  $("themeName").value = (state.doc.name || filename.replace(/\.json$/i, "")) + " CUSTOM";
+  $("themeDescription").value = state.doc.description || "";
+  renderColorEditor(); renderRoleEditor(); renderRoleSpecimens(); applyLiveState();
+}
+
+async function init() {
+  state.config = await (await fetch("/api/config")).json();
+  $("sourceInfo").textContent = `${state.config.themes.length} themes • ${state.config.contract_mode} contract` + (state.config.schema ? ` • schema: ${state.config.schema}` : " • basic schema checks");
+  const select = $("themeSelect");
+  for (const theme of state.config.themes) {
+    const option = document.createElement("option"); option.value = theme.file; option.textContent = theme.name; select.appendChild(option);
+  }
+  select.addEventListener("change", () => loadTheme(select.value));
+  $("themeName").addEventListener("input", () => { updateJsonBox(); scheduleValidation(); });
+  $("themeDescription").addEventListener("input", () => { updateJsonBox(); scheduleValidation(); });
+  $("downloadButton").addEventListener("click", async () => {
+    const response = await fetch("/api/export", {method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(exportDocument())});
+    if (!response.ok) { const result = await response.json(); alert(result.errors.join("\n")); return; }
+    const blob = await response.blob(), disposition = response.headers.get("Content-Disposition") || "";
+    const match = disposition.match(/filename="([^"]+)"/), filename = match ? match[1] : "custom-theme.json";
+    const url = URL.createObjectURL(blob), link = document.createElement("a"); link.href = url; link.download = filename; link.click(); setTimeout(() => URL.revokeObjectURL(url), 1000);
+  });
+  $("applyJson").addEventListener("click", () => {
+    try {
+      state.doc = JSON.parse($("jsonBox").value); state.doc.roles ||= {};
+      $("themeName").value = state.doc.name || ""; $("themeDescription").value = state.doc.description || "";
+      renderColorEditor(); renderRoleEditor(); renderRoleSpecimens(); applyLiveState();
+    } catch (error) { alert(error.message); }
+  });
+  $("copyJson").addEventListener("click", async () => navigator.clipboard.writeText($("jsonBox").value));
+  if (state.config.themes.length) { select.value = state.config.themes[0].file; await loadTheme(select.value); }
+  else { $("validationStatus").className = "status bad"; $("validationStatus").textContent = "No theme JSON files found."; $("downloadButton").disabled = true; }
+}
+init();
+</script>
+</body>
+</html>
+'''
+
+
+class App:
+    def __init__(self, themes_dir, theme_py, schema):
+        self.themes_dir = Path(themes_dir)
+        self.theme_py = Path(theme_py) if theme_py else None
+        self.schema = Path(schema) if schema else None
+        self.contract = load_contract(self.theme_py)
+
+    def theme_list(self):
+        return load_theme_files(self.themes_dir)
+
+    def safe_theme_path(self, filename):
+        filename = Path(str(filename)).name
+        path = (self.themes_dir / filename).resolve()
+        if path.parent != self.themes_dir.resolve():
+            raise ValueError("invalid theme path")
+        if not path.is_file():
+            raise FileNotFoundError(filename)
+        return path
+
+    def load_theme(self, filename):
+        document = json.loads(self.safe_theme_path(filename).read_text(encoding="utf-8"))
+        if not isinstance(document, dict) or "colors" not in document:
+            raise ValueError("not a theme document")
+        return document
+
+    def validate(self, document):
+        errors = validate_basic(document, self.contract)
+        schema_used = False
+        if not errors:
+            schema_errors, schema_used = schema_validate(document, self.schema)
+            errors.extend(schema_errors)
+        return errors, schema_used
+
+
+def make_handler(app):
+    class Handler(BaseHTTPRequestHandler):
+        server_version = "FeatherThemeEditor/1.2"
+
+        def log_message(self, fmt, *args):
+            print("[http] " + fmt % args)
+
+        def send_bytes(self, data, content_type, status=HTTPStatus.OK, headers=None):
+            self.send_response(status)
+            self.send_header("Content-Type", content_type)
+            self.send_header("Content-Length", str(len(data)))
+            self.send_header("Cache-Control", "no-store")
+            for key, value in (headers or {}).items():
+                self.send_header(key, value)
+            self.end_headers()
+            self.wfile.write(data)
+
+        def send_json(self, value, status=HTTPStatus.OK, headers=None):
+            data = json.dumps(value, ensure_ascii=False, indent=2).encode("utf-8")
+            self.send_bytes(data, "application/json; charset=utf-8", status, headers)
+
+        def read_json(self):
+            length = int(self.headers.get("Content-Length") or "0")
+            if length > 2_000_000:
+                raise ValueError("request too large")
+            return json.loads(self.rfile.read(length).decode("utf-8"))
+
+        def do_GET(self):
+            parsed = urllib.parse.urlparse(self.path)
+            if parsed.path == "/":
+                self.send_bytes(HTML_PAGE.encode("utf-8"), "text/html; charset=utf-8")
+                return
+            if parsed.path == "/api/config":
+                self.send_json({
+                    "themes": app.theme_list(),
+                    "colors": list(app.contract["colors"]),
+                    "roles": list(app.contract["roles"]),
+                    "defaults": app.contract["defaults"],
+                    "contract_mode": app.contract["mode"],
+                    "schema": app.schema.name if app.schema else None,
+                })
+                return
+            if parsed.path == "/api/theme":
+                filename = (urllib.parse.parse_qs(parsed.query).get("file") or [""])[0]
+                try:
+                    self.send_json(app.load_theme(filename))
+                except FileNotFoundError:
+                    self.send_json({"error": "theme not found"}, HTTPStatus.NOT_FOUND)
+                except Exception as exc:
+                    self.send_json({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
+                return
+            self.send_json({"error": "not found"}, HTTPStatus.NOT_FOUND)
+
+        def do_POST(self):
+            try:
+                document = self.read_json()
+            except Exception as exc:
+                self.send_json({"ok": False, "errors": [str(exc)]}, HTTPStatus.BAD_REQUEST)
+                return
+
+            if self.path == "/api/validate":
+                errors, schema_used = app.validate(document)
+                self.send_json({"ok": not errors, "errors": errors, "schema_used": schema_used})
+                return
+
+            if self.path == "/api/export":
+                errors, _schema_used = app.validate(document)
+                if errors:
+                    self.send_json({"ok": False, "errors": errors}, HTTPStatus.BAD_REQUEST)
+                    return
+                filename = safe_filename(document.get("name")) + ".json"
+                data = (json.dumps(document, ensure_ascii=False, indent=2) + "\n").encode("utf-8")
+                self.send_bytes(
+                    data,
+                    "application/json; charset=utf-8",
+                    headers={"Content-Disposition": 'attachment; filename="%s"' % filename},
+                )
+                return
+
+            self.send_json({"error": "not found"}, HTTPStatus.NOT_FOUND)
+
+    return Handler
+
+
+def parse_args():
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--themes-dir", type=Path,
+        help="theme directory; defaults to cwd when cwd contains themes, otherwise ./themes")
+    parser.add_argument("--theme-py", type=Path, help="path to theme.py; auto-detected when omitted")
+    parser.add_argument("--schema", type=Path, help="path to theme.schema.json; auto-detected when omitted")
+    parser.add_argument("--port", type=int, default=8765, help="local HTTP port, or 0 for any free port")
+    parser.add_argument("--no-open", action="store_true", help="do not open the browser automatically")
+    return parser.parse_args()
+
+
+def main():
+    args = parse_args()
+    base = Path.cwd().resolve()
+    themes_dir = discover_themes_dir(base, args.themes_dir)
+    theme_py = args.theme_py.expanduser().resolve() if args.theme_py else discover_theme_py(base)
+    schema = args.schema.expanduser().resolve() if args.schema else discover_schema(base, themes_dir)
+
+    app = App(themes_dir, theme_py, schema)
+    themes = app.theme_list()
+    server = ThreadingHTTPServer(("127.0.0.1", args.port), make_handler(app))
+    host, port = server.server_address
+    url = "http://%s:%d/" % (host, port)
+
+    print("Feather Theme Editor")
+    print("  themes   : %s (%d found)" % (themes_dir, len(themes)))
+    print("  theme.py : %s" % (theme_py or "not found; embedded contract"))
+    print("  schema   : %s" % (schema or "not found; basic validation only"))
+    print("  url      : %s" % url)
+    print("Press Ctrl+C to stop.")
+
+    if not args.no_open:
+        threading.Timer(0.35, lambda: webbrowser.open(url)).start()
+
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        print("\nStopping.")
+    finally:
+        server.server_close()
+
+
+if __name__ == "__main__":
+    main()
