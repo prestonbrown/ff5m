@@ -533,6 +533,74 @@ class FeatherUtilitiesTest(unittest.TestCase):
                         FEATHER.FeatherRenderer.text_width(value, font),
                         max_width, "%s: %s" % (param.key, value))
 
+    def test_mod_category_pages_keep_every_heading_with_its_rows(self):
+        params = (
+            [mod_param("a%d" % index, bool, False, "A %d" % index,
+                       ui_category="alpha") for index in range(12)]
+            + [mod_param("b0", bool, False, "B 0", ui_category="beta")]
+            + [mod_param("g%d" % index, bool, False, "G %d" % index,
+                         ui_category="gamma") for index in range(7)])
+        manager = ModManager(params, {})
+        capacity = MOD_UI.LIST_BOTTOM - MOD_UI.LIST_TOP
+
+        pages = MOD_UI.category_pages(manager, params)
+
+        self.assertTrue(pages)
+        for sections in pages:
+            self.assertTrue(sections)
+            height = MOD_UI.page_height(sections)
+            self.assertLessEqual(height, capacity)
+            # Later bands are padded to a row pitch, so the rows of every page
+            # stay on one grid and no page ends with a half-row gap.
+            self.assertEqual((height - MOD_UI.band_pitch(0)) % MOD_UI.ITEM_PITCH,
+                             0, [section.label for section in sections])
+            for section in sections:
+                # A heading with nothing under it is exactly what the pixel
+                # pagination exists to prevent.
+                self.assertTrue(section.items, section.label)
+
+        self.assertEqual(
+            [entry for sections in pages
+             for entry in MOD_UI.page_parameters(sections)],
+            list(enumerate(params)))
+
+        # A category too long for one page repeats its heading, and every
+        # repeat reports where its rows sit inside the whole category.
+        for label, start in (("ALPHA", 0), ("BETA", 12), ("GAMMA", 13)):
+            sections = [section for sections in pages for section in sections
+                        if section.label == label]
+            total = sum(len(section.items) for section in sections)
+            self.assertEqual([section.continued for section in sections],
+                             [False] + [True] * (len(sections) - 1))
+            for section in sections:
+                self.assertEqual(section.total, total)
+                self.assertEqual(section.first,
+                                 section.items[0][0] - start + 1)
+        self.assertGreater(
+            len([section for sections in pages for section in sections
+                 if section.label == "ALPHA"]), 1)
+
+        for number, sections in enumerate(pages):
+            for _, param in MOD_UI.page_parameters(sections):
+                self.assertEqual(
+                    MOD_UI.page_of_parameter(pages, param.key), number)
+        self.assertIsNone(MOD_UI.page_of_parameter(pages, "absent"))
+
+        # A category that did not fit leaves a row-sized hole; that page names
+        # what follows rather than ending in blank space.
+        hints = [MOD_UI.next_category_hint(pages, number)
+                 for number in range(len(pages))]
+        self.assertTrue(any(hints), hints)
+        for number, hint in enumerate(hints):
+            if hint is None:
+                continue
+            self.assertGreaterEqual(
+                capacity - MOD_UI.page_height(pages[number]),
+                MOD_UI.ITEM_PITCH)
+            self.assertEqual(hint, pages[number + 1][0].label)
+        # The last page has nothing to announce, however much room is left.
+        self.assertIsNone(MOD_UI.next_category_hint(pages, len(pages) - 1))
+
     def test_mod_value_validation_is_type_specific_and_bounded(self):
         integer = mod_param("count", int, 0, "Count")
         decimal = mod_param("offset", float, 0.0, "Offset")
@@ -777,7 +845,7 @@ class FeatherUtilitiesTest(unittest.TestCase):
                     child, [param.key for param in
                             MOD_UI.visible_parameters(manager)])
 
-    def test_renamed_parameter_keeps_a_configured_value_and_drops_its_default(self):
+    def test_renamed_parameter_carries_stored_values_to_the_current_key(self):
         declaration_path = pathlib.Path(__file__).parents[1] / "mod_params.json"
 
         def reload_variables(text):
@@ -798,14 +866,15 @@ class FeatherUtilitiesTest(unittest.TestCase):
                     manager._reload()
             return manager, logs.output
 
-        # A tuned M600 park height keeps its meaning under the new name, while
-        # the retired 50 mm default gives way to the new pause policy.
+        # A tuned M600 park height keeps its meaning under the new name.  The
+        # rename carries every value, including one that equals the default, so
+        # no height is silently reinterpreted as "never configured".
         configured, output = reload_variables("[Variables]\nm600_z_min = 75.0\n")
         self.assertEqual(configured.variables["pause_z_min"], 75.0)
         self.assertTrue(any("m600_z_min" in line and "pause_z_min" in line
                             for line in output), output)
         stock, _ = reload_variables("[Variables]\nm600_z_min = 50.0\n")
-        self.assertEqual(stock.variables["pause_z_min"], 100.0)
+        self.assertEqual(stock.variables["pause_z_min"], 50.0)
 
         # The current key wins over a leftover, whichever order they appear in.
         for text in ("[Variables]\npause_z_min = 120.0\nm600_z_min = 75.0\n",

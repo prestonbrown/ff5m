@@ -89,7 +89,7 @@ class SettingsFeature(FeatherPagesMixin, FeatureHostProxy):
                 "settings.brightness.plus", "settings.led.minus",
                 "settings.led.plus", "settings.sound", "settings.theme",
                 "settings.mod", "settings.benchmark.tap"),
-            ScreenPage.MOD_SETTINGS: ("nav.back", "mod.prev", "mod.next"),
+            ScreenPage.MOD_SETTINGS: ("nav.back", "mod.prev", "mod.next", "mod.more"),
             ScreenPage.PARAMETER_OPTIONS: (
                 "nav.back", "mod.cancel", "mod.apply", "mod.options.prev",
                 "mod.options.next"),

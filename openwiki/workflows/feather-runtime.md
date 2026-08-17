@@ -347,13 +347,19 @@ time and Feather's persisted last-print time. The latter is stored in
 `/opt/config/mod_data/feather_print_history.json` by default and is also updated
 when a print is started outside the local screen.
 
-List pagination is centralized in `feather_pagination.py`; file, Wi-Fi,
-mod-parameter, prompt, and calibration pages reuse its clamping and visible-row
-mapping. The calibration menu covers every workflow documented in
-`docs/CALIBRATION.md`: directly supported macros open guarded confirmation,
-progress, result, and save pages, while axis and extruder rotation calibration
-open measurement guides because those procedures require a printed model and a
-deliberate `user.cfg` edit.
+List pagination is centralized in `feather_pagination.py`; file, Wi-Fi, prompt,
+and calibration pages reuse its clamping and visible-row mapping. Mod parameters
+paginate by pixels instead (`feather_mod_settings.category_pages`) because each
+category heading is drawn inside the list and must share the page with at least
+one of its rows; a category that does not fit repeats its heading, marked
+`(CONT.)`, on the next page. A second heading on the same page is padded to a
+whole row pitch so every row keeps one grid, and a page that had to postpone a
+category spends the leftover row on a `mod.more` card naming that category, which
+opens the page it starts on. The calibration menu covers every workflow
+documented in `docs/CALIBRATION.md`: directly supported macros open guarded
+confirmation, progress, result, and save pages, while axis and extruder rotation
+calibration open measurement guides because those procedures require a printed
+model and a deliberate `user.cfg` edit.
 
 Moving page policy or printer actions into Typer is not currently justified:
 Typer's C++ runtime/shared-library footprint is already larger than its heap,

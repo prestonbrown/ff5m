@@ -1568,10 +1568,10 @@ class ControllerSafetyTest(unittest.TestCase):
         self.assertIn("mod.prev", controller.renderer._buttons)
         self.assertNotIn("mod.next", controller.renderer._buttons)
 
-    def test_mod_settings_category_context_handles_page_boundaries(self):
+    def test_mod_settings_repeats_category_headings_inside_the_list(self):
         params = [
             mod_param("a%d" % index, bool, False, "A %d" % index,
-                      ui_category="first") for index in range(5)] + [
+                      ui_category="first") for index in range(6)] + [
             mod_param("b0", bool, False, "B 0", ui_category="second")]
         controller = mod_controller(
             params, dict((param.key, False) for param in params))
@@ -1580,24 +1580,68 @@ class ControllerSafetyTest(unittest.TestCase):
 
         controller._render_mod_settings()
         first = "\n".join(controller.draw_batches[-1])
-        self.assertIn('"FIRST // 01-05 / 06"', first)
-        self.assertNotIn("SECOND >", first)
+        self.assertIn('-t "FIRST"', first)
+        self.assertIn('-t "01-05 / 06"', first)
+        self.assertNotIn("SECOND", first)
+        self.assertEqual(
+            set(controller.renderer._toggles),
+            {"mod.item.%d" % index for index in range(5)})
 
+        # The last row of FIRST keeps a heading of its own instead of leaving
+        # the reader without context, and SECOND opens its own section below.
         controller._handle_mod_action("mod.next")
         second = "\n".join(controller.draw_batches[-1])
-        self.assertIn('"SECOND // 06-06 / 06"', second)
-        controller._handle_mod_action("mod.prev")
-        self.assertIn('"FIRST // 01-05 / 06"',
-                      "\n".join(controller.draw_batches[-1]))
+        self.assertIn('-t "FIRST (CONT.)"', second)
+        self.assertIn('-t "06-06 / 06"', second)
+        self.assertIn('-t "SECOND"', second)
+        self.assertIn('-t "01-01 / 01"', second)
+        self.assertEqual(set(controller.renderer._toggles),
+                         {"mod.item.5", "mod.item.6"})
 
-        mixed = params[3:5] + params[5:]
-        mixed_controller = mod_controller(
-            mixed, dict((param.key, False) for param in mixed))
-        mixed_controller.params.ui_categories_map["first"].label = "FIRST"
-        mixed_controller.params.ui_categories_map["second"].label = "SECOND"
-        mixed_controller._render_mod_settings()
-        self.assertIn('"FIRST > SECOND // 01-03 / 03"',
-                      "\n".join(mixed_controller.draw_batches[-1]))
+        controller._handle_mod_action("mod.prev")
+        back = "\n".join(controller.draw_batches[-1])
+        self.assertIn('-t "FIRST"', back)
+        self.assertNotIn("(CONT.)", back)
+
+    def test_mod_settings_turns_the_leftover_row_into_the_way_forward(self):
+        params = [
+            mod_param("a%d" % index, bool, False, "A %d" % index,
+                      ui_category="first") for index in range(9)] + [
+            mod_param("b0", bool, False, "B 0", ui_category="second")]
+        controller = mod_controller(
+            params, dict((param.key, False) for param in params))
+        controller.params.ui_categories_map["first"].label = "FIRST"
+        controller.params.ui_categories_map["second"].label = "SECOND"
+
+        controller._render_mod_settings()
+        self.assertNotIn("mod.more", controller.renderer._hitboxes)
+
+        # SECOND needs a heading and a row, and only one row of space is left.
+        # An empty strip there would read as the end of the list, so the page
+        # spends it on a tappable card that leads to SECOND.
+        controller._handle_mod_action("mod.next")
+        second = "\n".join(controller.draw_batches[-1])
+        self.assertIn('-t "NEXT: SECOND >"', second)
+        self.assertEqual(
+            set(controller.renderer._toggles),
+            {"mod.item.%d" % index for index in range(5, 9)})
+
+        # The card is an ordinary list block that happens to be touchable, not
+        # a button, so it fills one row slot inside the list without button
+        # chrome, and the page lets the tap through.
+        self.assertNotIn("mod.more", controller.renderer._buttons)
+        x, y, width, height = controller.renderer._hitboxes["mod.more"][:4]
+        self.assertEqual((x, width, height),
+                         (MOD_UI.LIST_X, MOD_UI.LIST_WIDTH, MOD_UI.ITEM_HEIGHT))
+        self.assertLessEqual(y + height, MOD_UI.LIST_BOTTOM)
+        self.assertTrue(controller.allows_action(
+            FEATHER.ScreenPage.MOD_SETTINGS, "mod.more"))
+
+        controller._handle_mod_action("mod.more")
+        third = "\n".join(controller.draw_batches[-1])
+        self.assertEqual(controller.mod_page, 2)
+        self.assertIn('-t "SECOND"', third)
+        self.assertNotIn("mod.more", controller.renderer._hitboxes)
 
     def test_mod_dependency_toggle_repaginates_and_preserves_anchor(self):
         condition = {"parameter": "parent", "operator": "equals",
@@ -1616,29 +1660,31 @@ class ControllerSafetyTest(unittest.TestCase):
         controller.params.ui_categories_map["second"].label = "SECOND"
 
         controller._render_mod_settings()
-        self.assertIn("01-05 / 06", "\n".join(controller.draw_batches[-1]))
+        self.assertIn('-t "01-05 / 05"', "\n".join(controller.draw_batches[-1]))
         controller._handle_mod_action("mod.item.4")
 
         expanded = "\n".join(controller.draw_batches[-1])
-        self.assertIn("01-05 / 07", expanded)
+        self.assertIn('-t "01-05 / 06"', expanded)
         self.assertEqual(controller.mod_page, 0)
         controller._handle_mod_action("mod.next")
         expanded_second = "\n".join(controller.draw_batches[-1])
-        self.assertIn("06-07 / 07", expanded_second)
-        self.assertIn('"FIRST > SECOND // 06-07 / 07"', expanded_second)
+        self.assertIn('-t "FIRST (CONT.)"', expanded_second)
+        self.assertIn('-t "06-06 / 06"', expanded_second)
+        self.assertIn('-t "SECOND"', expanded_second)
         self.assertEqual(
             set(controller.renderer._buttons) & {"mod.item.5", "mod.item.6"},
             {"mod.item.5"})
 
         controller._handle_mod_action("mod.prev")
         controller._handle_mod_action("mod.item.4")
-        self.assertIn("01-05 / 06", "\n".join(controller.draw_batches[-1]))
+        self.assertIn('-t "01-05 / 05"', "\n".join(controller.draw_batches[-1]))
         controller.mod_page = 99
         controller._render_mod_settings()
         self.assertEqual(controller.mod_page, 1)
         collapsed_second = "\n".join(controller.draw_batches[-1])
-        self.assertIn("06-06 / 06", collapsed_second)
-        self.assertIn('"SECOND // 06-06 / 06"', collapsed_second)
+        self.assertIn('-t "SECOND"', collapsed_second)
+        self.assertIn('-t "01-01 / 01"', collapsed_second)
+        self.assertNotIn("FIRST", collapsed_second)
 
     def test_mod_enum_dependency_updates_after_apply_in_both_directions(self):
         Swap = enum.Enum("Swap", {"OFF": 0, "ZRAM": 3})
