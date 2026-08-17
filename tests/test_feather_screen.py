@@ -471,13 +471,67 @@ class FeatherUtilitiesTest(unittest.TestCase):
 
 
 
-    def test_visible_mod_parameters_have_screen_descriptions(self):
-        declaration = json.loads((pathlib.Path(__file__).parents[1] /
-                                  "mod_params.json").read_text(encoding="utf-8"))
-        visible = [item for item in declaration["parameters"]
-                   if not item.get("hidden", False)]
-        self.assertTrue(visible)
-        self.assertTrue(all(item.get("description") for item in visible))
+    def test_visible_mod_parameters_fit_their_settings_row(self):
+        # The screen truncates whatever does not fit a row, so a long label or
+        # description silently loses its ending on the printer.  Render the real
+        # declaration and measure every row against the width it is drawn with.
+        declaration_path = pathlib.Path(__file__).parents[1] / "mod_params.json"
+        manager = MOD_PARAMS.ModParamManagement.__new__(
+            MOD_PARAMS.ModParamManagement)
+        manager.declaration = str(declaration_path)
+        manager.printer = type("Printer", (), {
+            "command_error": staticmethod(RuntimeError)})()
+        manager._load_declaration()
+
+        def loaded_default(param):
+            if issubclass(param.type, enum.Enum):
+                return param.type[param.default].value
+            if param.type is bool:
+                return bool(param.default)
+            return param.type(param.default)
+
+        variables = dict(
+            (param.key, loaded_default(param)) for param in manager.params)
+        # Reveal every conditional parameter at once; hidden rows are never
+        # drawn and would escape the measurement.
+        variables.update({
+            "display_eco": True, "weight_check": True,
+            "bed_mesh_validation": True, "disable_cleaning": False,
+            "use_swap": manager.params_map["use_swap"].type["ZRAM"].value,
+        })
+        feature = mod_controller(manager.params, variables)
+        expected = MOD_UI.visible_parameters(feature.params)
+        self.assertEqual(
+            sorted(param.key for param in expected),
+            sorted(param.key for param in manager.params if not param.hidden))
+
+        with mock.patch.object(feature.renderer, "text",
+                               wraps=feature.renderer.text) as text:
+            feature._render_mod_settings()
+            while True:
+                page = feature.mod_page
+                feature._handle_mod_action("mod.next")
+                if feature.mod_page == page:
+                    break
+
+        drawn = {}
+        for call in text.call_args_list:
+            if not call.kwargs.get("truncate") or call.kwargs.get("wrap"):
+                continue
+            font = call.kwargs.get(
+                "font", call.args[4] if len(call.args) > 4 else None)
+            drawn.setdefault(str(call.args[2]), set()).add(
+                (font, int(call.kwargs["max_width"])))
+
+        self.assertTrue(expected)
+        for param in expected:
+            for value in (str(param.label).upper(), MOD_UI.description(param)):
+                self.assertTrue(value, param.key)
+                self.assertIn(value, drawn, param.key)
+                for font, max_width in drawn[value]:
+                    self.assertLessEqual(
+                        FEATHER.FeatherRenderer.text_width(value, font),
+                        max_width, "%s: %s" % (param.key, value))
 
     def test_mod_value_validation_is_type_specific_and_bounded(self):
         integer = mod_param("count", int, 0, "Count")

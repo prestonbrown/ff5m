@@ -26,6 +26,8 @@ The normal shared configuration, [`macros/base.cfg`](../../macros/base.cfg), inc
 
 A `deprecated` block names the retired key and translates its stored values through `mapping`; a value the mapping does not list is refused. `carry_over: true` relaxes that for a pure rename, keeping any other stored value as it was — the mapping then only translates the values that must change, such as a retired default. A value already stored under the current key always wins over the deprecated leftover.
 
+Every UI-visible label and description shares one settings row on the local screen and is truncated to fit it, so both must stay within the row width measured from the shared font metrics.
+
 Use these commands from the Klipper console:
 
 ```gcode

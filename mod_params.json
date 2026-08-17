@@ -222,7 +222,7 @@
       "type": "AutoRebootEnum",
       "default": "OFF",
       "label": "Auto-restart",
-      "description": "Restart automatically after print completion.",
+      "description": "Restart after a completed print.",
       "options": {
         "OFF": "disabled",
         "SIMPLE_90": "after 1.5 minutes",
@@ -260,7 +260,7 @@
       "type": "bool",
       "default": 0,
       "label": "Nozzle cleaning before calibration",
-      "description": "Control nozzle cleaning before calibration.",
+      "description": "Clean the nozzle before calibration.",
       "options": ["YES", "NO"],
       "ui": {
         "inverted": true
@@ -272,7 +272,7 @@
       "type": "bool",
       "default": 0,
       "label": "Allow stock firmware to control LED",
-      "description": "Give chamber LED control to stock firmware.",
+      "description": "Let stock firmware control the LED.",
       "options": ["YES", "NO"],
       "ui": {
         "inverted": true
@@ -284,7 +284,7 @@
       "type": "bool",
       "default": 1,
       "label": "SKEW correction",
-      "description": "Enable or disable configured skew correction.",
+      "description": "Apply the configured skew correction.",
       "options": ["YES", "NO"],
       "ui": {
         "inverted": true
@@ -296,7 +296,7 @@
       "type": "bool",
       "default": 0,
       "label": "Klipper real-time priority (SCHED_RR)",
-      "description": "Give Klipper low real-time CPU priority.",
+      "description": "Give Klipper low real-time priority.",
       "restart": "klipper"
     },
     {
@@ -304,7 +304,7 @@
       "type": "bool",
       "default": 0,
       "label": "Tune klipper parameters",
-      "description": "Apply Forge-X Klipper compatibility tuning.",
+      "description": "Apply Forge-X Klipper tuning.",
       "restart": "printer",
       "deprecated": {
         "key": "fix_e0017",
@@ -359,7 +359,7 @@
       "type": "float",
       "default": 10.0,
       "label": "Safe Z height, mm",
-      "description": "Set the absolute Z height used before lateral parking and calibration moves.",
+      "description": "Set the Z height before lateral moves.",
       "warning": "Bed leveling and a non-standard nozzle can reduce the real nozzle-to-bed clearance. Use a value that is safe for your printer and verify Z-offset calibration after changing the bed or nozzle.",
       "order": 10003
     },
@@ -390,7 +390,7 @@
       "type": "str",
       "default": "DEFAULT",
       "label": "Feather color theme",
-      "description": "Choose the color palette used on every Feather screen.",
+      "description": "Choose the Feather color palette.",
       "order": 49999
     },
     {
@@ -422,7 +422,7 @@
       "type": "int",
       "default": 50,
       "label": "Chamber light brightness",
-      "description": "Last selected chamber light brightness percent.",
+      "description": "Last selected light brightness.",
       "order": 50003
     },
     {
@@ -430,7 +430,7 @@
       "type": "ChamberLightModeEnum",
       "default": "AT_BOOT",
       "label": "Chamber light mode",
-      "description": "Choose when saved chamber brightness is applied.",
+      "description": "Choose when brightness is applied.",
       "options": {
         "MANUAL": "change the light only when adjusted manually",
         "AT_BOOT": "restore saved brightness at startup",
@@ -452,7 +452,7 @@
       "type": "str",
       "default": "",
       "label": "MIDI on startup",
-      "description": "Set the MIDI sequence played at startup.",
+      "description": "Set the MIDI played at startup.",
       "order": 50010
     },
     {
@@ -460,7 +460,7 @@
       "type": "str",
       "default": "",
       "label": "MIDI when starting print",
-      "description": "Set the MIDI sequence played at print start.",
+      "description": "Set the MIDI played at print start.",
       "order": 50011
     },
     {
@@ -468,7 +468,7 @@
       "type": "str",
       "default": "",
       "label": "MIDI when completing print",
-      "description": "Set the MIDI sequence played after printing.",
+      "description": "Set the MIDI played after printing.",
       "order": 50012
     },
     {
@@ -484,7 +484,7 @@
       "type": "bool",
       "default": 1,
       "label": "Motors",
-      "description": "Choose motor behavior after print completion.",
+      "description": "Choose motor behavior after a print.",
       "options": ["Do not turn off", "Turn off automatically"],
       "order": 30000
     },
@@ -533,16 +533,16 @@
       "key": "park_dz",
       "type": "int",
       "default": 50,
-      "label": "Parking offset after print completion, mm",
-      "description": "Set Z lift after a completed print, in mm.",
+      "label": "Parking offset after print, mm",
+      "description": "Set the Z lift after a print.",
       "order": 20000
     },
     {
       "key": "clear_cooldown_temp",
       "type": "int",
       "default": 120,
-      "label": "Cooldown temperature for CLEAR_NOZZLE, Cº",
-      "description": "Set nozzle-cleaning cooldown temperature.",
+      "label": "CLEAR_NOZZLE temperature, Cº",
+      "description": "Set the nozzle cooldown temperature.",
       "order": 20000
     },
     {
@@ -571,7 +571,7 @@
       "type": "bool",
       "default": 1,
       "label": "Show Feather upgrade prompt",
-      "description": "Offer the updated Feather screen after startup.",
+      "description": "Offer Feather screen after startup.",
       "hidden": true
     },
     {
@@ -613,7 +613,7 @@
       "type": "int",
       "default": 1200,
       "label": "Bed collision protection, weight",
-      "description": "Set collision detection weight threshold.",
+      "description": "Set the collision weight threshold.",
       "order": 11
     },
     {
@@ -629,7 +629,7 @@
       "type": "bool",
       "default": 0,
       "label": "Clear before Bed Mesh Validation",
-      "description": "Clean the nozzle before mesh validation.",
+      "description": "Clean the nozzle before validation.",
       "order": 13
     },
     {
@@ -655,7 +655,7 @@
       "type": "bool",
       "default": 1,
       "label": "Use filament switch sensor",
-      "description": "Pause when the filament sensor triggers.",
+      "description": "Pause when the sensor triggers.",
       "order": 100
     },
     {
@@ -679,7 +679,7 @@
       "type": "bool",
       "default": 0,
       "label": "Enable Power Loss Recovery Feature",
-      "description": "Offer recovery after unexpected power loss.",
+      "description": "Offer recovery after power loss.",
       "restart": "klipper",
       "order": 30000
     }
