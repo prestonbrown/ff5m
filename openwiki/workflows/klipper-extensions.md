@@ -24,6 +24,8 @@ The normal shared configuration, [`macros/base.cfg`](../../macros/base.cfg), inc
 
 [`mod_params.py`](../../.py/klipper/plugins/mod_params.py) reads the declared parameter schema from [`mod_params.json`](../../mod_params.json), loads/saves values in `/opt/config/mod_data/variables.cfg`, applies defaults and deprecation migrations, and exposes values as `printer.mod_params.variables` to Jinja macros. It validates type and enum values before saving.
 
+A `deprecated` block names the retired key and translates its stored values through `mapping`; a value the mapping does not list is refused. `carry_over: true` relaxes that for a pure rename, keeping any other stored value as it was — the mapping then only translates the values that must change, such as a retired default. A value already stored under the current key always wins over the deprecated leftover.
+
 Use these commands from the Klipper console:
 
 ```gcode

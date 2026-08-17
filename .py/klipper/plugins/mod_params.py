@@ -20,6 +20,9 @@ class DeprecationParameter:
     key: str
     new_key: str
     mapping: Dict[str, str]
+    # A pure rename keeps the stored value; the mapping then translates only
+    # the values that must change, such as a retired default.
+    carry_over: bool = False
 
 
 @dataclass
@@ -113,62 +116,57 @@ class ModParamManagement:
         declaration_ui = data.get("ui", {})
         if not isinstance(declaration_ui, dict):
             raise ValueError("[mod_params]: Invalid declaration UI metadata!")
+
         categories = []
         category_ids = set()
         category_by_parameter = {}
         ui_order_by_parameter = {}
-        next_ui_order = 0
         fallback_category_id = None
+
         for category_data in declaration_ui.get("categories", []):
             if not isinstance(category_data, dict):
                 raise ValueError("[mod_params]: Invalid UI category metadata!")
+
             category = ParameterCategory(
                 id=str(category_data["id"]),
                 label=str(category_data["label"]),
                 order=int(category_data.get("order", 0)))
             if category.id in category_ids:
-                raise ValueError(
-                    '[mod_params]: Duplicate UI category "%s"!' % category.id)
+                raise ValueError('[mod_params]: Duplicate UI category "%s"!' % category.id)
             category_ids.add(category.id)
             categories.append(category)
+
             fallback = category_data.get("fallback", False)
             if not isinstance(fallback, bool):
-                raise ValueError(
-                    '[mod_params]: UI category "%s" has invalid fallback!'
-                    % category.id)
+                raise ValueError('[mod_params]: UI category "%s" has invalid fallback!' % category.id)
             if fallback:
                 if fallback_category_id is not None:
-                    raise ValueError(
-                        "[mod_params]: Multiple fallback UI categories!")
+                    raise ValueError("[mod_params]: Multiple fallback UI categories!")
                 fallback_category_id = category.id
+
             category_parameters = category_data.get("parameters", [])
             if not isinstance(category_parameters, list):
-                raise ValueError(
-                    '[mod_params]: UI category "%s" has invalid parameters!'
-                    % category.id)
-            for parameter_key in category_parameters:
+                raise ValueError('[mod_params]: UI category "%s" has invalid parameters!' % category.id)
+            for ui_order, parameter_key in enumerate(category_parameters):
                 if (not isinstance(parameter_key, str)
                         or parameter_key in category_by_parameter):
-                    raise ValueError(
-                        '[mod_params]: Invalid or duplicate categorized parameter!')
+                    raise ValueError('[mod_params]: Invalid or duplicate categorized parameter!')
                 category_by_parameter[parameter_key] = category.id
-                ui_order_by_parameter[parameter_key] = next_ui_order
-                next_ui_order += 1
-        self.ui_categories = sorted(
-            categories, key=lambda category: (category.order, category.label))
-        self.ui_categories_map = dict(
-            (category.id, category) for category in self.ui_categories)
+                ui_order_by_parameter[parameter_key] = ui_order
+
+        self.ui_categories = sorted(categories, key=lambda category: (category.order, category.id))
+        self.ui_categories_map = dict((category.id, category) for category in self.ui_categories)
+        category_order = dict((category.id, index) for index, category in enumerate(self.ui_categories))
+
         dependency_by_parameter = {}
-        for dependency in declaration_ui.get(
-                "strict_visibility_dependencies", []):
+        for dependency in declaration_ui.get("strict_visibility_dependencies", []):
             if (not isinstance(dependency, dict)
                     or not isinstance(dependency.get("parameter"), str)
                     or not isinstance(dependency.get("depends_on"), str)
                     or dependency.get("operator") != "equals"
                     or "value" not in dependency
                     or dependency["parameter"] in dependency_by_parameter):
-                raise ValueError(
-                    "[mod_params]: Invalid UI visibility dependency!")
+                raise ValueError("[mod_params]: Invalid UI visibility dependency!")
             dependency_by_parameter[dependency["parameter"]] = {
                 "parameter": dependency["depends_on"],
                 "operator": dependency["operator"],
@@ -194,39 +192,44 @@ class ModParamManagement:
             # must never transform values loaded, saved, or exposed to macros.
             ui_data = param_data.get("ui", {})
             if not isinstance(ui_data, dict):
-                raise ValueError(
-                    f'[mod_params]: Parameter "{param_data["key"]}" has invalid UI metadata!')
+                raise ValueError(f'[mod_params]: Parameter "{param_data["key"]}" has invalid UI metadata!')
             ui_inverted = ui_data.get("inverted", False)
             if not isinstance(ui_inverted, bool):
-                raise ValueError(
-                    f'[mod_params]: Parameter "{param_data["key"]}" has non-boolean ui.inverted!')
+                raise ValueError(f'[mod_params]: Parameter "{param_data["key"]}" has non-boolean ui.inverted!')
             if "inverted" in ui_data and param_type is not bool:
-                raise ValueError(
-                    f'[mod_params]: Parameter "{param_data["key"]}" uses ui.inverted but is not boolean!')
-            ui_category = ui_data.get(
-                "category", category_by_parameter.get(
-                    param_data["key"], fallback_category_id))
+                raise ValueError(f'[mod_params]: Parameter "{param_data["key"]}" uses ui.inverted but is not boolean!')
+
+            ui_category = ui_data.get("category", category_by_parameter.get(param_data["key"], fallback_category_id))
             if ui_category is not None:
                 if not isinstance(ui_category, str):
-                    raise ValueError(
-                        f'[mod_params]: Parameter "{param_data["key"]}" has invalid ui.category!')
+                    raise ValueError(f'[mod_params]: Parameter "{param_data["key"]}" has invalid ui.category!')
                 if ui_category not in self.ui_categories_map:
-                    raise ValueError(
-                        f'[mod_params]: Parameter "{param_data["key"]}" uses unknown ui.category!')
-            ui_visible_if = ui_data.get(
-                "visible_if", dependency_by_parameter.get(param_data["key"]))
+                    raise ValueError(f'[mod_params]: Parameter "{param_data["key"]}" uses unknown ui.category!')
+
+            ui_visible_if = ui_data.get("visible_if", dependency_by_parameter.get(param_data["key"]))
             if ui_visible_if is not None:
                 if (not isinstance(ui_visible_if, dict)
                         or not isinstance(ui_visible_if.get("parameter"), str)
                         or ui_visible_if.get("operator") != "equals"
                         or "value" not in ui_visible_if):
-                    raise ValueError(
-                        f'[mod_params]: Parameter "{param_data["key"]}" has invalid ui.visible_if!')
+                    raise ValueError(f'[mod_params]: Parameter "{param_data["key"]}" has invalid ui.visible_if!')
                 ui_visible_if = dict(ui_visible_if)
 
-            # Handle enum default values
             if issubclass(param_type, Enum):
                 param_data["default"] = param_type[param_data["default"]].name
+
+            deprecated = param_data.get("deprecated")
+            if deprecated is not None:
+                if not isinstance(deprecated, dict):
+                    raise ValueError(f'[mod_params]: Parameter "{param_data["key"]}" has invalid deprecated metadata!')
+                if not isinstance(deprecated.get("mapping", {}), dict):
+                    raise ValueError(f'[mod_params]: Parameter "{param_data["key"]}" has invalid deprecated.mapping!')
+                if not isinstance(deprecated.get("carry_over", False), bool):
+                    raise ValueError(f'[mod_params]: Parameter "{param_data["key"]}" has invalid deprecated.carry_over!')
+
+            listed_category = category_by_parameter.get(param_data["key"])
+            ui_order = (ui_order_by_parameter.get(param_data["key"])
+                        if ui_category == listed_category else None)
 
             param = Parameter(
                 key=param_data["key"],
@@ -246,12 +249,13 @@ class ModParamManagement:
                 ui_inverted=ui_inverted,
                 ui_category=ui_category,
                 ui_visible_if=ui_visible_if,
-                ui_order=ui_order_by_parameter.get(param_data["key"]),
+                ui_order=ui_order,
                 deprecated=DeprecationParameter(
-                    key=param_data["deprecated"]["key"],
+                    key=deprecated["key"],
                     new_key=param_data["key"],
-                    mapping=param_data["deprecated"]["mapping"],
-                ) if "deprecated" in param_data else None
+                    mapping=deprecated.get("mapping", {}),
+                    carry_over=deprecated.get("carry_over", False),
+                ) if deprecated is not None else None
             )
 
             if param_type == bool and param.options is None:
@@ -259,30 +263,18 @@ class ModParamManagement:
 
             params.append(param)
 
-        params.sort(key=lambda param: (
-            param.ui_order is None,
-            param.ui_order if param.ui_order is not None else param.order,
-            param.label))
+        # Explicit category lists define manual UI order. Other category members
+        # follow them by legacy order/key; the fallback category uses order/key entirely.
+        def ui_sort_key(param):
+            category_index = category_order.get(param.ui_category, len(category_order))
+            if param.ui_category != fallback_category_id and param.ui_order is not None:
+                return category_index, 0, param.ui_order, ""
+            return category_index, 1, param.order, param.key
+
+        params.sort(key=ui_sort_key)
+
         self.params = params
         self.params_map = {p.key: p for p in params}
-        unknown_categorized = set(category_by_parameter) - set(self.params_map)
-        if unknown_categorized:
-            raise ValueError(
-                "[mod_params]: UI categories contain unknown parameters: %s"
-                % ", ".join(sorted(unknown_categorized)))
-        unknown_dependencies = (
-            set(dependency_by_parameter) - set(self.params_map))
-        if unknown_dependencies:
-            raise ValueError(
-                "[mod_params]: UI dependencies contain unknown parameters: %s"
-                % ", ".join(sorted(unknown_dependencies)))
-        for param in params:
-            condition = param.ui_visible_if
-            if (condition is not None
-                    and condition["parameter"] not in self.params_map):
-                raise ValueError(
-                    '[mod_params]: Parameter "%s" depends on unknown parameter "%s"!'
-                    % (param.key, condition["parameter"]))
         self.migration_map = {p.deprecated.key: p.deprecated for p in params if p.deprecated}
 
     def _create_enum_from_json(self, enum_name: str, enum_data: Dict[str, Any]) -> Type[Enum]:
@@ -294,13 +286,6 @@ class ModParamManagement:
             raise self.printer.command_error(msg)
 
     def _reload(self):
-        lock = getattr(self, "_variables_lock", None)
-        if lock is None:
-            lock = self._variables_lock = threading.RLock()
-        with lock:
-            self._reload_locked()
-
-    def _reload_locked(self):
         result = dict()
         parser = configparser.ConfigParser()
 
@@ -315,9 +300,15 @@ class ModParamManagement:
                     parsed[key] = ast.literal_eval(value)
                 elif key in self.migration_map:
                     migration = self.migration_map[key]
-                    if value in migration.mapping:
-                        parsed[migration.new_key] = ast.literal_eval(migration.mapping[value])
-                        logging.info(f'[mod_params]: Migrating parameter from "{key}" to "{migration.new_key}". New value: {parsed[migration.new_key]}')
+
+                    if migration.new_key in parsed:
+                        logging.info(f'[mod_params]: Ignoring deprecated "{key}"; "{migration.new_key}" is already set.')
+                        continue
+
+                    literal = migration.mapping.get(value, value if migration.carry_over else None)
+                    if literal is not None:
+                        parsed[migration.new_key] = ast.literal_eval(literal)
+                        logging.info(f'[mod_params]: Migrated "{key}" -> "{migration.new_key}": {parsed[migration.new_key]}')
                     else:
                         logging.error(f'[mod_params]: Unable to migrate deprecated parameter: "{key}"')
                 else:
@@ -342,7 +333,9 @@ class ModParamManagement:
 
     def _load_param(self, param: Parameter, value: Optional[str]):
         if issubclass(param.type, Enum):
-            return param.type[value.strip()].value if value is not None else param.default.value
+            # Defaults and persisted enum values both use member names.
+            name = value if value is not None else param.default
+            return param.type[name.strip()].value
 
         if param.type == bool:
             return param.type(int(value)) if value is not None else param.default
@@ -351,9 +344,9 @@ class ModParamManagement:
 
     def _transform(self, param: Parameter, value: Optional[Any]):
         if issubclass(param.type, Enum):
-            return param.type(value).name if value is not None else param.default.name
+            return param.type(value).name if value is not None else param.default
 
-        elif param.type == bool:
+        if param.type == bool:
             return int(value if value is not None else param.default)
 
         return value if value is not None else param.default
@@ -370,7 +363,6 @@ class ModParamManagement:
         try:
             with open(self.filename, "w") as f:
                 parser.write(f)
-
         except:
             msg = "Unable to save variable"
             logging.exception(msg)
@@ -385,9 +377,11 @@ class ModParamManagement:
         """
         if key not in self.params_map:
             raise ValueError('Unknown parameter: "%s"' % key)
+
         param = self.params_map[key]
         if param.readonly and not force:
             raise ValueError('Updating readonly parameter "%s" is forbidden.' % key)
+
         try:
             if param.type == str:
                 new_value = str(value)
@@ -395,7 +389,9 @@ class ModParamManagement:
                 new_value = self._load_param(param, str(value))
         except Exception:
             raise ValueError('Failed to update parameter "%s"' % key)
+
         self._store_value(param, new_value)
+
         lock = getattr(self, "_variables_lock", None)
         with lock:
             return self._transform(param, self.variables[key])
@@ -405,6 +401,7 @@ class ModParamManagement:
         lock = getattr(self, "_variables_lock", None)
         if lock is None:
             lock = self._variables_lock = threading.RLock()
+
         changed = False
         with lock:
             previous_value = self.variables[param.key]
@@ -416,9 +413,10 @@ class ModParamManagement:
                     self.variables[param.key] = previous_value
                     raise
                 changed = True
+
         if changed and self.changes_gcode_present:
-            self.reactor.register_callback(
-                lambda _, __param=param: self._notify_changed(__param))
+            self.reactor.register_callback(lambda _, p=param: self._notify_changed(p))
+
         return changed
 
     def _format_label(self, param: Parameter, value: Any):
@@ -446,6 +444,7 @@ class ModParamManagement:
 
     def cmd_GET_MOD_PARAM(self, gcmd):
         key = gcmd.get('PARAM')
+
         if key in self.migration_map:
             new_key = self.migration_map[key].new_key
             raise gcmd.error(f"!! Parameter {key!r} is deprecated. Use {new_key!r} instead!")
@@ -462,7 +461,7 @@ class ModParamManagement:
     def cmd_SET_MOD_PARAM(self, gcmd):
         key = gcmd.get('PARAM')
         value = gcmd.get('VALUE')
-        force = gcmd.get('FORCE', 0)
+        force = int(gcmd.get('FORCE', 0))
 
         if key in self.migration_map:
             new_key = self.migration_map[key].new_key
@@ -473,7 +472,6 @@ class ModParamManagement:
                 gcmd.respond_raw(f"!! Unknown parameter: {key!r}")
                 gcmd.respond_info("Did you mean this?")
                 gcmd.respond_info(f"SET_MOD PARAM={similar_key!r} VALUE={value!r}")
-
                 return
             else:
                 raise gcmd.error(f'Unknown parameter: "{key}"')
@@ -506,12 +504,10 @@ class ModParamManagement:
     def _notify_changed(self, param: Parameter):
         context = self.changes_template.create_template_context()
 
-        key = param.key
-        value = self.variables[key]
-
+        value = self.variables[param.key]
         context["changes"] = {
-            "key": key,
-            "value": self._transform(param, self.variables[key]),
+            "key": param.key,
+            "value": self._transform(param, value),
             "raw": value,
         }
 
@@ -527,28 +523,20 @@ class ModParamManagement:
 
     @staticmethod
     def _levenshtein_distance(s1, s2):
-        # If s1 is shorter, swap to optimize memory
         if len(s1) < len(s2):
             return ModParamManagement._levenshtein_distance(s2, s1)
 
-        # If s2 is empty, distance is length of s1
         if len(s2) == 0:
             return len(s1)
 
-        # Initialize the previous row of distances
         previous_row = list(range(len(s2) + 1))
-
-        # Iterate over characters in s1
         for i, c1 in enumerate(s1):
             current_row = [i + 1]
-
-            # Iterate over characters in s2
             for j, c2 in enumerate(s2):
                 insertions = previous_row[j + 1] + 1
                 deletions = current_row[j] + 1
                 substitutions = previous_row[j] + (c1 != c2)
                 current_row.append(min(insertions, deletions, substitutions))
-
             previous_row = current_row
 
         return previous_row[-1]
@@ -557,20 +545,14 @@ class ModParamManagement:
     def _find_similar_param(misspelled, param_list):
         if not param_list: return None
 
-        # Compute distances from misspelled name to each parameter
         distances = [(param, ModParamManagement._levenshtein_distance(misspelled, param)) for param in param_list]
-
-        # Find the minimum distance
         min_distance = min(distances, key=lambda x: x[1])[1]
 
         if min_distance <= 10:
             closest_params = [param for param, dist in distances if dist == min_distance]
-
-            # Return the first one (arbitrary choice if multiple matches)
             return closest_params[0]
-        else:
-            # If the smallest distance is too large, return None
-            return None
+
+        return None
 
 
 def load_config(config):

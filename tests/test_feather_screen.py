@@ -554,8 +554,11 @@ class FeatherUtilitiesTest(unittest.TestCase):
         manager._load_declaration()
 
         visible = [param.key for param in manager.params if not param.hidden]
+        categories = sorted(
+            declaration["ui"]["categories"],
+            key=lambda category: (category.get("order", 0), category["id"]))
         categorized = [
-            key for category in declaration["ui"]["categories"]
+            key for category in categories
             for key in category["parameters"]]
         self.assertEqual(visible, categorized)
         self.assertEqual(len(set(categorized)), len(categorized))
@@ -568,6 +571,7 @@ class FeatherUtilitiesTest(unittest.TestCase):
                 "klipper_rt", "zram_algo", "midi_on")],
             ["tune_config", "tune_klipper", "use_swap",
              "klipper_rt", "zram_algo", "midi_on"])
+
         fallback = next(category for category in declaration["ui"]["categories"]
                         if category.get("fallback", False))
         self.assertEqual((fallback["id"], fallback["label"]),
@@ -602,9 +606,10 @@ class FeatherUtilitiesTest(unittest.TestCase):
 
         future = future_manager.params_map["future_parameter"]
         self.assertEqual(future.ui_category, "other")
-        self.assertEqual(
-            [param.key for param in future_manager.params if not param.hidden][-1],
-            "future_parameter")
+        other = [param.key for param in future_manager.params
+                 if param.ui_category == "other"]
+        self.assertEqual(other, sorted(
+            other, key=lambda key: (future_manager.params_map[key].order, key)))
 
         # A legacy-like loader selects only fields it knows.  Top-level UI
         # metadata and unknown nested UI keys therefore do not alter parameter
@@ -624,6 +629,70 @@ class FeatherUtilitiesTest(unittest.TestCase):
             {item["key"]: item["default"]
              for item in declaration["parameters"]})
         self.assertTrue(declaration["parameters"][2]["ui"]["inverted"])
+
+    def test_mod_parameter_ui_order_contract(self):
+        declaration = {
+            "ui": {
+                "categories": [
+                    {"id": "other", "label": "OTHER", "order": 30,
+                     "fallback": True, "parameters": []},
+                    {"id": "second", "label": "SECOND", "order": 20,
+                     "parameters": ["second_manual"]},
+                    {"id": "first", "label": "FIRST", "order": 10,
+                     "parameters": ["first_manual_b", "first_manual_a"]},
+                ]
+            },
+            "parameters": [
+                {"key": "fallback_z", "type": "bool", "default": 0,
+                 "label": "Fallback Z", "order": 5},
+                {"key": "first_unlisted_b", "type": "bool", "default": 0,
+                 "label": "First unlisted B", "order": 10,
+                 "ui": {"category": "first"}},
+                {"key": "second_manual", "type": "bool", "default": 0,
+                 "label": "Second manual", "order": 1},
+                {"key": "first_manual_a", "type": "bool", "default": 0,
+                 "label": "First manual A", "order": 1},
+                {"key": "fallback_a", "type": "bool", "default": 0,
+                 "label": "Fallback A", "order": 5},
+                {"key": "first_unlisted_a", "type": "bool", "default": 0,
+                 "label": "First unlisted A", "order": 10,
+                 "ui": {"category": "first"}},
+                {"key": "first_unlisted_early", "type": "bool", "default": 0,
+                 "label": "First unlisted early", "order": 2,
+                 "ui": {"category": "first"}},
+                {"key": "fallback_no_order_b", "type": "bool", "default": 0,
+                 "label": "Fallback no order B"},
+                {"key": "first_manual_b", "type": "bool", "default": 0,
+                 "label": "First manual B", "order": 999},
+                {"key": "fallback_no_order_a", "type": "bool", "default": 0,
+                 "label": "Fallback no order A"},
+            ]
+        }
+        with tempfile.NamedTemporaryFile(
+                mode="w", encoding="utf-8", suffix=".json") as declaration_file:
+            json.dump(declaration, declaration_file)
+            declaration_file.flush()
+            manager = MOD_PARAMS.ModParamManagement.__new__(
+                MOD_PARAMS.ModParamManagement)
+            manager.declaration = declaration_file.name
+            manager.printer = type("Printer", (), {
+                "command_error": staticmethod(RuntimeError)})()
+            manager._load_declaration()
+
+        self.assertEqual([category.id for category in manager.ui_categories],
+                         ["first", "second", "other"])
+        self.assertEqual([param.key for param in manager.params], [
+            "first_manual_b",
+            "first_manual_a",
+            "first_unlisted_early",
+            "first_unlisted_a",
+            "first_unlisted_b",
+            "second_manual",
+            "fallback_no_order_a",
+            "fallback_no_order_b",
+            "fallback_a",
+            "fallback_z",
+        ])
 
     def test_all_strict_mod_visibility_dependencies(self):
         declaration_path = pathlib.Path(__file__).parents[1] / "mod_params.json"
@@ -669,8 +738,8 @@ class FeatherUtilitiesTest(unittest.TestCase):
                 variables_file.write(text)
                 variables_file.flush()
                 manager.filename = variables_file.name
-                # A variables file without every current key legitimately logs
-                # defaults it had to apply; capture that instead of printing it.
+                # Each reload reports the migration decision it made; capture
+                # that output instead of printing it.
                 with self.assertLogs(level="INFO") as logs:
                     manager._reload()
             return manager, logs.output
@@ -696,6 +765,50 @@ class FeatherUtilitiesTest(unittest.TestCase):
         strict, _ = reload_variables("[Variables]\ndisplay_off = 7\n")
         self.assertEqual(strict.variables["display"],
                          strict.params_map["display"].type["FEATHER"].value)
+
+    def test_mod_variables_without_enum_keys_load_defaults_without_errors(self):
+        # A fresh install (or a key introduced by an update) has no stored value
+        # for an enum parameter.  That is a normal state, not a parse failure.
+        declaration_path = pathlib.Path(__file__).parents[1] / "mod_params.json"
+        manager = MOD_PARAMS.ModParamManagement.__new__(
+            MOD_PARAMS.ModParamManagement)
+        manager.declaration = str(declaration_path)
+        manager.printer = type("Printer", (), {
+            "command_error": staticmethod(RuntimeError)})()
+        manager._load_declaration()
+        enums = [param for param in manager.params
+                 if issubclass(param.type, enum.Enum)]
+        self.assertTrue(enums)
+
+        with tempfile.NamedTemporaryFile(
+                mode="w", encoding="utf-8", suffix=".cfg") as variables_file:
+            variables_file.write("[Variables]\n")
+            variables_file.flush()
+            manager.filename = variables_file.name
+
+            with mock.patch.object(MOD_PARAMS.logging, "error") as logged:
+                manager._reload()
+
+            self.assertEqual(logged.call_args_list, [])
+            self.assertEqual(
+                {param.key: manager._transform(
+                    param, manager.variables[param.key]) for param in enums},
+                {param.key: param.default for param in enums})
+
+            # An unknown member name in the file remains a real parse error: it
+            # is reported once and the declared default is restored.
+            broken = enums[0]
+            variables_file.write("%s = %r\n" % (broken.key, "NOT_A_MEMBER"))
+            variables_file.flush()
+
+            with mock.patch.object(MOD_PARAMS.logging, "error") as logged:
+                manager._reload()
+
+            self.assertEqual(len(logged.call_args_list), 1)
+            self.assertIn(broken.key, logged.call_args_list[0].args[0])
+            self.assertEqual(
+                manager._transform(broken, manager.variables[broken.key]),
+                broken.default)
 
     def test_mod_parameter_writes_are_serialized_and_preserve_full_state(self):
         params = [
