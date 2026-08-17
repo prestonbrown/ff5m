@@ -56,7 +56,7 @@ The mod supports a wide range of parameters to customize printer behavior. Below
 
   Feather can calculate this value from the bed position in **Control → Calibration → Z Offset**. Re-run the Safe Z step after changing the nozzle or bed setup.
 
-- **`pause_z_min`**: Sets the minimum absolute Z position used when parking for a pause (`PAUSE`, `M600`, layer pauses). The default is `100` mm. The bed is never raised: a print that already sits lower keeps its height and only gets the normal pause lift. The final target is capped 10 mm below the configured Klipper Z maximum. This setting replaces `m600_z_min`; a value you had tuned there is carried over, and the old `50` mm default becomes the new one.
+- **`pause_z_min`**: Sets the minimum absolute Z position used when parking for a pause (`PAUSE`, `M600`, layer pauses). The default is `50` mm. The bed is never raised: a print that already sits lower keeps its height and only gets the normal pause lift. The final target is capped 10 mm below the configured Klipper Z maximum. This setting replaces `m600_z_min` and keeps its default, so a height you had tuned there stays in effect under the new name.
 
   ```gcode
   SET_MOD PARAM=pause_z_min VALUE=100

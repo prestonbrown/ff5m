@@ -29,7 +29,7 @@ class SafeZContractTest(unittest.TestCase):
                 "[gcode_macro", 1)[0]
         parameter = next(item for item in declaration["parameters"]
                          if item["key"] == "pause_z_min")
-        self.assertEqual(parameter["default"], 100.0)
+        self.assertEqual(parameter["default"], 50.0)
         # PAUSE owns the minimum park height; M600 inherits it through PAUSE.
         self.assertIn(
             "params.Z_MIN | default(pause_z_min)", pause)
@@ -46,12 +46,12 @@ class SafeZContractTest(unittest.TestCase):
 
         def park(current, axis_max, offset=0.0):
             z_max = axis_max - 10
-            return min(max(current + 10, 100), z_max - offset, z_max)
+            return min(max(current + 10, 50), z_max - offset, z_max)
 
         # Lower the bed to the minimum, never raise one that is already lower.
-        self.assertEqual(park(30, 230), 100)
-        self.assertEqual(park(90, 230), 100)
-        self.assertEqual(park(95, 230), 105)
+        self.assertEqual(park(10, 230), 50)
+        self.assertEqual(park(35, 230), 50)
+        self.assertEqual(park(45, 230), 55)
         self.assertEqual(park(150, 230), 160)
         self.assertEqual(park(215, 230), 220)
         self.assertEqual(park(195, 210), 200)
