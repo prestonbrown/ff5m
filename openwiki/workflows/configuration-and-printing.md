@@ -62,7 +62,8 @@ All consume shared macro behavior. In non-stock modes, [`.shell/boot/boot.sh`](.
 2. **Macros capture runtime choices.** `START_PRINT` records temperatures, forced/skip leveling, KAMP, Z-offset, and mesh arguments before delegating to `_START_PRINT`.
 3. **Stock-screen bridge forwards lifecycle controls.** `RESUME`, `PAUSE`, and `CANCEL_PRINT` send stock firmware commands through `zsend`; print-file macros run optional MD5 verification and route commands to the stock printing path.
 4. **Shared safeguards apply.** [`macros/base.cfg`](../../macros/base.cfg) loads MD5 checking, KAMP, load-cell support, tone support, and safety-oriented motion overrides. For example, its replacement `G28` ensures safe Z/XY parking sequencing.
-5. **End-of-print flow stops/repositions and optionally schedules motor stop/reboot.** This behavior relies on mod parameters and delayed macros.
+5. **Pausing is idempotent.** The shared `PAUSE` does nothing when `pause_resume` already reports a paused print, so a repeated pause never parks twice or overwrites the temperature and idle-timeout state `RESUME` restores. Klipper clears the flag only through `RESUME`, `CLEAR_PAUSE`, or `CANCEL_PRINT`, so anything that stops a print outside `pause_resume` has to clear it itself.
+6. **End-of-print flow stops/repositions and optionally schedules motor stop/reboot.** This behavior relies on mod parameters and delayed macros.
 
 The exact slicer configuration, upload route, and checksum post-processing requirements are maintained in [`docs/SLICING.md`](../../docs/SLICING.md). MD5 checking defaults on in metadata but requires the supplied slicer post-processing script; enabling it without that integration will not validate files as intended.
 
