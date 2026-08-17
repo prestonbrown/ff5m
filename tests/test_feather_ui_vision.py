@@ -1544,6 +1544,7 @@ class PrinterCollectorSafetyTest(unittest.TestCase):
                 "extruder": {"target": 210},
                 "heater_bed": {"target": 0},
                 "virtual_sdcard": {"is_active": False},
+                "pause_resume": {"is_paused": False},
             }}})
 
         collector = PRINTER.PrinterCollector(

@@ -97,20 +97,22 @@ class PrinterConnection:
     def printer_status(self):
         value = self.request_json(
             "GET", "/printer/objects/query?print_stats&extruder&heater_bed"
-            "&virtual_sdcard")
+            "&virtual_sdcard&pause_resume")
         result = value.get("result")
         if not isinstance(result, dict) or not isinstance(
                 result.get("status"), dict):
             raise PrinterConnectionError("printer safety status is incomplete")
         status = dict(result["status"])
         if any(name not in status for name in (
-                "print_stats", "extruder", "heater_bed", "virtual_sdcard")):
+                "print_stats", "extruder", "heater_bed", "virtual_sdcard",
+                "pause_resume")):
             raise PrinterConnectionError("printer safety status is incomplete")
         try:
             print_stats = dict(status["print_stats"])
             extruder = dict(status["extruder"])
             heater_bed = dict(status["heater_bed"])
             virtual_sd = dict(status["virtual_sdcard"])
+            pause_resume = dict(status["pause_resume"])
         except (TypeError, ValueError) as exc:
             raise PrinterConnectionError(
                 "printer safety status is incomplete") from exc
@@ -137,10 +139,14 @@ class PrinterConnection:
                 or not isinstance(virtual_sd["is_active"], bool)):
             raise PrinterConnectionError("printer safety status is incomplete")
         virtual_sd_active = virtual_sd["is_active"]
+        if ("is_paused" not in pause_resume
+                or not isinstance(pause_resume["is_paused"], bool)):
+            raise PrinterConnectionError("printer safety status is incomplete")
         return {
             "print_state": print_state or "unknown",
             "heater_targets": targets,
             "virtual_sd_active": virtual_sd_active,
+            "paused": pause_resume["is_paused"],
         }
 
     def require_safe_idle(self):
@@ -151,8 +157,14 @@ class PrinterConnection:
             raise PrinterConnectionError("turn heaters off before testing")
         if status["virtual_sd_active"]:
             raise PrinterConnectionError("virtual SD is active")
+        # A pause flag outlives the print that set it and makes every later
+        # PAUSE a no-op, so an idle printer must not carry one.
+        if status["paused"]:
+            raise PrinterConnectionError(
+                "printer is left paused, run CLEAR_PAUSE")
         return {
             "print_state": status["print_state"],
             "heaters_off": True,
             "virtual_sd_inactive": True,
+            "not_paused": True,
         }

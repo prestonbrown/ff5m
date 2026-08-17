@@ -99,6 +99,7 @@ TELEMETRY_QUERY = (
     "&extruder=temperature,target,power"
     "&heater_bed=temperature,target,power"
     "&print_stats=state,filename&virtual_sdcard=progress"
+    "&pause_resume=is_paused"
     "&mcu=last_stats"
     "&feather_screen=page,generation,context_path,context_types,"
     "current_state,ui_test"
@@ -319,9 +320,10 @@ class TelemetryRecorder:
         bed = observed.get("heater_bed", {})
         print_stats = observed.get("print_stats", {})
         virtual_sd = observed.get("virtual_sdcard", {})
+        pause_resume = observed.get("pause_resume", {})
         screen = observed.get("feather_screen", {})
         for value in (toolhead, motion, extruder, bed, print_stats,
-                      virtual_sd, screen):
+                      virtual_sd, pause_resume, screen):
             if not isinstance(value, dict):
                 raise ValueError("printer telemetry status is invalid")
         ui_test = screen.get("ui_test", {})
@@ -353,6 +355,7 @@ class TelemetryRecorder:
             "page": str(screen.get("page") or "UNKNOWN"),
             "generation": screen.get("generation"),
             "print_state": str(print_stats.get("state") or "unknown"),
+            "print_paused": bool(pause_resume.get("is_paused", False)),
             "print_file": str(print_stats.get("filename") or ""),
             "print_progress": _finite_number(
                 virtual_sd.get("progress"), default=0.0),

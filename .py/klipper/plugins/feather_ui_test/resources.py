@@ -378,6 +378,14 @@ class ContextTestFixture:
             self._notify_changed()
         return True
 
+    def cancel_print(self):
+        # Klipper's CANCEL_PRINT pairs the virtual SD reset with CLEAR_PAUSE.
+        # Resetting the SD alone keeps pause_resume paused for the rest of the
+        # session, and a leaked pause flag makes the next print's PAUSE a no-op
+        # while the file keeps streaming.
+        self.host.virtual_sdcard.do_cancel()
+        self.host._run_script("CLEAR_PAUSE")
+
     def restore(self, suite):
         first_error = None
         if suite == "CONTEXT_PRINT":
@@ -386,7 +394,7 @@ class ContextTestFixture:
                 file_path = getattr(
                     virtual_sdcard, "file_path", lambda: None)()
                 if virtual_sdcard.is_active() or file_path:
-                    virtual_sdcard.do_cancel()
+                    self.cancel_print()
             except Exception as exc:
                 first_error = exc
                 logging.exception(

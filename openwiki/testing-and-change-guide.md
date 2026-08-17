@@ -87,9 +87,9 @@ context cancellation path is used by Feather and Fluidd alike. It covers
 is expected physical state and is not reversed automatically.
 
 Both extended groups require an observed standby printer, zero heater targets,
-inactive virtual SD, empty operation stack, the required probe/mesh/material
-profiles, no pre-existing recovery checkpoint, a prepared empty bed, and
-prepared filament. `CONFIRM=2` is an explicit acknowledgement of those physical
+inactive virtual SD, no pause state left by an earlier print, empty operation
+stack, the required probe/mesh/material profiles, no pre-existing recovery
+checkpoint, a prepared empty bed, and prepared filament. `CONFIRM=2` is an explicit acknowledgement of those physical
 preconditions; it is intentionally different from the normal suites'
 `CONFIRM=1`. Do not run either extended group unattended. No manual G-code is
 needed after starting it. `CONTEXT_PRINT` leaves its small printed fixture on

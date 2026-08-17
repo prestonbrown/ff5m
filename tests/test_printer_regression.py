@@ -1389,19 +1389,27 @@ class HostPreflightTest(unittest.TestCase):
 
 
 class PrinterSafetyTest(unittest.TestCase):
-    def test_print_heater_and_virtual_sd_each_block_testing(self):
+    def test_print_heater_virtual_sd_and_pause_each_block_testing(self):
         unsafe = ({
             "print_state": "printing",
             "heater_targets": {"extruder": 0.0, "heater_bed": 0.0},
             "virtual_sd_active": False,
+            "paused": False,
         }, {
             "print_state": "standby",
             "heater_targets": {"extruder": 1.0, "heater_bed": 0.0},
             "virtual_sd_active": False,
+            "paused": False,
         }, {
             "print_state": "standby",
             "heater_targets": {"extruder": 0.0, "heater_bed": 0.0},
             "virtual_sd_active": True,
+            "paused": False,
+        }, {
+            "print_state": "standby",
+            "heater_targets": {"extruder": 0.0, "heater_bed": 0.0},
+            "virtual_sd_active": False,
+            "paused": True,
         })
         for state in unsafe:
             with self.subTest(state=state):

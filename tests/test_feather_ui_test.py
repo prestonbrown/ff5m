@@ -1587,7 +1587,7 @@ class RunnerContractTest(unittest.TestCase):
         self.assertFalse(any(label.startswith("context_material-")
                              for label in full_labels))
 
-    def test_context_cancel_arms_recovery_before_checkpoint_cleanup(self):
+    def test_context_cancel_arms_recovery_and_leaves_no_pause_state(self):
         class State:
             pass
 
@@ -1595,6 +1595,7 @@ class RunnerContractTest(unittest.TestCase):
         State.RESURRECTION = State()
 
         checkpoint = {"present": True}
+        printer = {"print_state": "paused", "paused": True}
         resurrection = type("Resurrection", (), {})()
         resurrection.state = State.PAUSED
         resurrection._pause_checkpoint_active = True
@@ -1605,20 +1606,29 @@ class RunnerContractTest(unittest.TestCase):
         def cancel():
             if resurrection.state != State.RESURRECTION:
                 checkpoint["present"] = False
+            # Klipper resets the file without touching the pause state.
+            printer["print_state"] = "cancelled"
 
-        host = type("Host", (), {
-            "resurrection": resurrection,
-            "virtual_sdcard": type("SD", (), {
-                "do_cancel": lambda self: cancel(),
-            })(),
+        def run_script(script):
+            for line in script.splitlines():
+                if line.strip().upper() == "CLEAR_PAUSE":
+                    printer["paused"] = False
+
+        host = type("Host", (), {})()
+        host.reactor = type("Reactor", (), {
+            "monotonic": lambda self: 1.0,
         })()
-        fixture = type("Fixture", (), {
-            "checkpoint_ready": lambda self: checkpoint["present"],
+        host.resurrection = resurrection
+        host.virtual_sdcard = type("SD", (), {
+            "do_cancel": lambda self: cancel(),
         })()
-        run = type("Run", (), {
-            "host": host,
-            "context_fixture": fixture,
-        })()
+        host._run_script = run_script
+        fixture = UI_TEST.ContextTestFixture(
+            host, host.reactor, "test-run", "PLA")
+        fixture.checkpoint_ready = lambda: checkpoint["present"]
+        run = type("Run", (), {})()
+        run.host = host
+        run.context_fixture = fixture
 
         SCENARIOS.ScenarioCatalog(run)._cancel_context_print()
 
@@ -1626,6 +1636,35 @@ class RunnerContractTest(unittest.TestCase):
         self.assertEqual(resurrection.state, State.RESURRECTION)
         self.assertFalse(resurrection._pause_checkpoint_active)
         self.assertFalse(resurrection._resume_pending)
+        self.assertEqual(printer["print_state"], "cancelled")
+        # A pause state that outlives the print makes the next PAUSE a no-op
+        # while the file keeps streaming, so cancelling has to clear it.
+        self.assertFalse(printer["paused"])
+
+    def test_preflight_rejects_a_pause_state_left_by_an_earlier_print(self):
+        host = type("Host", (), {})()
+        host.reactor = type("Reactor", (), {
+            "monotonic": lambda self: 1.0,
+        })()
+        host.print_state = FEATHER.PrintState.IDLE
+        host.print_stats = type("Stats", (), {
+            "get_status": lambda self, eventtime: {"state": "standby"},
+        })()
+        host.virtual_sdcard = type("SD", (), {
+            "is_active": lambda self: False,
+        })()
+        host.pause_resume = type("PauseResume", (), {
+            "get_status": lambda self, eventtime: {"is_paused": True},
+        })()
+        host.command_depth = 0
+        host.renderer = type("Renderer", (), {"active": True})()
+        host.toolhead = type("Toolhead", (), {
+            "get_status": lambda self, eventtime: {"velocity": 0.0},
+        })()
+        feature = UI_TEST.UITestRun(host)
+
+        with self.assertRaisesRegex(RuntimeError, "paused"):
+            feature._preflight("RENDER", hardware_targets=False)
 
     def test_action_prompt_selection_uses_exact_visible_label(self):
         host = type("Host", (), {})()
@@ -1766,6 +1805,9 @@ class RunnerContractTest(unittest.TestCase):
             host.virtual_sdcard = type("SD", (), {
                 "is_active": lambda self: False,
             })()
+            host.pause_resume = type("PauseResume", (), {
+                "get_status": lambda self, eventtime: {"is_paused": False},
+            })()
             host.command_depth = 0
             host.renderer = type("Renderer", (), {"active": True})()
             host.toolhead = type("Toolhead", (), {
@@ -1817,6 +1859,14 @@ class RunnerContractTest(unittest.TestCase):
             })()
             commands = []
             cancelled = []
+            printer = {"paused": True}
+
+            def run_script(script):
+                commands.append(script)
+                for line in script.splitlines():
+                    if line.strip().upper() == "CLEAR_PAUSE":
+                        printer["paused"] = False
+
             host = type("Host", (), {})()
             host.reactor = type("Reactor", (), {
                 "monotonic": lambda self: 1.0,
@@ -1834,7 +1884,7 @@ class RunnerContractTest(unittest.TestCase):
             host.resurrection = type("Resurrection", (), {
                 "file_path": str(checkpoint),
             })()
-            host._run_script = lambda command: commands.append(command)
+            host._run_script = run_script
             feature = UI_TEST.UITestRun(host)
             feature.suite = "CONTEXT_PRINT"
             fixture = UI_TEST.ContextTestFixture(
@@ -1857,6 +1907,7 @@ class RunnerContractTest(unittest.TestCase):
             self.assertEqual(client.variables["idle_timeout"], 3600)
             self.assertIn("SET_IDLE_TIMEOUT TIMEOUT=600", commands)
             self.assertEqual(cancelled, [True])
+            self.assertFalse(printer["paused"])
             self.assertFalse(gcode.exists())
             self.assertFalse(checkpoint.exists())
             self.assertTrue(unrelated.exists())

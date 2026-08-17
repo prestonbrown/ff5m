@@ -535,6 +535,12 @@ class UITestRun:
             raise RuntimeError("A print is active")
         if self.host.virtual_sdcard.is_active():
             raise RuntimeError("Virtual SD is active")
+        # A pause flag left over from an earlier print survives every state a
+        # print goes through, and it silently breaks PAUSE for the whole
+        # session. The runner must neither inherit nor produce one.
+        if self.host.pause_resume.get_status(
+                self.reactor.monotonic()).get("is_paused"):
+            raise RuntimeError("Printer is paused")
         if getattr(self.host, "command_depth", 0):
             raise RuntimeError("Another Feather command is active")
         if not getattr(self.host.renderer, "active", False):

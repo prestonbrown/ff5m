@@ -828,7 +828,10 @@ class ScenarioCatalog:
         resurrection._resume_pending = False
         state_type = type(resurrection.state)
         resurrection._change_state(state_type.RESURRECTION)
-        self.host.virtual_sdcard.do_cancel()
+        # CANCEL_PRINT would drop the checkpoint this step arms, so the print is
+        # cancelled at the virtual SD level. The pause state still has to be
+        # cleared the way CANCEL_PRINT does it.
+        self.context_fixture.cancel_print()
 
     def _activate_context_recovery(self):
         if not self._context_checkpoint_ready():
