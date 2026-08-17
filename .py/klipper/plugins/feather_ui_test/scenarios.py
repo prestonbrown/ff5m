@@ -620,6 +620,33 @@ class ScenarioCatalog:
         self._add_call(
             steps, "context_print-prepare", self._prepare_context_print)
 
+        # The recovery scenario prints a real model and deliberately leaves it
+        # on the bed, so every scenario that probes or wipes the bed centre
+        # must run before it. KAMP is the only such scenario here.
+        self._add_call(
+            steps, "print_kamp-context-start",
+            lambda: self._start_context_scenario(
+                "print_kamp", ("print_kamp",)), delay=0.0)
+        self._add_call(
+            steps, "print_kamp-file-open",
+            lambda: self._open_context_file(self.context_fixture.files[0]))
+        self._add_tap(steps, "file.item0", ScreenPage.FILE_CONFIRM)
+        self._add_capture(steps, "print_kamp-confirm-screen")
+        self._add_tap(steps, "file.start")
+        self._add_wait(
+            steps, "print_kamp-started", self._context_printing,
+            1900.0, 0.5)
+        self._add_capture(steps, "print_kamp-printing-screen")
+        self._add_wait(
+            steps, "print_kamp-complete", self._context_print_complete,
+            1900.0, 0.5)
+        self._add_capture(steps, "print_kamp-complete-screen")
+        self._add_tap(steps, "message.ok", ScreenPage.IDLE_HOME,
+                      "print_kamp-finished-dismiss")
+        self._add_call(
+            steps, "print_kamp-context-verify",
+            self._finish_context_scenario, delay=0.0)
+
         self._add_call(
             steps, "print_mesh-context-start",
             lambda: self._start_context_scenario(
@@ -646,8 +673,9 @@ class ScenarioCatalog:
             steps, "print_mesh-resumed", self._context_print_controls_ready,
             10.0, 0.1)
         self._add_capture(steps, "print_mesh-resumed-screen")
-        self._add_tap(
-            steps, "print.pause", label="print_mesh-pause-for-recovery")
+        self._add_wait(
+            steps, "print_mesh-pause-for-recovery", self._context_paused,
+            600.0, 0.1)
         self._add_call(
             steps, "print_mesh-recovery-pause-motion-complete",
             lambda: self.host._run_script("M400"))
@@ -699,30 +727,6 @@ class ScenarioCatalog:
                       "recovery-finished-dismiss")
         self._add_call(
             steps, "recovery-context-verify",
-            self._finish_context_scenario, delay=0.0)
-
-        self._add_call(
-            steps, "print_kamp-context-start",
-            lambda: self._start_context_scenario(
-                "print_kamp", ("print_kamp",)), delay=0.0)
-        self._add_call(
-            steps, "print_kamp-file-open",
-            lambda: self._open_context_file(self.context_fixture.files[0]))
-        self._add_tap(steps, "file.item0", ScreenPage.FILE_CONFIRM)
-        self._add_capture(steps, "print_kamp-confirm-screen")
-        self._add_tap(steps, "file.start")
-        self._add_wait(
-            steps, "print_kamp-started", self._context_printing,
-            1900.0, 0.5)
-        self._add_capture(steps, "print_kamp-printing-screen")
-        self._add_wait(
-            steps, "print_kamp-complete", self._context_print_complete,
-            1900.0, 0.5)
-        self._add_capture(steps, "print_kamp-complete-screen")
-        self._add_tap(steps, "message.ok", ScreenPage.IDLE_HOME,
-                      "print_kamp-finished-dismiss")
-        self._add_call(
-            steps, "print_kamp-context-verify",
             self._finish_context_scenario, delay=0.0)
         self._add_call(
             steps, "context_print-cleanup", self._hardware_cleanup)

@@ -237,13 +237,21 @@ class SuiteSelectionTest(unittest.TestCase):
         self.assertEqual(
             [item["printer_suite"] for item in
              REGRESSION.selected_suites("all")],
-            ["FULL", "CONTEXT_PRINT", "CONTEXT_MATERIAL"])
+            ["FULL", "CONTEXT_PRINT"])
         self.assertEqual(
             REGRESSION.selected_suites("core")[0]["printer_suite"], "FULL")
         self.assertEqual(
             REGRESSION.selected_suites("print")[0]["confirm"], 2)
         self.assertEqual(
             REGRESSION.selected_suites("material")[0]["confirm"], 2)
+
+    def test_model_printing_suite_is_ordered_by_physical_constraints(self):
+        # "print" leaves a real model in the bed centre, so it must follow the
+        # bed-probing suite and nothing that re-homes or purges over the bed
+        # centre may be chained after it without an operator clearing the bed.
+        names = [item["name"] for item in REGRESSION.selected_suites("all")]
+        self.assertLess(names.index("core"), names.index("print"))
+        self.assertNotIn("material", names)
 
     def test_individual_suites_do_not_expand(self):
         for name in (
@@ -460,11 +468,11 @@ class OrchestrationTest(unittest.TestCase):
             durable = json.loads(
                 (output / "report.json").read_text(encoding="utf-8"))
 
-        self.assertEqual(client.launched, ["core", "print", "material"])
-        self.assertEqual(len(client.deleted), 3)
+        self.assertEqual(client.launched, list(REGRESSION.ALL_SUITES))
+        self.assertEqual(len(client.deleted), len(REGRESSION.ALL_SUITES))
         self.assertEqual(
             [item["status"] for item in report["suites"]],
-            ["failed", "passed", "passed"])
+            ["failed"] + ["passed"] * (len(REGRESSION.ALL_SUITES) - 1))
         self.assertEqual(report["status"], "failed")
         self.assertEqual(durable["suites"][0]["reason"],
                          "synthetic assertion")
@@ -540,10 +548,10 @@ class OrchestrationTest(unittest.TestCase):
             report, _output = self._run(
                 temporary, client, FakeMedia(), suite="all")
 
-        self.assertEqual(client.launched, ["core"])
+        self.assertEqual(client.launched, [REGRESSION.ALL_SUITES[0]])
         self.assertEqual(
             [item["status"] for item in report["suites"]],
-            ["passed", "skipped", "skipped"])
+            ["passed"] + ["skipped"] * (len(REGRESSION.ALL_SUITES) - 1))
         self.assertEqual(report["status"], "error")
 
     def test_media_failure_does_not_rewrite_printer_result(self):

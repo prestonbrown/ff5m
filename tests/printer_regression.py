@@ -69,7 +69,14 @@ SUITES = {
     "mesh": {"printer_suite": "MESH", "confirm": 1, "physical": True},
     "z": {"printer_suite": "Z", "confirm": 1, "physical": True},
 }
-ALL_SUITES = ("core", "print", "material")
+# Order is a physical constraint, not a preference: "print" leaves a real model
+# in the bed centre, so it must follow every bed-probing suite. "material"
+# cannot be chained after it. The suites run back to back with no operator
+# stop, the printer drops the motors shortly after a print ends, and
+# "material" re-homes and then travels to the bed centre and purges 100 mm of
+# filament there - onto the model, at whatever Z homing left. Run "material"
+# separately once the bed has been cleared.
+ALL_SUITES = ("core", "print")
 MATERIAL_SUITES = frozenset((
     "FULL", "HEAT", "MESH", "CONTEXT_PRINT", "CONTEXT_MATERIAL",
 ))

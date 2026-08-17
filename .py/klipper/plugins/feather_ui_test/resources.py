@@ -6,11 +6,114 @@
 
 import json
 import logging
+import math
 import os
 import re
 
 
 _MISSING = object()
+_FIXTURE_DIR = os.path.join(os.path.dirname(__file__), "fixtures")
+_CONTEXT_PRINT_FIELDS = (
+    "nozzle_initial", "nozzle", "bed_initial", "bed", "flow_ratio",
+    "pressure_advance", "retract_length", "retract_speed",
+    "unretract_speed", "fan_speed",
+)
+
+
+def load_context_print_gcode(material):
+    path = os.path.join(_FIXTURE_DIR, "context_print_profiles.json")
+    try:
+        with open(path, "r", encoding="utf-8") as stream:
+            profiles = json.load(stream)
+    except (OSError, ValueError) as exc:
+        raise RuntimeError("Unable to load context-print profiles: %s" % exc)
+    profile = profiles.get(material) if isinstance(profiles, dict) else None
+    if not isinstance(profile, dict):
+        raise RuntimeError(
+            "No context-print fixture profile for material: %s" % material)
+    missing = [field for field in _CONTEXT_PRINT_FIELDS
+               if field not in profile]
+    if missing:
+        raise RuntimeError(
+            "Context-print fixture profile %s is missing: %s" %
+            (material, ", ".join(missing)))
+
+    try:
+        values = {
+            "NOZZLE_INITIAL": float(profile["nozzle_initial"]),
+            "NOZZLE": float(profile["nozzle"]),
+            "BED_INITIAL": float(profile["bed_initial"]),
+            "BED": float(profile["bed"]),
+            "FLOW_PERCENT": float(profile["flow_ratio"]) * 100.0,
+            "PRESSURE_ADVANCE": float(profile["pressure_advance"]),
+            "RETRACT_LENGTH": float(profile["retract_length"]),
+            "RETRACT_SPEED": float(profile["retract_speed"]),
+            "UNRETRACT_SPEED": float(profile["unretract_speed"]),
+            "FAN_PWM": round(float(profile["fan_speed"]) * 255.0),
+        }
+    except (TypeError, ValueError) as exc:
+        raise RuntimeError(
+            "Context-print fixture profile %s is invalid: %s" %
+            (material, exc))
+
+    template_path = os.path.join(
+        _FIXTURE_DIR, "context_recovery_open_box.gcode")
+    with open(template_path, "r", encoding="utf-8") as stream:
+        result = stream.read()
+    for name, value in values.items():
+        token = "@%s@" % name
+        if token not in result:
+            raise RuntimeError("Context-print fixture is missing %s" % token)
+        result = result.replace(token, "%g" % value)
+    if re.search(r"@[A-Z_]+@", result):
+        raise RuntimeError("Context-print fixture has unresolved parameters")
+    return result
+
+
+def capture_print_tuning(host, eventtime):
+    # Every value the fixture G-code overwrites has to come back. A completed
+    # print ends with END_PRINT -> _STOP, which restores the flow factor, but
+    # an interrupted run only cancels the file and resets the operation
+    # contexts, and no macro restores pressure advance or firmware retraction
+    # at all. Capture all of them here and let restore() replay them.
+    extruder = host.extruder
+    status = extruder.get_status(eventtime)
+    pressure_advance = status.get(
+        "pressure_advance", getattr(extruder, "pressure_advance", None))
+    retraction = host.printer.lookup_object("firmware_retraction", None)
+    if pressure_advance is None or retraction is None:
+        raise RuntimeError(
+            "Context-print fixture requires restorable pressure advance "
+            "and firmware retraction")
+    retract_status = retraction.get_status(eventtime)
+    tuning = {
+        "pressure_advance": pressure_advance,
+        "retract_length": retract_status.get("retract_length"),
+        "retract_speed": retract_status.get("retract_speed"),
+        "unretract_extra_length": retract_status.get(
+            "unretract_extra_length"),
+        "unretract_speed": retract_status.get("unretract_speed"),
+        "extrude_factor": host.gcode_move.get_status(eventtime).get(
+            "extrude_factor"),
+    }
+    # M221 rejects a non-positive factor, so an unusable flow value must fail
+    # before the fixture overwrites it rather than during cleanup.
+    if (any(value is None or not math.isfinite(float(value))
+            for value in tuning.values())
+            or float(tuning["extrude_factor"]) <= 0.0):
+        raise RuntimeError("Current print tuning cannot be restored safely")
+    return dict((key, float(value)) for key, value in tuning.items())
+
+
+def _restore_print_tuning(host, tuning):
+    host._run_script(
+        "SET_PRESSURE_ADVANCE ADVANCE=%g\n"
+        "SET_RETRACTION RETRACT_LENGTH=%g RETRACT_SPEED=%g "
+        "UNRETRACT_EXTRA_LENGTH=%g UNRETRACT_SPEED=%g\n"
+        "M221 S%g" % (
+            tuning["pressure_advance"], tuning["retract_length"],
+            tuning["retract_speed"], tuning["unretract_extra_length"],
+            tuning["unretract_speed"], tuning["extrude_factor"] * 100.0))
 
 
 class PrinterStateSnapshot:
@@ -99,12 +202,15 @@ class PrinterStateSnapshot:
 class ContextTestFixture:
     """Own reversible mutations used by context material and print suites."""
 
-    def __init__(self, host, reactor, run_id, material, changed=None):
+    def __init__(self, host, reactor, run_id, material, changed=None,
+                 print_gcode=None, saved_print_tuning=None):
         self.host = host
         self.reactor = reactor
         self.run_id = run_id
         self.material = material
         self.changed = changed
+        self.print_gcode = print_gcode
+        self.saved_print_tuning = saved_print_tuning
         self.files = []
         self.checkpoint = None
         self.saved_mod_params = {}
@@ -191,17 +297,16 @@ class ContextTestFixture:
             os.path.join(
                 root, "feather-context-%s-recovery.gcode" % safe_run),
         ]
-        common = (
+        kamp = (
             "; Feather operation-context runner fixture\n"
-            "; Copyright (C) 2026, Alexander K <https://github.com/drA1ex>\n"
-            "START_PRINT EXTRUDER_TEMP=%.0f BED_TEMP=%.0f %s\n"
-            "G90\nG1 X0 Y0 Z5 F6000\n")
+            "START_PRINT EXTRUDER_TEMP=%.0f BED_TEMP=%.0f FORCE_KAMP=1\n"
+            "G90\nG1 X0 Y0 Z5 F6000\n"
+            "G4 P500\nEND_PRINT\n") % (nozzle, bed)
+        if self.print_gcode is None:
+            raise RuntimeError("Context-print fixture profile is unavailable")
         payloads = [
-            common % (nozzle, bed, "FORCE_KAMP=1")
-            + "G4 P500\nEND_PRINT\n",
-            common % (nozzle, bed, "")
-            + "M83\nG1 E1 F300\n" + ("G4 P250\n" * 80)
-            + "END_PRINT\n",
+            kamp,
+            self.print_gcode,
         ]
         for path, payload in zip(paths, payloads):
             if os.path.exists(path):
@@ -328,6 +433,15 @@ class ContextTestFixture:
                 logging.exception(
                     "[feather_ui_test] unable to restore idle timeout")
 
+        if suite == "CONTEXT_PRINT" and self.saved_print_tuning is not None:
+            try:
+                _restore_print_tuning(self.host, self.saved_print_tuning)
+            except Exception as exc:
+                if first_error is None:
+                    first_error = exc
+                logging.exception(
+                    "[feather_ui_test] unable to restore print tuning")
+
         if self.file_browser is not None:
             cache = self.host.file_entry_cache
             loaded_at = self.host.file_entry_loaded_at
@@ -389,6 +503,8 @@ class ContextTestFixture:
         self.client_idle_timeout = _MISSING
         self.idle_timeout = _MISSING
         self.file_browser = None
+        self.print_gcode = None
+        self.saved_print_tuning = None
         if first_error is not None:
             raise first_error
 

@@ -57,18 +57,25 @@ Two deliberately separate, attended physical groups exercise workflows that
 are too intrusive for `FULL`:
 
 ```gcode
-_FEATHER_UI_TEST ACTION=RUN SUITE=CONTEXT_PRINT MATERIAL=PLA CONFIRM=2
+_FEATHER_UI_TEST ACTION=RUN SUITE=CONTEXT_PRINT CONFIRM=2
 _FEATHER_UI_TEST ACTION=RUN SUITE=CONTEXT_MATERIAL MATERIAL=PLA CONFIRM=2
 ```
 
-`CONTEXT_PRINT` creates two uniquely named temporary virtual-SD files. The
-first uses a loaded `auto` mesh, runs mesh validation, exercises pause/resume,
-pauses again, reaches a shortened in-memory idle timeout, creates a normal
-resurrection checkpoint, cancels the print, dismisses the cancellation dialog,
-and exercises Restore without restarting Klipper. The second runs last and
-forces KAMP with nested nozzle cleaning. It covers the `print`, `kamp`,
-`mesh_validation`, `nozzle_clean`, and `recovery` contexts plus the print
-pause, resume, cancel, and terminal-dialog controls.
+`CONTEXT_PRINT` creates two uniquely named temporary virtual-SD files and runs
+them in a fixed order dictated by physical state. The first forces KAMP with
+nested nozzle cleaning and deposits no part. The second uses a loaded `auto`
+mesh, runs mesh validation, and prints a fixed OrcaSlicer fixture: a 16 x 16 x
+3 mm open box with three bottom layers, two walls, no sparse infill, and no
+top. It exercises the UI pause/resume controls, then reaches a G-code `PAUSE`
+after depositing layer 7 of 15, creates a normal resurrection checkpoint,
+cancels the print, dismisses the cancellation dialog, and exercises Restore
+without restarting Klipper. Recovery resumes at layer 8 and completes the
+remaining model. OrcaSlicer's estimate for the extrusion portion is about two
+and a half minutes. The model print is deliberately last: it leaves a part in
+the bed centre, so every scenario that probes or wipes the bed must precede it.
+Together the two files cover the `print`, `kamp`, `mesh_validation`,
+`nozzle_clean`, and `recovery` contexts plus the print pause, resume, cancel,
+and terminal-dialog controls.
 
 `CONTEXT_MATERIAL` drives the normal action-prompt protocol: it selects the
 requested material, performs Load, Purge, Unload, and Done, then selects the
@@ -85,7 +92,26 @@ profiles, no pre-existing recovery checkpoint, a prepared empty bed, and
 prepared filament. `CONFIRM=2` is an explicit acknowledgement of those physical
 preconditions; it is intentionally different from the normal suites'
 `CONFIRM=1`. Do not run either extended group unattended. No manual G-code is
-needed after starting it.
+needed after starting it. `CONTEXT_PRINT` leaves its small printed fixture on
+the bed; remove it before any further physical run. `CONTEXT_MATERIAL` in
+particular must not follow it with the part still in place: its cold pull
+re-homes, travels to the bed centre, and purges 100 mm of filament there, so
+with a part in the way it extrudes onto the part at whatever height homing
+left.
+
+The physical model is one neutral G-code template beside a test-only material
+profile file. The runner resolves the explicit `MATERIAL`, or the printer's
+last selected material when the argument is absent, before it creates the run.
+The current fixture profiles cover PLA and PETG and supply the OrcaSlicer
+temperatures, flow ratio, pressure advance, firmware-retraction values, and fan
+limit. An inactive material or a material without an exact complete fixture
+profile fails immediately, before artifacts, heating, or motion begin; unlike
+the other suites, `CONTEXT_PRINT` never substitutes another active material,
+because the fixed model would then be printed with the wrong temperatures,
+flow, and tuning. The fixture G-code overwrites pressure advance, firmware
+retraction, and flow; the runner captures all three before it creates the files
+and replays them during cleanup, so an interrupted run leaves no tuning behind.
+A run refuses to start when any of those values cannot be restored.
 
 `SUITE=RENDER` is non-physical: on an observed idle printer it requests a
 worker-owned Typer restart, waits for the touch FIFO handoff and surface redraw,
@@ -176,7 +202,14 @@ names:
 - `core` starts printer `FULL`;
 - `print` starts printer `CONTEXT_PRINT`;
 - `material` starts printer `CONTEXT_MATERIAL`;
-- `all` runs `core`, then `print`, then `material`.
+- `all` runs `core`, then `print`.
+
+That `all` order is a physical constraint, not a preference. `print` must follow
+`core` because it leaves a real part in the bed centre and `core` probes the
+bed. `material` is deliberately not part of `all`: the suites run back to back
+with no operator stop, and `material` re-homes and then purges 100 mm of
+filament above the bed centre - onto the part `print` just left there. Run
+`material` as its own invocation once the bed has been cleared.
 
 The existing individual `ui`, `component`, `render`, `motion`, `heat`,
 `screws`, `mesh`, and `z` suites are also available. `full` is intentionally

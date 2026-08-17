@@ -26,7 +26,8 @@ from .artifacts import (
 from .context_fixtures import OperationContextRecorder
 from .scenarios import ScenarioCatalog
 from .resources import (
-    ContextTestFixture, PrinterStateSnapshot,
+    ContextTestFixture, PrinterStateSnapshot, capture_print_tuning,
+    load_context_print_gcode,
     recover_interrupted_context_resources,
 )
 
@@ -101,6 +102,8 @@ class UITestRun:
         self.capture_receipts = {}
         self.context_recorder = None
         self.context_fixture = None
+        self.context_print_gcode = None
+        self.saved_print_tuning = None
         self.reactor_probe_timer = None
         self.reactor_probe_next = None
         self.reactor_probe_last = None
@@ -423,6 +426,12 @@ class UITestRun:
         self.component_cases = self.scenarios._decode_component_cases(
             encoded_cases) if suite == "COMPONENT" else ()
         self.material = self._resolve_material(material, suite)
+        self.context_print_gcode = None
+        self.saved_print_tuning = None
+        if suite == "CONTEXT_PRINT":
+            self.context_print_gcode = load_context_print_gcode(self.material)
+            self.saved_print_tuning = capture_print_tuning(
+                self.host, self.reactor.monotonic())
         self.gcmd = gcmd
         self.started_at = time.time()
         self.abort_requested = False
@@ -448,7 +457,9 @@ class UITestRun:
             datetime.now().strftime("%Y%m%d-%H%M%S-%f"), suite.lower())
         self.context_fixture = ContextTestFixture(
             self.host, self.reactor, self.run_id, self.material,
-            changed=self._persist_resource_marker)
+            changed=self._persist_resource_marker,
+            print_gcode=self.context_print_gcode,
+            saved_print_tuning=self.saved_print_tuning)
         self.steps = self.scenarios.build_steps(suite)
         directory_created = False
         try:
@@ -582,10 +593,16 @@ class UITestRun:
         if not materials:
             raise RuntimeError("No heating materials are enabled")
         material = requested.upper() if requested else self.host._current_material()
+        # CONTEXT_PRINT prints one fixed model per material, so substituting
+        # the first enabled material would print it with the wrong fixture
+        # temperatures, flow, and tuning. Every other suite may fall back.
+        if (material not in materials and not requested
+                and suite != "CONTEXT_PRINT"):
+            material = materials[0]
         if material not in materials:
-            material = materials[0] if not requested else material
-        if material not in materials:
-            raise RuntimeError("Unknown or inactive heating material: %s" % material)
+            raise RuntimeError(
+                "Unknown or inactive heating material for %s: %s" %
+                (suite, material))
         if suite == "CONTEXT_MATERIAL":
             cold_pull = tuple(self.host.cold_pull_materials)
             if requested and material not in cold_pull:
@@ -1076,6 +1093,8 @@ class UITestRun:
         self.finalizing = False
         self.phase = "idle"
         self.gcmd = None
+        self.context_print_gcode = None
+        self.saved_print_tuning = None
         if self.worker is not None:
             self.worker.stop()
         self.worker = None

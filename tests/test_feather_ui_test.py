@@ -3,6 +3,7 @@
 import csv
 import json
 import pathlib
+import re
 import tempfile
 import threading
 import unittest
@@ -20,6 +21,7 @@ from feather_ui_test import artifacts as ARTIFACTS  # noqa: E402
 from feather_ui_test import runner as UI_TEST  # noqa: E402
 from feather_ui_test import scenarios as SCENARIOS  # noqa: E402
 from feather_ui_test import context_fixtures as CONTEXT_FIXTURES  # noqa: E402
+from feather_ui_test import resources as RESOURCES  # noqa: E402
 import feather_screen as FEATHER  # noqa: E402
 from feather_feature_manager import LazyFeatureManager  # noqa: E402
 from tests.visual_checks import hybrid as HYBRID  # noqa: E402
@@ -1528,6 +1530,9 @@ class RunnerContractTest(unittest.TestCase):
         printing = feature.scenarios.build_steps("CONTEXT_PRINT")
         print_labels = [step["label"] for step in printing]
         expected = (
+            "print_kamp-context-start", "print_kamp-file-open",
+            "print_kamp-complete", "print_kamp-finished-dismiss",
+            "print_kamp-context-verify",
             "print_mesh-context-start", "print_mesh-pause-motion-complete",
             "print_mesh-paused",
             "print_mesh-resumed", "print_mesh-pause-for-recovery",
@@ -1540,12 +1545,15 @@ class RunnerContractTest(unittest.TestCase):
             "recovery-printing", "recovery-complete",
             "recovery-finished-dismiss",
             "recovery-context-verify",
-            "print_kamp-context-start", "print_kamp-file-open",
-            "print_kamp-complete", "print_kamp-finished-dismiss",
-            "print_kamp-context-verify",
         )
         positions = [print_labels.index(label) for label in expected]
         self.assertEqual(positions, sorted(positions))
+        # The recovery scenario prints a real model and leaves it on the bed,
+        # so no later scenario may touch the bed centre again.
+        self.assertEqual(
+            [step["label"] for step in printing
+             if step["label"].endswith("-context-start")][-1],
+            "recovery-context-start")
         print_phases = dict(
             (step["label"], step["phase"]) for step in printing)
         self.assertEqual(print_phases["print_mesh-paused"], "print_mesh")
@@ -1557,6 +1565,9 @@ class RunnerContractTest(unittest.TestCase):
             if step["kind"] == "capture"
         ], [
             "baseline",
+            "print_kamp-confirm-screen",
+            "print_kamp-printing-screen",
+            "print_kamp-complete-screen",
             "print_mesh-printing-screen",
             "print_mesh-paused-screen",
             "print_mesh-resumed-screen",
@@ -1567,9 +1578,6 @@ class RunnerContractTest(unittest.TestCase):
             "recovery-progress-screen",
             "recovery-printing-screen",
             "recovery-complete-screen",
-            "print_kamp-confirm-screen",
-            "print_kamp-printing-screen",
-            "print_kamp-complete-screen",
         ])
 
         full_labels = [
@@ -1852,6 +1860,192 @@ class RunnerContractTest(unittest.TestCase):
             self.assertFalse(gcode.exists())
             self.assertFalse(checkpoint.exists())
             self.assertTrue(unrelated.exists())
+
+
+class ContextPrintFixtureTest(unittest.TestCase):
+    """The model fixture is only useful if it is fully parameterised."""
+
+    def _profiles(self):
+        path = (PLUGINS / "feather_ui_test" / "fixtures"
+                / "context_print_profiles.json")
+        return json.loads(path.read_text(encoding="utf-8"))
+
+    def test_every_shipped_profile_resolves_the_whole_template(self):
+        for material in self._profiles():
+            gcode = RESOURCES.load_context_print_gcode(material)
+            self.assertNotRegex(gcode, r"@[A-Z_]+@")
+            self.assertIn("START_PRINT ", gcode)
+
+    def test_profile_values_reach_the_commands_that_use_them(self):
+        # What matters is which profile field lands in which parameter - a
+        # transposed pair would print at the wrong temperature or retract by a
+        # speed. Expectations are derived from the shipped profile so this
+        # protects the mapping instead of restating the JSON. Flow and fan also
+        # change unit on the way in: ratio -> M221 percent, ratio -> M106 PWM.
+        for material, profile in self._profiles().items():
+            gcode = RESOURCES.load_context_print_gcode(material)
+            self.assertIn(
+                "START_PRINT EXTRUDER_TEMP=%g BED_TEMP=%g" % (
+                    float(profile["nozzle_initial"]),
+                    float(profile["bed_initial"])), gcode)
+            self.assertIn(
+                "SET_RETRACTION RETRACT_LENGTH=%g RETRACT_SPEED=%g "
+                "UNRETRACT_EXTRA_LENGTH=0 UNRETRACT_SPEED=%g" % (
+                    float(profile["retract_length"]),
+                    float(profile["retract_speed"]),
+                    float(profile["unretract_speed"])), gcode)
+            self.assertIn(
+                "M221 S%g" % (float(profile["flow_ratio"]) * 100.0), gcode)
+            self.assertIn(
+                "M106 S%g" % round(float(profile["fan_speed"]) * 255.0), gcode)
+
+    def test_recovery_checkpoint_interrupts_the_middle_of_the_model(self):
+        # Resurrection is only exercised meaningfully if the interrupted print
+        # has both deposited layers to restore onto and layers left to finish.
+        gcode = RESOURCES.load_context_print_gcode("PLA")
+        total = int(re.search(r"TOTAL_LAYER=(\d+)", gcode).group(1))
+        layers = [
+            (int(match.group(1)), match.start())
+            for match in re.finditer(r"CURRENT_LAYER=(\d+)", gcode)]
+        self.assertEqual([number for number, _ in layers],
+                         list(range(1, total + 1)))
+        pause = gcode.index("\nPAUSE\n")
+        before = [number for number, offset in layers if offset < pause]
+        self.assertGreater(len(before), 1)
+        self.assertLess(max(before), total)
+        # "Around the middle" keeps the restored print long enough to film.
+        self.assertAlmostEqual(max(before), total / 2.0, delta=2.0)
+        self.assertEqual(gcode.count("\nPAUSE\n"), 1)
+
+    def test_unknown_material_fails_instead_of_printing_something_else(self):
+        with self.assertRaises(RuntimeError) as raised:
+            RESOURCES.load_context_print_gcode("UNOBTAINIUM")
+        self.assertIn("UNOBTAINIUM", str(raised.exception))
+
+    def test_incomplete_profile_names_the_missing_fields(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = pathlib.Path(temporary)
+            (directory / "context_print_profiles.json").write_text(
+                json.dumps({"PLA": {"nozzle": 220}}), encoding="utf-8")
+            (directory / "context_recovery_open_box.gcode").write_text(
+                "G4 P1\n", encoding="utf-8")
+            with mock.patch.object(RESOURCES, "_FIXTURE_DIR", str(directory)):
+                with self.assertRaises(RuntimeError) as raised:
+                    RESOURCES.load_context_print_gcode("PLA")
+        message = str(raised.exception)
+        self.assertIn("bed_initial", message)
+        self.assertIn("fan_speed", message)
+        self.assertNotIn("nozzle,", message)
+
+    def test_template_token_without_a_profile_field_is_rejected(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = pathlib.Path(temporary)
+            (directory / "context_print_profiles.json").write_text(
+                json.dumps({"PLA": dict(
+                    (field, 1) for field in
+                    RESOURCES._CONTEXT_PRINT_FIELDS)}), encoding="utf-8")
+            (directory / "context_recovery_open_box.gcode").write_text(
+                "START_PRINT EXTRUDER_TEMP=@NOZZLE_INITIAL@ "
+                "BED_TEMP=@BED_INITIAL@\nM104 S@NOZZLE@\nM140 S@BED@\n"
+                "M221 S@FLOW_PERCENT@\nM106 S@FAN_PWM@\n"
+                "SET_PRESSURE_ADVANCE ADVANCE=@PRESSURE_ADVANCE@\n"
+                "SET_RETRACTION RETRACT_LENGTH=@RETRACT_LENGTH@ "
+                "RETRACT_SPEED=@RETRACT_SPEED@ "
+                "UNRETRACT_SPEED=@UNRETRACT_SPEED@\n"
+                "M104 S@CHAMBER@\n", encoding="utf-8")
+            with mock.patch.object(RESOURCES, "_FIXTURE_DIR", str(directory)):
+                with self.assertRaises(RuntimeError) as raised:
+                    RESOURCES.load_context_print_gcode("PLA")
+        self.assertIn("unresolved", str(raised.exception))
+
+    def test_template_missing_a_parameter_is_rejected(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = pathlib.Path(temporary)
+            (directory / "context_print_profiles.json").write_text(
+                json.dumps({"PLA": dict(
+                    (field, 1) for field in
+                    RESOURCES._CONTEXT_PRINT_FIELDS)}), encoding="utf-8")
+            (directory / "context_recovery_open_box.gcode").write_text(
+                "START_PRINT EXTRUDER_TEMP=@NOZZLE_INITIAL@\n",
+                encoding="utf-8")
+            with mock.patch.object(RESOURCES, "_FIXTURE_DIR", str(directory)):
+                with self.assertRaisesRegex(
+                        RuntimeError, r"missing @[A-Z_]+@"):
+                    RESOURCES.load_context_print_gcode("PLA")
+
+
+class PrintTuningCaptureTest(unittest.TestCase):
+    """The fixture overwrites tuning, so it must be restorable first."""
+
+    @staticmethod
+    def _host(pressure_advance=0.04, retraction=None, extrude_factor=1.0):
+        host = type("Host", (), {})()
+        host.commands = []
+        host.extruder = type("Extruder", (), {
+            "get_status": lambda self, eventtime: {
+                "pressure_advance": pressure_advance},
+        })()
+        host.gcode_move = type("GcodeMove", (), {
+            "get_status": lambda self, eventtime: {
+                "extrude_factor": extrude_factor},
+        })()
+        host.printer = type("Printer", (), {
+            "lookup_object": lambda self, name, default=None: retraction,
+        })()
+        host._run_script = lambda command: host.commands.append(command)
+        return host
+
+    @staticmethod
+    def _retraction(**overrides):
+        status = {
+            "retract_length": 0.5, "retract_speed": 30,
+            "unretract_extra_length": 0, "unretract_speed": 25,
+        }
+        status.update(overrides)
+        return type("Retraction", (), {
+            "get_status": lambda self, eventtime: dict(status),
+        })()
+
+    def test_capture_returns_floats_for_every_restored_setting(self):
+        host = self._host(retraction=self._retraction(), extrude_factor=0.95)
+        tuning = RESOURCES.capture_print_tuning(host, 1.0)
+        self.assertEqual(tuning, {
+            "pressure_advance": 0.04, "retract_length": 0.5,
+            "retract_speed": 30.0, "unretract_extra_length": 0.0,
+            "unretract_speed": 25.0, "extrude_factor": 0.95,
+        })
+        for value in tuning.values():
+            self.assertIsInstance(value, float)
+
+    def test_capture_refuses_a_printer_without_firmware_retraction(self):
+        with self.assertRaises(RuntimeError):
+            RESOURCES.capture_print_tuning(self._host(retraction=None), 1.0)
+
+    def test_capture_refuses_values_it_could_not_restore(self):
+        for overrides in ({"retract_speed": None},
+                          {"unretract_speed": float("nan")},
+                          {"retract_length": float("inf")}):
+            host = self._host(retraction=self._retraction(**overrides))
+            with self.assertRaises(RuntimeError):
+                RESOURCES.capture_print_tuning(host, 1.0)
+        for factor in (None, 0.0, -1.0):
+            host = self._host(
+                retraction=self._retraction(), extrude_factor=factor)
+            with self.assertRaises(RuntimeError):
+                RESOURCES.capture_print_tuning(host, 1.0)
+
+    def test_restore_replays_the_captured_values(self):
+        # The fixture G-code sets flow with M221 and only END_PRINT -> _STOP
+        # brings it back, so an interrupted run depends on this restore.
+        host = self._host(retraction=self._retraction(), extrude_factor=0.95)
+        RESOURCES._restore_print_tuning(
+            host, RESOURCES.capture_print_tuning(host, 1.0))
+        self.assertEqual(host.commands, [
+            "SET_PRESSURE_ADVANCE ADVANCE=0.04\n"
+            "SET_RETRACTION RETRACT_LENGTH=0.5 RETRACT_SPEED=30 "
+            "UNRETRACT_EXTRA_LENGTH=0 UNRETRACT_SPEED=25\n"
+            "M221 S95",
+        ])
 
 
 class ContextManagerFixture:
