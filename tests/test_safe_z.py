@@ -14,7 +14,7 @@ ROOT = pathlib.Path(__file__).parents[1]
 
 
 class SafeZContractTest(unittest.TestCase):
-    def test_filament_change_parks_at_fifty_or_ten_mm_lower(self):
+    def test_pause_parks_at_the_shared_minimum_or_the_normal_lift(self):
         base = (ROOT / "macros" / "base.cfg").read_text(encoding="utf-8")
         client = (ROOT / "macros" / "client.cfg").read_text(encoding="utf-8")
         declaration = json.loads(
@@ -28,28 +28,35 @@ class SafeZContractTest(unittest.TestCase):
             "[gcode_macro _TOOLHEAD_PARK_PAUSE_CANCEL]", 1)[1].split(
                 "[gcode_macro", 1)[0]
         parameter = next(item for item in declaration["parameters"]
-                         if item["key"] == "m600_z_min")
-        self.assertEqual(parameter["default"], 50.0)
+                         if item["key"] == "pause_z_min")
+        self.assertEqual(parameter["default"], 100.0)
+        # PAUSE owns the minimum park height; M600 inherits it through PAUSE.
         self.assertIn(
-            "printer.mod_params.variables.m600_z_min", m600)
-        self.assertIn(
-            "PAUSE { X } { Y } { Z } Z_MIN={m600_z_min}", m600)
-        self.assertIn("_TOOLHEAD_PARK_PAUSE_CANCEL {rawparams}", pause)
+            "params.Z_MIN | default(pause_z_min)", pause)
+        self.assertNotIn("Z_MIN", m600)
         self.assertIn("params.Z_MIN | default(0) | float", park_macro)
         self.assertIn(
             "[(act.z + park_dz), z_min]|max", park_macro)
         self.assertIn('printer["gcode_macro MOVE_SAFE"]', park_macro)
         self.assertIn(
             "move_limits.z_max_margin | float", park_macro)
+        # The park target is a G-code coordinate, so the shared machine
+        # ceiling holds only with the Z offset subtracted from it.
+        self.assertIn("(max.z - origin.z)", park_macro)
 
-        def park(current, limit):
-            return min(max(current + 10, 50), limit - 10)
+        def park(current, axis_max, offset=0.0):
+            z_max = axis_max - 10
+            return min(max(current + 10, 100), z_max - offset, z_max)
 
-        self.assertEqual(park(45, 230), 55)
-        self.assertEqual(park(30, 230), 50)
-        self.assertEqual(park(60, 230), 70)
+        # Lower the bed to the minimum, never raise one that is already lower.
+        self.assertEqual(park(30, 230), 100)
+        self.assertEqual(park(90, 230), 100)
+        self.assertEqual(park(95, 230), 105)
+        self.assertEqual(park(150, 230), 160)
         self.assertEqual(park(215, 230), 220)
         self.assertEqual(park(195, 210), 200)
+        # A Z offset moves the bed no lower than the reachable maximum.
+        self.assertEqual(park(215, 230, 2.0) + 2.0, 220)
 
     def test_macro_safety_moves_use_the_shared_parameter(self):
         base = (ROOT / "macros" / "base.cfg").read_text(encoding="utf-8")

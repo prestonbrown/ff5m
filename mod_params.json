@@ -75,7 +75,7 @@
           "camera",
           "print_leveling",
           "safe_z",
-          "m600_z_min",
+          "pause_z_min",
           "filament_switch_sensor",
           "chamber_light",
           "chamber_light_mode"
@@ -364,14 +364,18 @@
       "order": 10003
     },
     {
-      "key": "m600_z_min",
+      "key": "pause_z_min",
       "type": "float",
       "default": 50.0,
-      "label": "Filament change minimum Z, mm",
-      "description": "Set the minimum absolute Z position used when parking for a filament change.",
+      "label": "Pause minimum Z, mm",
+      "description": "Set the minimum Z for pause parking.",
       "minimum": 0.0,
       "fraction_digits": 1,
-      "order": 10004
+      "order": 10004,
+      "deprecated": {
+        "key": "m600_z_min",
+        "carry_over": true
+      }
     },
     {
       "key": "sound",

@@ -100,8 +100,7 @@ Managed operations such as `START_PRINT`, `CLEAR_NOZZLE`, bed-mesh validation, f
   - **Parameters**:
     - `X` (float, optional): X-coordinate for parking.
     - `Y` (float, optional): Y-coordinate for parking.
-    - `Z` (float, optional): Z-coordinate for parking.
-  - **Defaults**: Parks at the greater of the normal pause lift or the configured `m600_z_min` height (50 mm by default), capped 10 mm below the configured Klipper Z maximum.
+  - **Defaults**: Parks through `PAUSE`, so the bed goes down to the greater of the normal pause lift or the configured `pause_z_min` height (100 mm by default), capped 10 mm below the configured Klipper Z maximum. A print that already sits lower keeps its height.
 
 - **COLDPULL**
   - **Description**: Performs a cold pull to clean the nozzle, supporting multiple material types.

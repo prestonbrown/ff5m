@@ -654,6 +654,49 @@ class FeatherUtilitiesTest(unittest.TestCase):
                     child, [param.key for param in
                             MOD_UI.visible_parameters(manager)])
 
+    def test_renamed_parameter_keeps_a_configured_value_and_drops_its_default(self):
+        declaration_path = pathlib.Path(__file__).parents[1] / "mod_params.json"
+
+        def reload_variables(text):
+            manager = MOD_PARAMS.ModParamManagement.__new__(
+                MOD_PARAMS.ModParamManagement)
+            manager.declaration = str(declaration_path)
+            manager.printer = type("Printer", (), {
+                "command_error": staticmethod(RuntimeError)})()
+            manager._load_declaration()
+            with tempfile.NamedTemporaryFile(
+                    mode="w", encoding="utf-8", suffix=".cfg") as variables_file:
+                variables_file.write(text)
+                variables_file.flush()
+                manager.filename = variables_file.name
+                # A variables file without every current key legitimately logs
+                # defaults it had to apply; capture that instead of printing it.
+                with self.assertLogs(level="INFO") as logs:
+                    manager._reload()
+            return manager, logs.output
+
+        # A tuned M600 park height keeps its meaning under the new name, while
+        # the retired 50 mm default gives way to the new pause policy.
+        configured, output = reload_variables("[Variables]\nm600_z_min = 75.0\n")
+        self.assertEqual(configured.variables["pause_z_min"], 75.0)
+        self.assertTrue(any("m600_z_min" in line and "pause_z_min" in line
+                            for line in output), output)
+        stock, _ = reload_variables("[Variables]\nm600_z_min = 50.0\n")
+        self.assertEqual(stock.variables["pause_z_min"], 100.0)
+
+        # The current key wins over a leftover, whichever order they appear in.
+        for text in ("[Variables]\npause_z_min = 120.0\nm600_z_min = 75.0\n",
+                     "[Variables]\nm600_z_min = 75.0\npause_z_min = 120.0\n"):
+            with self.subTest(text=text):
+                both, _ = reload_variables(text)
+                self.assertEqual(both.variables["pause_z_min"], 120.0)
+
+        # An enumerated rename stays strict: a value it cannot translate is
+        # refused rather than carried into the new key.
+        strict, _ = reload_variables("[Variables]\ndisplay_off = 7\n")
+        self.assertEqual(strict.variables["display"],
+                         strict.params_map["display"].type["FEATHER"].value)
+
     def test_mod_parameter_writes_are_serialized_and_preserve_full_state(self):
         params = [
             MOD_PARAMS.Parameter("first", int, 0, "First"),
