@@ -14,7 +14,8 @@ PLUGINS = (pathlib.Path(__file__).parents[1] / ".py" / "klipper" /
 sys.path.insert(0, str(PLUGINS))
 
 from feather_update_notification import (  # noqa: E402
-    CHECK_TIMEOUT, ForgeXUpdateNotification, STARTUP_DELAY)
+    CHECK_TIMEOUT, FAILURE_RETRY_INTERVAL, ForgeXUpdateNotification,
+    STARTUP_DELAY)
 from ff5m_ui.print_state import PrintState  # noqa: E402
 from ff5m_ui.screen import ScreenPage  # noqa: E402
 from ui import FeatherRenderer  # noqa: E402
@@ -66,9 +67,6 @@ class WebRequest:
 
     def get_int(self, name, default=None):
         return int(self.values.get(name, default))
-
-    def get_boolean(self, name, default=None):
-        return bool(self.values.get(name, default))
 
     def get(self, name, default=None):
         return self.values.get(name, default)
@@ -284,6 +282,28 @@ class ForgeXUpdateNotificationTest(unittest.TestCase):
             available_version=None, changes="not-a-list"))
         self.assertFalse(self.notification.dialog_visible)
         self.assertEqual(self.host.page, ScreenPage.IDLE_HOME)
+
+    def test_status_endpoint_failure_does_not_escape_to_webhooks(self):
+        class BrokenWebRequest(WebRequest):
+            def get(self, name, default=None):
+                if name == "available":
+                    raise RuntimeError("broken payload")
+                return super().get(name, default)
+
+        self.notification.request_check()
+        request = BrokenWebRequest(
+            token=self.notification.check_token, error="")
+
+        with self.assertLogs(level="ERROR"):
+            result = self.notification.handle_status_response(request)
+
+        self.assertEqual(result, "ok")
+        self.assertFalse(self.notification.check_in_flight)
+        self.assertEqual(self.host.page, ScreenPage.IDLE_HOME)
+
+        self.host.reactor.run_until(
+            self.host.reactor.monotonic() + FAILURE_RETRY_INTERVAL)
+        self.assertEqual(len(self.host.webhooks.remote_calls), 2)
 
     def test_long_changelog_is_bounded_scrollable_and_explicitly_truncated(self):
         changes = ["Change %02d" % index for index in range(80)]

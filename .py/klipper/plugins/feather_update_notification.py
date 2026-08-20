@@ -196,6 +196,16 @@ class ForgeXUpdateNotification:
 
     def handle_status_response(self, web_request):
         try:
+            return self._handle_status_response(web_request)
+        except Exception:
+            self.check_in_flight = False
+            logging.exception(
+                "[feather_screen] update check failed: malformed response")
+            self._schedule_check(FAILURE_RETRY_INTERVAL)
+            return "ok"
+
+    def _handle_status_response(self, web_request):
+        try:
             token = web_request.get_int("token")
         except Exception:
             logging.info(
@@ -210,7 +220,7 @@ class ForgeXUpdateNotification:
             logging.info("[feather_screen] update check failed: %s", error)
             self._schedule_check(FAILURE_RETRY_INTERVAL)
             return "ok"
-        if not web_request.get_boolean("available", False):
+        if web_request.get("available", False) is not True:
             self.installed_version = None
             self.available_version = None
             self.changes = ()
