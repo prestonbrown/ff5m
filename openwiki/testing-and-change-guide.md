@@ -209,6 +209,23 @@ python3 -m tests.printer_regression \
   --confirm-unattended-physical-test
 ```
 
+Pass several names after `--suite` to build one run in that exact order:
+
+```bash
+python3 -m tests.printer_regression \
+  --printer <printer-host> \
+  --suite ui component core \
+  --confirm-unattended-physical-test
+```
+
+`--suite` may also be repeated. `all` expands in place to `core`, then `print`.
+If a name appears more than once, directly or through `all`, only its first
+position is kept. The host performs one preflight, recording lifecycle, report,
+and final safety check around the combined ordered run. The host rejects a
+physical suite after `print`, because the completed model remains on the bed,
+and rejects combining `material` with another physical suite. Non-physical
+suite names may still appear anywhere in the requested order.
+
 The host-facing aggregate names deliberately differ from the printer's suite
 names:
 

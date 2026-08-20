@@ -163,13 +163,34 @@ class RegressionError(RuntimeError):
     pass
 
 
-def selected_suites(name):
-    if name == "all":
-        names = ALL_SUITES
-    elif name in SUITES:
-        names = (name,)
-    else:
-        raise RegressionError("unknown host suite: %s" % name)
+def selected_suites(selection):
+    requested = (selection,) if isinstance(selection, str) else tuple(selection)
+    if not requested:
+        raise RegressionError("at least one host suite is required")
+
+    names = []
+    seen = set()
+    for name in requested:
+        if name == "all":
+            expanded = ALL_SUITES
+        elif name in SUITES:
+            expanded = (name,)
+        else:
+            raise RegressionError("unknown host suite: %s" % name)
+        for item in expanded:
+            if item not in seen:
+                seen.add(item)
+                names.append(item)
+
+    physical = [item for item in names if SUITES[item]["physical"]]
+    if "material" in physical and len(physical) > 1:
+        raise RegressionError(
+            "material must run without another physical host suite")
+    if "print" in names:
+        after_print = names[names.index("print") + 1:]
+        if any(SUITES[item]["physical"] for item in after_print):
+            raise RegressionError(
+                "print must be the final physical host suite")
     return [dict(SUITES[item], name=item) for item in names]
 
 
@@ -1478,6 +1499,7 @@ class RegressionRun:
                  clock=None, wall_clock=None, sleeper=None, progress=None):
         self.args = args
         self.specs = selected_suites(args.suite)
+        self.requested_suites = list(args.suite)
         self.output = _local_output(args.output)
         self.clock = clock or time.monotonic
         self.wall_clock = wall_clock or time.time
@@ -1495,7 +1517,8 @@ class RegressionRun:
         self.report = {
             "schema_version": 1,
             "status": "running",
-            "requested_suite": args.suite,
+            "requested_suite": ", ".join(self.requested_suites),
+            "requested_suites": self.requested_suites,
             "printer_host": args.printer,
             "started_at": None,
             "finished_at": None,
@@ -1885,7 +1908,9 @@ def _arguments(argv=None):
         description="Run unattended FF5M printer regression suites locally.")
     parser.add_argument("--printer", required=True, help="printer host or IP")
     parser.add_argument(
-        "--suite", choices=("all",) + tuple(SUITES), default="core")
+        "--suite", choices=("all",) + tuple(SUITES), action="append",
+        nargs="+", metavar="SUITE",
+        help="one or more host suites in execution order; may be repeated")
     parser.add_argument("--material")
     parser.add_argument("--fps", type=_fps, default=10)
     parser.add_argument(
@@ -1912,12 +1937,18 @@ def _arguments(argv=None):
         help="confirm an observed idle printer, prepared bed, and unattended "
              "motion/heating")
     args = parser.parse_args(argv)
+    args.suite = [
+        item for group in (args.suite or [["core"]]) for item in group]
+    try:
+        specs = selected_suites(args.suite)
+    except RegressionError as exc:
+        parser.error(str(exc))
     if args.material:
         args.material = args.material.strip().upper()
         if not SAFE_MATERIAL.match(args.material):
             parser.error("material name contains unsafe characters")
     if (args.telemetry_rate > 1.0
-            and any(item["physical"] for item in selected_suites(args.suite))):
+            and any(item["physical"] for item in specs)):
         parser.error(
             "physical suites limit telemetry to 1 Hz to protect the "
             "Klipper reactor")

@@ -22,9 +22,11 @@ from tests.printer_connection import PrinterConnection, PrinterConnectionError
 
 
 def arguments(output, suite="all", extra=()):
+    suites = [suite] if isinstance(suite, str) else list(suite)
     return REGRESSION._arguments([
         "--printer", "printer.invalid",
-        "--suite", suite,
+        "--suite",
+    ] + suites + [
         "--output", str(output),
         "--confirm-unattended-physical-test",
     ] + list(extra))
@@ -259,6 +261,43 @@ class SuiteSelectionTest(unittest.TestCase):
                 "mesh", "z"):
             self.assertEqual(len(REGRESSION.selected_suites(name)), 1)
 
+    def test_multiple_suites_preserve_order_and_deduplicate_expansions(self):
+        selected = REGRESSION.selected_suites(
+            ["ui", "all", "core", "component", "ui"])
+
+        self.assertEqual(
+            [item["name"] for item in selected],
+            ["ui", "core", "print", "component"])
+
+    def test_cli_accepts_grouped_and_repeated_suite_options_in_order(self):
+        args = REGRESSION._arguments([
+            "--printer", "printer.invalid",
+            "--suite", "render", "ui",
+            "--suite", "component", "core",
+        ])
+
+        self.assertEqual(args.suite, ["render", "ui", "component", "core"])
+
+    def test_cli_default_remains_the_single_core_suite(self):
+        args = REGRESSION._arguments([
+            "--printer", "printer.invalid",
+        ])
+
+        self.assertEqual(args.suite, ["core"])
+
+    def test_unsafe_physical_compositions_are_rejected(self):
+        with self.assertRaisesRegex(
+                REGRESSION.RegressionError, "final physical"):
+            REGRESSION.selected_suites(["print", "mesh"])
+        with self.assertRaisesRegex(
+                REGRESSION.RegressionError, "material"):
+            REGRESSION.selected_suites(["core", "material"])
+
+        self.assertEqual(
+            [item["name"] for item in
+             REGRESSION.selected_suites(["print", "ui", "component"])],
+            ["print", "ui", "component"])
+
     def test_invalid_fps_is_rejected_by_cli(self):
         with mock.patch("sys.stderr", new=io.StringIO()):
             with self.assertRaises(SystemExit):
@@ -478,6 +517,19 @@ class OrchestrationTest(unittest.TestCase):
                          "synthetic assertion")
         self.assertEqual(durable["telemetry"]["status"], "recorded")
         self.assertEqual(durable["telemetry"]["sample_count"], 1)
+
+    def test_selected_suites_run_once_in_requested_order(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            report, _output = self._run(
+                temporary, FakeClient(), FakeMedia(),
+                suite=("render", "ui", "render", "component"))
+
+        self.assertEqual(
+            [item["name"] for item in report["suites"]],
+            ["render", "ui", "component"])
+        self.assertEqual(
+            report["requested_suites"],
+            ["render", "ui", "render", "component"])
 
     def test_console_progress_uses_already_sampled_test_status(self):
         class ProgressClient(FakeClient):
