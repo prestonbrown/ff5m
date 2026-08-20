@@ -277,6 +277,7 @@ class FeatherScreen(FeatherPagesMixin, FeatherControlsMixin):
         self.error_category = ""
         self.error_recovery = None
         self.shutdown_active = False
+        self.system_shutdown_active = False
         self.restart_pending = False
         self.startup_restarting = False
 
@@ -450,6 +451,7 @@ class FeatherScreen(FeatherPagesMixin, FeatherControlsMixin):
         self.file_scan_loading = False
         self.file_scan_source = None
         self.shutdown_active = False
+        self.system_shutdown_active = False
         self.restart_pending = False
         self.startup_restarting = False
         self.error_message = ""
@@ -525,6 +527,8 @@ class FeatherScreen(FeatherPagesMixin, FeatherControlsMixin):
     def _shutdown(self):
         # invoke_shutdown() calls this synchronously. Stop every producer and
         # discard its queued output before submitting the one final screen.
+        if getattr(self, "system_shutdown_active", False):
+            return
         self.shutdown_active = True
         self._deactivate_components()
         if self.renderer.active:
@@ -536,7 +540,8 @@ class FeatherScreen(FeatherPagesMixin, FeatherControlsMixin):
             self.renderer.freeze_output()
 
     def _disconnect(self):
-        if self.shutdown_active:
+        if (self.shutdown_active
+                or getattr(self, "system_shutdown_active", False)):
             return
         self._deactivate_components()
         if self.restart_pending:
@@ -715,6 +720,7 @@ class FeatherScreen(FeatherPagesMixin, FeatherControlsMixin):
     def _show_touch_unavailable(self):
         if (getattr(self, "touch_available", None) is not False
                 or getattr(self, "touch_warning_visible", False)
+                or getattr(self, "system_shutdown_active", False)
                 or not self.renderer.touch_warning_allowed):
             return False
         was_frozen = self.renderer.output_frozen
@@ -734,6 +740,8 @@ class FeatherScreen(FeatherPagesMixin, FeatherControlsMixin):
             logging.info(
                 "[feather_screen] touch device %s",
                 "connected" if available else "unavailable")
+        if getattr(self, "system_shutdown_active", False):
+            return
         if not available:
             self._show_touch_unavailable()
             return
@@ -1746,6 +1754,18 @@ class FeatherScreen(FeatherPagesMixin, FeatherControlsMixin):
             self.timer = None
         self._start_pre_ready_ui(restarting=True)
         return True
+
+    def _begin_system_shutdown(self):
+        if getattr(self, "system_shutdown_active", False):
+            return
+        self.system_shutdown_active = True
+        self.touch_warning_visible = False
+        self.renderer.discard_pending_output()
+        self.renderer.thaw_output()
+        self.renderer.startup_modal(
+            "FORGE-X", "SHUTTING DOWN", critical=True)
+        self.renderer.freeze_output()
+        logging.info("[feather_screen] Forge-X system shutdown started")
 
     def _update(self, eventtime):
         if self.print_state == PrintState.DESTROYED:

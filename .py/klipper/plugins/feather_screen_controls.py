@@ -1938,6 +1938,10 @@ class FeatherControlsMixin:
             self._end_action_prompt()
 
     def _handle_gcode_output(self, message):
+        if any(line.strip() == "// action:forge_x_shutting_down"
+               for line in str(message).splitlines()):
+            self._begin_system_shutdown()
+            return
         for line in self._prompt_response_lines(message):
             self._handle_action_prompt_response(line)
         manager = getattr(self, "feature_manager", None)

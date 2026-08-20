@@ -2950,6 +2950,35 @@ class ControllerSafetyTest(unittest.TestCase):
         self.assertTrue(controller.touch_warning_visible)
         self.assertIn("TOUCH INPUT UNAVAILABLE", "\n".join(batches[-1]))
 
+    def test_system_shutdown_surface_owns_late_teardown_events(self):
+        controller = ScenarioController.__new__(ScenarioController)
+        controller.renderer = FEATHER.FeatherRenderer()
+        batches = []
+        controller.renderer.send = batches.append
+        controller.shutdown_active = False
+        controller.system_shutdown_active = False
+        controller.touch_available = True
+        controller.touch_warning_visible = False
+
+        controller._handle_gcode_output(
+            "// action:forge_x_shutting_down")
+
+        self.assertTrue(controller.system_shutdown_active)
+        self.assertTrue(controller.renderer.output_frozen)
+        shutdown = "\n".join(batches[-1])
+        self.assertIn("FORGE-X", shutdown)
+        self.assertIn("SHUTTING DOWN", shutdown)
+        batch_count = len(batches)
+
+        controller._handle_touch_device_status(False)
+        controller._shutdown()
+        controller._disconnect()
+
+        self.assertFalse(controller.touch_available)
+        self.assertFalse(controller.touch_warning_visible)
+        self.assertEqual(len(batches), batch_count)
+        self.assertTrue(controller.renderer.output_frozen)
+
     def test_touch_device_protocol_dispatches_availability_transitions(self):
         controller = ScenarioController.__new__(ScenarioController)
         controller.renderer = type("Renderer", (), {"event_fd": 7})()

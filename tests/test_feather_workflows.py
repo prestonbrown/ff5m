@@ -1392,6 +1392,21 @@ class PrintWorkflowTest(unittest.TestCase):
                 positions = [block.index(marker) for marker in lifecycle]
                 self.assertEqual(positions, sorted(positions))
 
+    def test_kill_init_hook_publishes_shutdown_before_stopping_services(self):
+        root = pathlib.Path(__file__).parents[1]
+        init = (root / ".shell" / "S00init").read_text(encoding="utf-8")
+        service = (root / ".shell" / "S99root").read_text(encoding="utf-8")
+        stop = service.split("stop()", 1)[1].split("wait_stopped()", 1)[0]
+
+        self.assertIn('[ "${0##*/}" = "K99root" ]', stop)
+        self.assertIn("action:forge_x_shutting_down", stop)
+        self.assertLess(
+            stop.index("action:forge_x_shutting_down"),
+            stop.index('chroot "$MOD" /opt/config/mod/.root/stop.sh'))
+        self.assertIn(
+            "ln -fs /opt/config/mod/.shell/S99root /etc/init.d/K99root",
+            init)
+
     def test_feather_abort_is_an_immediate_gcode_command(self):
         root = pathlib.Path(__file__).parents[1]
         gcode = (root / ".py" / "klipper" / "patches" /
