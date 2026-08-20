@@ -1,11 +1,11 @@
 #!/bin/sh
 
-# Stop display-specific services
 /opt/config/mod/.root/S80guppyscreen stop
 
 /opt/config/mod/.root/S65moonraker stop
 /opt/config/mod/.root/S70httpd stop
 /opt/config/mod/.root/S45ntpd stop
+/opt/config/mod/.root/S35tslib stop
 
 if [ -d /etc/init.d ]; then
     echo "Stoping user services..."
@@ -16,5 +16,3 @@ if [ -d /etc/init.d ]; then
 
     echo "Done"
 fi
-
-/opt/config/mod/.root/S35tslib stop

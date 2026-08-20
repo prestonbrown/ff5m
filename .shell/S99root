@@ -73,9 +73,11 @@ start() {
 }
 
 stop() {
-    if [ "${0##*/}" = "K99root" ] && [ -p /tmp/printer ] \
-            && ps | grep -q "[k]lippy.py"; then
+    if [ "${0##*/}" = "K99root" ] && [ -p /tmp/printer ] && ps | grep -q "[k]lippy.py"; then
         printer_command "action:forge_x_shutting_down"
+        
+        sync
+        sleep 1    
     fi
 
     echo "// Stopping Buildroot env..."
