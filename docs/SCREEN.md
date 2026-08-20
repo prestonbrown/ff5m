@@ -64,6 +64,10 @@ Static addressing and enterprise Wi-Fi still require advanced configuration outs
 
 Feather Settings provides display brightness, chamber-light level, sound feedback, Forge-X parameters, and theme selection. Settings that require a Klipper or printer restart are identified before they are applied.
 
+#### Update notifications
+
+When Moonraker reports that a newer Forge-X version is available, Feather can show the new version and a short, scrollable list of changes while the printer is idle. Select **UPDATE** to start the normal Forge-X OTA update, or **LATER** to hide that version until the printer or Klipper restarts. If a print starts, the notification closes immediately and may return after the printer is idle again.
+
 Advanced operations such as unrestricted G-code, file deletion, static or enterprise Wi-Fi, and detailed diagnostics remain in Fluidd or Mainsail.
 
 Feather can operate without a network after configuration. It uses the `auto` bed-mesh profile. Recreate or rename the persistent mesh after switching from Stock mode.

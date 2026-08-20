@@ -480,6 +480,12 @@ class FeatherUtilitiesTest(unittest.TestCase):
             FEATHER.ScreenPage.MOD_SETTINGS, "keyboard.key.hash"))
 
         self.assertFalse(allowed(FEATHER.ScreenPage.MOD_SETTINGS, "mod.save"))
+        self.assertTrue(allowed(
+            FEATHER.ScreenPage.UPDATE_NOTIFICATION, "update.install"))
+        self.assertTrue(allowed(
+            FEATHER.ScreenPage.UPDATE_NOTIFICATION, "update.later"))
+        self.assertFalse(allowed(
+            FEATHER.ScreenPage.IDLE_HOME, "update.install"))
 
     def test_network_status_parser_is_bounded_to_public_fields(self):
         # Unknown keys must be silently dropped; only SNAPSHOT_KEYS survive.

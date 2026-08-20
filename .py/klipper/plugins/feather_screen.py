@@ -47,6 +47,7 @@ from feather_feature_manager import (
         FeatureLoadError, FeatureSpec, LazyFeatureManager)
 from feather_safety import SafetyRegistry
 from feather_keyboard import is_keyboard_action
+from feather_update_notification import ForgeXUpdateNotification
 
 
 DISP_LCD_SET_BRIGHTNESS = 0x102
@@ -87,6 +88,8 @@ EXACT_ACTIONS = {
     ScreenPage.ACTION_PROMPT: ("prompt.prev", "prompt.next"),
     ScreenPage.MESSAGE: ("message.ok",),
     ScreenPage.ERROR: ("error.restart", "error.firmware_restart"),
+    ScreenPage.UPDATE_NOTIFICATION: (
+        "update.install", "update.later", "update.prev", "update.next"),
 }
 
 ACTIVE_PRINT_STATES = frozenset((
@@ -187,6 +190,8 @@ class FeatherScreen(FeatherPagesMixin, FeatherControlsMixin):
         self.file_scan_worker = FileScanWorker(register_async)
         self.feature_manager = LazyFeatureManager(self, FEATURE_SPECS)
         self.safety = self._build_safety_registry()
+        self.update_notification = ForgeXUpdateNotification(
+            self, self.printer.lookup_object("webhooks", None))
 
         self.page = ScreenPage.IDLE_HOME
         self.previous_page = ScreenPage.IDLE_HOME
@@ -521,6 +526,7 @@ class FeatherScreen(FeatherPagesMixin, FeatherControlsMixin):
             self._show_page(ScreenPage.RECOVERY_PROMPT)
         else:
             self._show_page(ScreenPage.IDLE_HOME)
+        self.update_notification.start()
         self._initialize_network_monitoring()
         self.timer = self.reactor.register_timer(self._update, self.reactor.NOW)
 
@@ -562,6 +568,9 @@ class FeatherScreen(FeatherPagesMixin, FeatherControlsMixin):
         safety = getattr(self, "safety", None)
         if safety is not None:
             safety.reset()
+        update_notification = getattr(self, "update_notification", None)
+        if update_notification is not None:
+            update_notification.stop()
         self._stop_startup_animation()
         self._stop_joystick()
         self.print_state = PrintState.INACTIVE
@@ -1101,6 +1110,8 @@ class FeatherScreen(FeatherPagesMixin, FeatherControlsMixin):
                 self._handle_action_prompt_action(action)
             elif action.startswith("error."):
                 self._handle_error_action(action)
+            elif action.startswith("update."):
+                self.update_notification.handle_action(action)
             elif (action.startswith("net.")
                   or (self.page == ScreenPage.WIFI_PASSWORD
                       and is_keyboard_action(action))):
@@ -1194,7 +1205,12 @@ class FeatherScreen(FeatherPagesMixin, FeatherControlsMixin):
             self._render_message()
         elif page == ScreenPage.ERROR:
             self._render_error()
+        elif page == ScreenPage.UPDATE_NOTIFICATION:
+            self.update_notification.render()
         self._show_touch_unavailable()
+        update_notification = getattr(self, "update_notification", None)
+        if update_notification is not None:
+            update_notification.on_page_changed(old_page, page)
 
     def _go_back(self):
         manager = getattr(self, "feature_manager", None)
@@ -1389,6 +1405,11 @@ class FeatherScreen(FeatherPagesMixin, FeatherControlsMixin):
                 and virtual_sdcard.is_active()):
             return True
         return False
+
+    def _update_notification_safe(self, eventtime):
+        decision = self._ensure_safety_registry().evaluate(
+            ScreenPage.UPDATE_NOTIFICATION, eventtime)
+        return not decision.visible
 
     def _safety_heaters_active(self, eventtime):
         for heater in (getattr(self, "extruder", None),
@@ -1929,6 +1950,10 @@ class FeatherScreen(FeatherPagesMixin, FeatherControlsMixin):
             self._record_current_print()
         self._notify_features(
             "on_print_state_changed", old_state, new_state, stats_state)
+        update_notification = getattr(self, "update_notification", None)
+        if update_notification is not None:
+            update_notification.on_print_state_changed(
+                old_state, new_state, stats_state)
         if (new_state in (PrintState.PREPARING, PrintState.PRINTING,
                           PrintState.PAUSED)
                 and getattr(self, "network_operation", None) is not None):
