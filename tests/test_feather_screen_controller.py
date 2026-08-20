@@ -2957,6 +2957,7 @@ class ControllerSafetyTest(unittest.TestCase):
         controller.renderer.send = batches.append
         controller.shutdown_active = False
         controller.system_shutdown_active = False
+        controller.page = FEATHER.ScreenPage.IDLE_HOME
         controller.touch_available = True
         controller.touch_warning_visible = False
 
@@ -2978,6 +2979,20 @@ class ControllerSafetyTest(unittest.TestCase):
         self.assertFalse(controller.touch_warning_visible)
         self.assertEqual(len(batches), batch_count)
         self.assertTrue(controller.renderer.output_frozen)
+
+        controller._handle_gcode_output("// action:forge_x_redraw")
+
+        self.assertEqual(len(batches), batch_count)
+
+    def test_root_service_redraws_the_current_page(self):
+        controller = ScenarioController.__new__(ScenarioController)
+        controller.page = FEATHER.ScreenPage.CONTROL_HEAT
+        controller._show_page = mock.Mock()
+
+        controller._handle_gcode_output("// action:forge_x_redraw")
+
+        controller._show_page.assert_called_once_with(
+            FEATHER.ScreenPage.CONTROL_HEAT)
 
     def test_touch_device_protocol_dispatches_availability_transitions(self):
         controller = ScenarioController.__new__(ScenarioController)

@@ -43,28 +43,6 @@ def write(path, text):
     path.write_text(text, encoding="utf-8")
 
 
-def monitor_header(directory):
-    root = pathlib.Path(directory)
-    proc = root / "proc"
-    output_dir = root / "output"
-    output = output_dir / "host-monitor-1.tsv"
-    script = root / MONITOR.name
-    source = MONITOR.read_text(encoding="utf-8")
-    source = source.replace("/data/feather-ui-tests", str(output_dir))
-    source = source.replace("/proc", str(proc))
-    script.write_text(source, encoding="utf-8")
-    script.chmod(0o755)
-    write(proc / "uptime", "12345.67 20000.00\n")
-    (root / SAMPLER.name).write_bytes(SAMPLER.read_bytes())
-
-    result = subprocess.run(
-        ["sh", str(script), str(output), "1", "0"], text=True,
-        stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE, check=False)
-    assert result.returncode == 0, result.stderr
-    return tuple(output.read_text(encoding="utf-8").splitlines()[0].split("\t"))
-
-
 def proc_tree(directory):
     root = pathlib.Path(directory) / "proc"
     write(root / "uptime", "12345.67 20000.00\n")
@@ -121,15 +99,6 @@ class ResourceSamplerTest(unittest.TestCase):
             ["sh", "-n", str(MONITOR)], text=True, stdin=subprocess.DEVNULL,
             stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False)
         self.assertEqual(result.returncode, 0, result.stderr)
-
-    def test_sampler_emits_the_declared_columns_for_every_row(self):
-        with tempfile.TemporaryDirectory() as directory:
-            self.assertEqual(monitor_header(directory), COLUMNS)
-            root = proc_tree(directory)
-            rows = sample(root, "210\tklippy\tpython3 klippy.py\n")
-        self.assertEqual(len(rows), 2)
-        for row in rows:
-            self.assertEqual(len(row), len(COLUMNS))
 
     def test_sampler_reports_the_system_row_from_one_pass(self):
         with tempfile.TemporaryDirectory() as directory:

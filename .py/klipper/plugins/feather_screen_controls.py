@@ -1942,6 +1942,10 @@ class FeatherControlsMixin:
                for line in str(message).splitlines()):
             self._begin_system_shutdown()
             return
+        if any(line.strip() == "// action:forge_x_redraw"
+               for line in str(message).splitlines()):
+            self._show_page(self.page)
+            return
         for line in self._prompt_response_lines(message):
             self._handle_action_prompt_response(line)
         manager = getattr(self, "feature_manager", None)
