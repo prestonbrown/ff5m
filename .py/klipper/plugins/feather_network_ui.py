@@ -462,8 +462,8 @@ class FeatherNetworkPagesMixin:
                 25, 73, "WI-FI PASSWORD", ThemeColor.PRIMARY,
                 "JetBrainsMono Bold 12pt"),
             self.renderer.text(
-                280, 98, "8-63 ASCII CHARACTERS OR 64 HEX DIGITS",
-                ThemeColor.TEXT, "JetBrainsMono 8pt", max_width=490,
+                25, 98, "8-63 ASCII CHARACTERS OR 64 HEX DIGITS",
+                ThemeColor.TEXT, "JetBrainsMono 8pt", max_width=740,
                 truncate=True),
             self.renderer.fill(25, 120, 750, 53, ThemeColor.PANEL),
             self.renderer.stroke(25, 120, 750, 53, ThemeColor.PRIMARY, 2),
