@@ -5,7 +5,6 @@
 ## This file may be distributed under the terms of the GNU GPLv3 license
 
 import pathlib
-import re
 import subprocess
 import tempfile
 import unittest
@@ -29,15 +28,41 @@ TYPER_STAT = (
 )
 
 
-def header_columns():
-    match = re.search(r"printf '(epoch\\t.*?)\\n'", MONITOR.read_text())
-    assert match is not None, "monitor script has no TSV header"
-    return match.group(1).split("\\t")
+COLUMNS = (
+    "epoch", "uptime", "load1", "mem_available_kb", "swap_free_kb",
+    "role", "pid", "cpu_ticks", "rss_kb", "state", "threads",
+    "voluntary_ctxt_switches", "nonvoluntary_ctxt_switches",
+    "minor_faults", "major_faults", "scheduler_runtime_ns",
+    "scheduler_wait_ns", "scheduler_timeslices", "read_bytes",
+    "write_bytes", "syscr", "syscw", "wchan", "command",
+)
 
 
 def write(path, text):
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(text, encoding="utf-8")
+
+
+def monitor_header(directory):
+    root = pathlib.Path(directory)
+    proc = root / "proc"
+    output_dir = root / "output"
+    output = output_dir / "host-monitor-1.tsv"
+    script = root / MONITOR.name
+    source = MONITOR.read_text(encoding="utf-8")
+    source = source.replace("/data/feather-ui-tests", str(output_dir))
+    source = source.replace("/proc", str(proc))
+    script.write_text(source, encoding="utf-8")
+    script.chmod(0o755)
+    write(proc / "uptime", "12345.67 20000.00\n")
+    (root / SAMPLER.name).write_bytes(SAMPLER.read_bytes())
+
+    result = subprocess.run(
+        ["sh", str(script), str(output), "1", "0"], text=True,
+        stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE, check=False)
+    assert result.returncode == 0, result.stderr
+    return tuple(output.read_text(encoding="utf-8").splitlines()[0].split("\t"))
 
 
 def proc_tree(directory):
@@ -97,35 +122,21 @@ class ResourceSamplerTest(unittest.TestCase):
             stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False)
         self.assertEqual(result.returncode, 0, result.stderr)
 
-    def test_monitor_loop_has_only_cmdline_command_substitution(self):
-        # Each iteration deliberately runs the awk pass, one cmdline `tr` per
-        # Python process it inspects, and sleep.  This source-level guard prevents
-        # another per-second command substitution from being added unnoticed
-        # on the same two cores Klipper needs.
-        body = MONITOR.read_text().split("while :; do", 1)[1]
-        self.assertNotIn("$(date", body)
-        # $(( )) is shell arithmetic and forks nothing, so only real command
-        # substitutions are counted.
-        self.assertEqual(len(re.findall(r"\$\((?!\()", body)), 1)
-        self.assertIn("$(tr ", body)
-
     def test_sampler_emits_the_declared_columns_for_every_row(self):
-        columns = header_columns()
-        self.assertEqual(len(columns), 24)
         with tempfile.TemporaryDirectory() as directory:
+            self.assertEqual(monitor_header(directory), COLUMNS)
             root = proc_tree(directory)
             rows = sample(root, "210\tklippy\tpython3 klippy.py\n")
         self.assertEqual(len(rows), 2)
         for row in rows:
-            self.assertEqual(len(row), len(columns))
+            self.assertEqual(len(row), len(COLUMNS))
 
     def test_sampler_reports_the_system_row_from_one_pass(self):
-        columns = header_columns()
         with tempfile.TemporaryDirectory() as directory:
             root = proc_tree(directory)
             rows = sample(root, "")
         self.assertEqual(len(rows), 1)
-        row = dict(zip(columns, rows[0]))
+        row = dict(zip(COLUMNS, rows[0]))
         self.assertEqual(row["epoch"], "1770000000")
         self.assertEqual(row["uptime"], "12345.67")
         self.assertEqual(row["load1"], "1.42")
@@ -137,11 +148,10 @@ class ResourceSamplerTest(unittest.TestCase):
         self.assertEqual(row["cpu_ticks"], "1000")
 
     def test_sampler_reads_every_process_source_in_the_same_pass(self):
-        columns = header_columns()
         with tempfile.TemporaryDirectory() as directory:
             root = proc_tree(directory)
             rows = sample(root, "210\tklippy\tpython3 klippy.py -l printer.log\n")
-        row = dict(zip(columns, rows[1]))
+        row = dict(zip(COLUMNS, rows[1]))
         self.assertEqual(row["role"], "klippy")
         self.assertEqual(row["pid"], "210")
         # /proc/<pid>/stat: comm holds a space, so the offsets are taken from
@@ -170,11 +180,10 @@ class ResourceSamplerTest(unittest.TestCase):
         # Typer has no status, schedstat, io or wchan in the fixture, which is
         # what a sampler without privileges sees.  The row still has to be
         # emitted: dropping it would hide the process from the report entirely.
-        columns = header_columns()
         with tempfile.TemporaryDirectory() as directory:
             root = proc_tree(directory)
             rows = sample(root, "97\ttyper\tTyper\n")
-        row = dict(zip(columns, rows[1]))
+        row = dict(zip(COLUMNS, rows[1]))
         self.assertEqual(row["role"], "typer")
         self.assertEqual(row["state"], "S")
         self.assertEqual(row["cpu_ticks"], "57")

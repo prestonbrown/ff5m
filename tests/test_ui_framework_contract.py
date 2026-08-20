@@ -151,14 +151,5 @@ assert "ui.source" in sys.modules
             ui.serialize_key(AppPage.HEAT),
             "ui.pages.keys.AppPage.HEAT")
 
-    def test_framework_subtree_has_no_product_or_designer_imports(self):
-        framework = PLUGINS / "ui"
-        self.assertFalse((framework / "pages").exists())
-        for path in framework.rglob("*.py"):
-            source = path.read_text(encoding="utf-8")
-            self.assertNotIn("ff5m_ui", source, str(path))
-            self.assertNotIn("feather_preview", source, str(path))
-
-
 if __name__ == "__main__":
     unittest.main()

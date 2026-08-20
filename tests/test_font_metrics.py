@@ -1,9 +1,7 @@
 """Typer manifest loading and word-v1 parity tests."""
 
-import ast
 import json
 import pathlib
-import re
 import subprocess
 import sys
 import unittest
@@ -14,7 +12,15 @@ PLUGINS = (pathlib.Path(__file__).parents[1] / ".py" / "klipper" /
            "plugins")
 sys.path.insert(0, str(PLUGINS))
 
-from ui import font_metrics  # noqa: E402
+from ff5m_ui.benchmark import page as benchmark_page  # noqa: E402
+from ff5m_ui.filament.action import page as filament_action_page  # noqa: E402
+from ff5m_ui.filament.material import page as filament_material_page  # noqa: E402
+from ff5m_ui.heat import page as heat_page  # noqa: E402
+from ff5m_ui.home import page as home_page  # noqa: E402
+from ff5m_ui.move import runtime as move_ui  # noqa: E402
+from ff5m_ui.z_offset import runtime as z_offset_ui  # noqa: E402
+from ui import FeatherRenderer, font_metrics  # noqa: E402
+from ui import renderer as ui_renderer  # noqa: E402
 
 
 def manifest(advance=16):
@@ -87,17 +93,39 @@ class FontManifestTest(unittest.TestCase):
             self.assertTrue(metric.unicode_ranges)
 
         requested = set()
-        product_root = PLUGINS
-        for path in product_root.rglob("*.py"):
-            if "tests" in path.parts:
-                continue
-            tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
-            for node in ast.walk(tree):
-                if (isinstance(node, ast.Constant)
-                        and isinstance(node.value, str)
-                        and node.value.endswith("pt")):
-                    if re.fullmatch(r".+ [0-9]+pt", node.value):
-                        requested.add(node.value)
+
+        class RecordingMetrics:
+            def __getattr__(self, name):
+                return getattr(loaded, name)
+
+            def normalize_font(self, font, allow_proportional=False):
+                requested.add(font)
+                return loaded.normalize_font(font, allow_proportional)
+
+            def normalize_for_text(self, font, value):
+                requested.add(font)
+                return loaded.normalize_for_text(font, value)
+
+        pages = (
+            home_page.PAGE,
+            benchmark_page.PAGE,
+            heat_page.create_page(("PLA", "ABS")),
+            filament_material_page.create_page((("PLA", 220), ("ABS", 250))),
+            filament_action_page.create_page(False),
+            move_ui.STEP_PAGE,
+            move_ui.JOYSTICK_PAGE,
+            z_offset_ui.SAFE_BRIEFING_PAGE,
+            z_offset_ui.SAFE_PAGE,
+            z_offset_ui.BRIEFING_PAGE,
+            z_offset_ui.PAPER_BRIEFING_PAGE,
+            z_offset_ui.PAPER_PAGE,
+            z_offset_ui.SUMMARY_PAGE,
+        )
+        with mock.patch.object(
+                ui_renderer, "get_font_metrics",
+                return_value=RecordingMetrics()):
+            for page in pages:
+                page.draw(FeatherRenderer(), page.initial_state())
 
         self.assertTrue(requested)
         missing_families = []

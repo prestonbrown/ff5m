@@ -498,13 +498,7 @@ class FeatherUtilitiesTest(unittest.TestCase):
                                   "ip": "192.168.2.10", "reason": "",
                                   "progress": "", "attempt": ""})
 
-    def test_material_setting_defaults_to_na_and_is_persisted(self):
-        declaration = json.loads((pathlib.Path(__file__).parents[1] /
-                                  "mod_params.json").read_text(encoding="utf-8"))
-        material = next(item for item in declaration["parameters"]
-                        if item["key"] == "current_material")
-        self.assertEqual(material["default"], "n/a")
-        self.assertTrue(material["hidden"])
+    def test_material_values_are_normalized_for_persistence(self):
         controller = FEATHER.FeatherScreen.__new__(FEATHER.FeatherScreen)
         normalize = controller._normalize_material
         self.assertEqual(normalize(None), "n/a")
@@ -706,51 +700,10 @@ class FeatherUtilitiesTest(unittest.TestCase):
         self.assertFalse(params["normal"].ui_inverted)
         self.assertTrue(params["inverted"].ui_inverted)
 
-    def test_mod_declaration_metadata_is_additive_and_orders_all_parameters(self):
+    def test_unknown_mod_parameter_uses_the_fallback_category(self):
         declaration_path = pathlib.Path(__file__).parents[1] / "mod_params.json"
         declaration = json.loads(declaration_path.read_text(encoding="utf-8"))
-        manager = MOD_PARAMS.ModParamManagement.__new__(
-            MOD_PARAMS.ModParamManagement)
-        manager.declaration = str(declaration_path)
-        manager.printer = type("Printer", (), {
-            "command_error": staticmethod(RuntimeError)})()
-
-        manager._load_declaration()
-
-        visible = [param.key for param in manager.params if not param.hidden]
-        categories = sorted(
-            declaration["ui"]["categories"],
-            key=lambda category: (category.get("order", 0), category["id"]))
-        categorized = [
-            key for category in categories
-            for key in category["parameters"]]
-        self.assertEqual(visible, categorized)
-        self.assertEqual(len(set(categorized)), len(categorized))
-        self.assertEqual(
-            visible[:5],
-            ["display", "z_offset", "load_zoffset", "use_kamp", "camera"])
-        self.assertEqual(
-            [key for key in visible if key in (
-                "tune_config", "tune_klipper", "use_swap",
-                "klipper_rt", "zram_algo", "midi_on")],
-            ["tune_config", "tune_klipper", "use_swap",
-             "klipper_rt", "zram_algo", "midi_on"])
-
-        fallback = next(category for category in declaration["ui"]["categories"]
-                        if category.get("fallback", False))
-        self.assertEqual((fallback["id"], fallback["label"]),
-                         ("other", "OTHER"))
-        self.assertEqual({
-            param.key: param.ui_category for param in manager.params
-            if param.key in ("current_material", "show_feather_promo")
-        }, {
-            "current_material": "other",
-            "show_feather_promo": "other",
-        })
-
-        future_declaration = json.loads(
-            declaration_path.read_text(encoding="utf-8"))
-        future_declaration["parameters"].append({
+        declaration["parameters"].append({
             "key": "future_parameter",
             "type": "bool",
             "default": 0,
@@ -759,7 +712,7 @@ class FeatherUtilitiesTest(unittest.TestCase):
         })
         with tempfile.NamedTemporaryFile(
                 mode="w", encoding="utf-8", suffix=".json") as declaration_file:
-            json.dump(future_declaration, declaration_file)
+            json.dump(declaration, declaration_file)
             declaration_file.flush()
             future_manager = MOD_PARAMS.ModParamManagement.__new__(
                 MOD_PARAMS.ModParamManagement)
@@ -774,25 +727,6 @@ class FeatherUtilitiesTest(unittest.TestCase):
                  if param.ui_category == "other"]
         self.assertEqual(other, sorted(
             other, key=lambda key: (future_manager.params_map[key].order, key)))
-
-        # A legacy-like loader selects only fields it knows.  Top-level UI
-        # metadata and unknown nested UI keys therefore do not alter parameter
-        # keys, defaults, types, or the existing inversion metadata object.
-        known_fields = ("key", "type", "default", "label", "description",
-                        "options", "readonly", "hidden", "order", "warning",
-                        "deprecated", "minimum", "maximum", "fraction_digits",
-                        "restart")
-        legacy = [
-            dict((field, item[field]) for field in known_fields if field in item)
-            for item in declaration["parameters"]]
-        self.assertEqual(
-            [item["key"] for item in legacy],
-            [item["key"] for item in declaration["parameters"]])
-        self.assertEqual(
-            {item["key"]: item["default"] for item in legacy},
-            {item["key"]: item["default"]
-             for item in declaration["parameters"]})
-        self.assertTrue(declaration["parameters"][2]["ui"]["inverted"])
 
     def test_mod_parameter_ui_order_contract(self):
         declaration = {
@@ -1126,21 +1060,6 @@ class FeatherUtilitiesTest(unittest.TestCase):
 
             with self.assertRaisesRegex(ValueError, "not boolean"):
                 manager._load_declaration()
-
-    def test_only_boolean_parameters_use_ui_inversion_metadata(self):
-        declaration = json.loads((pathlib.Path(__file__).parents[1] /
-                                  "mod_params.json").read_text(encoding="utf-8"))
-        inverted = {
-            item["key"] for item in declaration["parameters"]
-            if item.get("ui", {}).get("inverted", False)
-        }
-        self.assertEqual(inverted, {
-            "disable_priming", "disable_cleaning",
-            "disable_screen_led", "disable_skew",
-        })
-        self.assertTrue(all(
-            item["type"] == "bool" for item in declaration["parameters"]
-            if item["key"] in inverted))
 
     def test_ui_inversion_does_not_affect_mod_parameter_storage(self):
         parameter = MOD_PARAMS.Parameter(

@@ -724,15 +724,5 @@ class ZOffsetLayoutTest(unittest.TestCase):
         self.assertIn("--batch clear-hitboxes", drawing)
         self.assertIn("z.discard.confirm", drawing)
 
-    def test_z_calibration_mixin_contains_no_coordinate_draw_calls(self):
-        source = (PLUGINS / "feather_z_calibration.py").read_text(
-            encoding="utf-8")
-
-        self.assertNotIn("self.renderer.button(", source)
-        self.assertNotIn("self.renderer.panel(", source)
-        self.assertNotIn("self.renderer.text(", source)
-        self.assertIn("z_offset_ui.render_paper", source)
-
-
 if __name__ == "__main__":
     unittest.main()

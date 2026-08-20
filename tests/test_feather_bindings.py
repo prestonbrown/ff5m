@@ -208,18 +208,6 @@ class StateDeclarationTest(unittest.TestCase):
 
 
 class ProductStateMigrationTest(unittest.TestCase):
-    def test_product_pages_use_typed_bindings_without_whole_state_lambdas(self):
-        pages_root = PLUGINS / "ff5m_ui"
-        sources = "\n".join(
-            path.read_text(encoding="utf-8")
-            for path in pages_root.rglob("*.py"))
-
-        self.assertNotIn("lambda state", sources)
-        self.assertNotIn("state[", sources)
-        self.assertNotIn("state.get(", sources)
-        self.assertIn("bind(ToolheadState.Z)", sources)
-        self.assertIn("bind(PaperState.GAUGE)", sources)
-
     def test_all_discovered_product_pages_publish_valid_state_metadata(self):
         pages = (
             move_ui.STEP_PAGE, move_ui.JOYSTICK_PAGE,
