@@ -4,6 +4,7 @@
 ##
 ## This file may be distributed under the terms of the GNU GPLv3 license
 
+import configparser
 import importlib.util
 import pathlib
 import sys
@@ -196,6 +197,31 @@ class OperationContextManagerTest(unittest.TestCase):
     def test_registry_rejects_unknown_cancel_mode(self):
         with self.assertRaisesRegex(ValueError, "invalid cancel_mode"):
             self.register_type("invalid", cancel_mode="sometimes")
+
+    def test_repository_registry_applies_product_cancellation_policy(self):
+        parser = configparser.RawConfigParser(
+            inline_comment_prefixes=(";", "#"))
+        parser.read(
+            MODULE_PATH.parents[3] / "macros" / "operation_context.cfg",
+            encoding="utf-8")
+        printer = FakePrinter()
+        manager = CONTEXT.OperationContextManager(FakeConfig(printer))
+        for section in parser.sections():
+            if not section.startswith("operation_context_type "):
+                continue
+            manager.register_context_type(FakeConfig(
+                printer, section, dict(parser.items(section))))
+
+        def run(name, **params):
+            printer.gcode.commands[name][0](FakeCommand(**params))
+
+        run("_CONTEXT_BEGIN", TYPE="pid_bed")
+        self.assertFalse(manager.get_status(0.0)["cancel_available"])
+        run("_CONTEXT_END")
+        run("_CONTEXT_BEGIN", TYPE="print")
+        status = manager.get_status(0.0)
+        self.assertTrue(status["cancel_available"])
+        self.assertEqual(status["cancel_target_type"], "print")
 
     def test_nested_context_restores_outer_state(self):
         self.run_command("_CONTEXT_BEGIN", TYPE="outer")

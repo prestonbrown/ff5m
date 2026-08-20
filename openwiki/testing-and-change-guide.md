@@ -4,6 +4,19 @@
 
 The repository now contains small host-side tests for Feather utility/state helpers and the C++ interactive hitbox layer. They validate parsing and pure logic but cannot emulate framebuffer, touchscreen, boot, network, or physical motion. The effective validation model remains **focused host tests plus controlled on-device testing**.
 
+Create a local virtual environment and install the host-test dependency before
+running the suite:
+
+```bash
+python3 -m venv .venv
+.venv/bin/pip install -r tests/requirements.txt
+.venv/bin/python -m unittest discover -s tests
+```
+
+The G-code macro tests use the same Jinja delimiters and config-comment rules
+as Klipper. They render macros against explicit status snapshots and inspect
+the resulting G-code. They do not emulate motion, heaters, or the MCU.
+
 ## Feather on-printer regression runner
 
 Feather provides a hidden, opt-in G-code harness whose implementation remains a

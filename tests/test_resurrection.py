@@ -742,36 +742,5 @@ class ResurrectorLifecycleTest(unittest.TestCase):
             "cleanup failed" in response for response in command.responses))
 
 
-class RecoveryMacroIntegrationTest(unittest.TestCase):
-    def test_pause_and_resume_markers_bracket_base_operations(self):
-        macro_path = pathlib.Path(__file__).parents[1] / "macros" / "client.cfg"
-        contents = macro_path.read_text(encoding="utf-8")
-        pause = contents.split("[gcode_macro PAUSE]", 1)[1].split(
-            "[gcode_macro RESUME]", 1)[0]
-        resume = contents.split("[gcode_macro RESUME]", 1)[1].split(
-            "[gcode_macro SET_PAUSE_NEXT_LAYER]", 1)[0]
-        pause = pause.split("gcode:", 1)[1]
-        resume = resume.split("gcode:", 1)[1]
-
-        self.assertLess(
-            pause.index("_RESURRECTION_PAUSE"),
-            pause.index("PAUSE_BASE"))
-        self.assertLess(
-            resume.index("RESUME_BASE"),
-            resume.index("_RESURRECTION_RESUME"))
-        self.assertIn("supports_pause_markers", pause)
-        self.assertIn("supports_pause_markers", resume)
-
-    def test_virtual_sdcard_has_no_recovery_specific_integration(self):
-        virtual_sd_path = (
-            pathlib.Path(__file__).parents[1] / ".py" / "klipper" /
-            "patches" / "extras" / "virtual_sdcard.py")
-        contents = virtual_sd_path.read_text(encoding="utf-8")
-
-        self.assertNotIn("resurrection", contents.lower())
-        self.assertNotIn("virtual_sdcard:pause", contents)
-        self.assertNotIn("virtual_sdcard:resume", contents)
-
-
 if __name__ == "__main__":
     unittest.main()
