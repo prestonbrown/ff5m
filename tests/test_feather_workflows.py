@@ -1332,8 +1332,9 @@ class PrintWorkflowTest(unittest.TestCase):
 
         self.assertEqual(immediate, ["M108"])
 
+
 class MotionHeatSettingsTest(unittest.TestCase):
-    def test_manual_control_pages_cancel_delayed_tasks_on_entry(self):
+    def test_manual_control_page_navigation_cancels_delayed_tasks(self):
         cases = (
             ("nav.move", FEATHER.ScreenPage.CONTROL_HOME,
              FEATHER.ScreenPage.CONTROL_MOVE),
@@ -1341,8 +1342,8 @@ class MotionHeatSettingsTest(unittest.TestCase):
              FEATHER.ScreenPage.CONTROL_MOVE),
             ("nav.heat", FEATHER.ScreenPage.IDLE_HOME,
              FEATHER.ScreenPage.CONTROL_HEAT),
-            ("nav.calibration", FEATHER.ScreenPage.CONTROL_HOME,
-             FEATHER.ScreenPage.CALIBRATION_HOME),
+            ("nav.heat", FEATHER.ScreenPage.CONTROL_HOME,
+             FEATHER.ScreenPage.CONTROL_HEAT),
         )
         for action, source_page, target_page in cases:
             with self.subTest(action=action):
@@ -1357,6 +1358,71 @@ class MotionHeatSettingsTest(unittest.TestCase):
                 self.assertEqual(
                     controller.gcode.commands, ["_CANCEL_DELAYED_COMMANDS"])
                 self.assertEqual(pages, [target_page])
+
+    def test_manual_control_navigation_bypasses_busy_gcode_queue(self):
+        class BusyGCode:
+            def __init__(self):
+                self.commands = []
+
+            def run_script(self, command):
+                raise AssertionError("navigation entered the busy G-code queue")
+
+            def run_script_from_command(self, command):
+                self.commands.append(command)
+
+        controller = base_controller()
+        controller.gcode = BusyGCode()
+        controller.page = FEATHER.ScreenPage.CONTROL_HOME
+        controller.last_action_time = -1.0
+        pages = []
+        controller._show_page = pages.append
+
+        controller._dispatch_action("nav.heat")
+
+        self.assertEqual(
+            controller.gcode.commands, ["_CANCEL_DELAYED_COMMANDS"])
+        self.assertEqual(pages, [FEATHER.ScreenPage.CONTROL_HEAT])
+
+    def test_manual_control_navigation_is_rejected_locally_during_print(self):
+        cases = (
+            ("nav.move", FEATHER.ScreenPage.IDLE_HOME),
+            ("nav.heat", FEATHER.ScreenPage.IDLE_HOME),
+            ("nav.filament", FEATHER.ScreenPage.IDLE_HOME),
+            ("home.last_job", FEATHER.ScreenPage.IDLE_HOME),
+            ("nav.files", FEATHER.ScreenPage.MAIN_MENU),
+            ("nav.control", FEATHER.ScreenPage.MAIN_MENU),
+            ("nav.calibration", FEATHER.ScreenPage.CONTROL_HOME),
+            ("nav.settings", FEATHER.ScreenPage.CONTROL_HOME),
+        )
+        states = (
+            (FEATHER.PrintState.PREPARING, "printing"),
+            (FEATHER.PrintState.PRINTING, "printing"),
+            (FEATHER.PrintState.PAUSED, "paused"),
+        )
+        for print_state, stats_state in states:
+            for action, source_page in cases:
+                with self.subTest(state=print_state.name, action=action):
+                    controller = base_controller(stats_state)
+                    controller.print_state = print_state
+                    controller.page = source_page
+                    controller.last_action_time = -1.0
+                    pages = []
+                    notices = []
+                    controller._show_page = pages.append
+                    controller._toast = notices.append
+
+                    controller._dispatch_action(action)
+
+                    self.assertEqual(pages, [])
+                    self.assertEqual(controller.gcode.commands, [])
+                    self.assertEqual(notices, ["UNAVAILABLE DURING PRINT"])
+
+    def test_idle_requirement_includes_controller_preparing_state(self):
+        controller = base_controller("idle")
+        controller.print_state = FEATHER.PrintState.PREPARING
+
+        with self.assertRaisesRegex(RuntimeError, "only while idle"):
+            controller._require_idle()
 
     def test_dashboard_material_opens_filament_and_returns_home(self):
         controller = base_controller()

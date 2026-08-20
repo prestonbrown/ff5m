@@ -96,6 +96,11 @@ ACTIVE_PRINT_STATES = frozenset((
     PrintState.PREPARING, PrintState.PRINTING, PrintState.PAUSED,
 ))
 
+IDLE_ONLY_NAVIGATION_ACTIONS = frozenset((
+    "nav.files", "nav.control", "nav.move", "nav.heat", "nav.filament",
+    "nav.calibration", "nav.settings", "home.last_job",
+))
+
 CORE_SAFETY_ARMED_PAGES = frozenset((
     ScreenPage.CONTROL_HEAT,
     ScreenPage.FILAMENT_MATERIAL, ScreenPage.FILAMENT_ACTION,
@@ -1035,6 +1040,13 @@ class FeatherScreen(FeatherPagesMixin, FeatherControlsMixin):
         logging.info("[feather_screen] action=%s page=%s", action, self.page.name)
 
         try:
+            if (action in IDLE_ONLY_NAVIGATION_ACTIONS
+                    and self._safety_print_active(now)):
+                logging.info(
+                    "[feather_screen] navigation blocked during print: %s",
+                    action)
+                self._toast("UNAVAILABLE DURING PRINT")
+                return
             if semantic_action is not None:
                 if owner is not None:
                     owner.handle_semantic_action(self.page, semantic_action)
@@ -1070,7 +1082,6 @@ class FeatherScreen(FeatherPagesMixin, FeatherControlsMixin):
                 self._open_filament(False)
             elif action == "nav.calibration":
                 self._require_idle()
-                self._cancel_delayed_tasks()
                 if manager is not None:
                     manager.get("calibration").calibration_page = 0
                 self._show_page(ScreenPage.CALIBRATION_HOME)
@@ -1275,7 +1286,7 @@ class FeatherScreen(FeatherPagesMixin, FeatherControlsMixin):
         return params.variables.get(key, default) if params is not None else default
 
     def _cancel_delayed_tasks(self):
-        self._run_script("_CANCEL_DELAYED_COMMANDS", show_notice=False)
+        self._run_immediate_command("_CANCEL_DELAYED_COMMANDS")
 
     def _normalize_material(self, value):
         material = str(value or "n/a").strip().upper().replace("/", "-")
@@ -1577,8 +1588,11 @@ class FeatherScreen(FeatherPagesMixin, FeatherControlsMixin):
         stop, and FEATHER_ABORT is the external immediate bridge to the
         operation context manager. Normal UI cancellation calls the manager
         directly from the reactor and queues only a safe point when needed.
+        _CANCEL_DELAYED_COMMANDS contains only timer updates and must run before
+        manual control even when another command owns the mutex.
         """
-        if command not in ("M108", "M112", "FEATHER_ABORT"):
+        if command not in (
+                "M108", "M112", "FEATHER_ABORT", "_CANCEL_DELAYED_COMMANDS"):
             raise ValueError("Unsupported immediate Feather command")
         self.gcode.run_script_from_command(command)
 
@@ -2006,8 +2020,7 @@ class FeatherScreen(FeatherPagesMixin, FeatherControlsMixin):
                 self._show_page(ScreenPage.IDLE_HOME)
 
     def _require_idle(self):
-        state = self.print_stats.get_status(self.reactor.monotonic())["state"]
-        if state in ("printing", "paused") or self.virtual_sdcard.is_active():
+        if self._safety_print_active(self.reactor.monotonic()):
             raise RuntimeError("This action is available only while idle")
 
     def _get_time_estimation_str(self, eventtime):

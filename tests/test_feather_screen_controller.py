@@ -72,7 +72,7 @@ class ControllerSafetyTest(unittest.TestCase):
     def test_home_semantic_route_preserves_existing_navigation(self):
         controller = ScenarioController.__new__(ScenarioController)
         controller.page = FEATHER.ScreenPage.IDLE_HOME
-        controller._cancel_delayed_tasks = lambda: None
+        controller._cancel_delayed_tasks = mock.Mock()
         shown = []
         controller._show_page = shown.append
 
@@ -80,6 +80,7 @@ class ControllerSafetyTest(unittest.TestCase):
         controller._dispatch_semantic_ui_action(action)
 
         self.assertEqual(controller.heat_return_page, FEATHER.ScreenPage.IDLE_HOME)
+        controller._cancel_delayed_tasks.assert_called_once_with()
         self.assertEqual(shown, [FEATHER.ScreenPage.CONTROL_HEAT])
 
     def test_declarative_navigation_rejects_non_controller_page_ids(self):
