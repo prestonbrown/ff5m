@@ -1158,6 +1158,65 @@ class FeatherUtilitiesTest(unittest.TestCase):
 
 
 class RendererStateTest(unittest.TestCase):
+    def test_touch_warning_wraps_body_and_invalidates_cached_footer(self):
+        renderer = FEATHER.FeatherRenderer()
+        batches = []
+
+        def capture(commands):
+            if renderer.output_frozen:
+                return False
+            batches.append(commands)
+            return True
+
+        renderer.send = capture
+        renderer.footer(
+            "NOZZLE 21/220C | BED 24/60C", "192.168.2.4 | IDLE")
+        commands = renderer.begin_page("Ready")
+        commands += renderer.button(
+            "ready.confirm", 220, 300, 360, 100, "CONTINUE")
+        renderer.send(commands)
+
+        renderer.touch_unavailable_modal()
+
+        warning = "\n".join(batches[-1])
+        self.assertIn("--max-height 108 --wrap --truncate", warning)
+        self.assertFalse(renderer._footer_drawn)
+
+        renderer.freeze_output()
+        renderer.footer(
+            "NOZZLE 22/220C | BED 24/60C", "192.168.2.4 | PRINTING")
+        self.assertFalse(renderer._footer_drawn)
+        renderer.thaw_output()
+        restored = "\n".join(renderer.begin_page("Ready"))
+        footer_clear = renderer.fill(
+            0, UI.FOOTER_Y - 2, UI.SCREEN_WIDTH,
+            UI.SCREEN_HEIGHT - (UI.FOOTER_Y - 2),
+            UI.ThemeColor.BACKGROUND)
+        self.assertIn(footer_clear, restored)
+        self.assertIn("192.168.2.4 | PRINTING", restored)
+
+    def test_touch_warning_requires_an_interactive_surface(self):
+        renderer = FEATHER.FeatherRenderer()
+        batches = []
+        renderer.send = batches.append
+
+        renderer.startup_modal("INITIALIZING KLIPPER", "PLEASE WAIT")
+        self.assertFalse(renderer.touch_warning_allowed)
+
+        renderer.set_header_action("emergency.stop", "STOP")
+        commands = renderer.begin_page("Ready")
+        commands += renderer.button(
+            "ready.confirm", 220, 300, 360, 100, "CONTINUE")
+        renderer.send(commands)
+        self.assertTrue(renderer.touch_warning_allowed)
+
+        renderer.touch_unavailable_modal()
+
+        warning = "\n".join(batches[-1])
+        self.assertIn("TOUCH INPUT UNAVAILABLE", warning)
+        self.assertNotIn("emergency.stop", warning)
+        self.assertFalse(renderer.touch_warning_allowed)
+
     def test_layout_primitives_compose_sections_metrics_and_grids(self):
         renderer = FEATHER.FeatherRenderer()
 

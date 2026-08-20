@@ -91,11 +91,6 @@ if [ "$DISPLAY_OFF" -eq 1 ]; then
     mount -t configfs none /sys/kernel/config -o rw,relatime
     mount -t debugfs none /sys/kernel/debug -o rw,relatime
 
-    if [ "$DISPLAY_MODE" = "FEATHER" ]; then
-        echo "// Starting calibrated Feather touch input..."
-        chroot "$MOD" /opt/config/mod/.root/S35tslib start
-    fi
-    
     echo "// MCU booting..."
     /opt/config/mod/.bin/exec/boot_mcu 2>&1
     

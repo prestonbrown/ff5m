@@ -197,6 +197,9 @@ class FeatherScreen(FeatherPagesMixin, FeatherControlsMixin):
         self.startup_phase = 0
         self.event_handle = None
         self.event_partial = ""
+        self.touch_available = None
+        self.touch_warning_visible = False
+        self.touch_warning_restore_frozen = False
         self.last_touch_time = self.reactor.monotonic()
         self.last_action_time = -1.0
         self.touch_feedback_pending = False
@@ -602,6 +605,9 @@ class FeatherScreen(FeatherPagesMixin, FeatherControlsMixin):
             "page": getattr(self.page, "name", str(self.page)),
             "generation": self.renderer.generation,
             "output_frozen": self.renderer.output_frozen,
+            "touch_available": getattr(self, "touch_available", None),
+            "touch_warning_visible": getattr(
+                self, "touch_warning_visible", False),
             "context_path": operation["context_path"],
             "context_types": operation["context_types"],
             "current_state": operation["current_state"],
@@ -674,6 +680,14 @@ class FeatherScreen(FeatherPagesMixin, FeatherControlsMixin):
                 logging.warning(
                     "[feather_screen] invalid render receipt discarded: %r",
                     line[:MAX_TOUCH_EVENT])
+            elif line == "touch-device connected":
+                self._handle_touch_device_status(True)
+            elif line == "touch-device unavailable":
+                self._handle_touch_device_status(False)
+            elif line.startswith("touch-device "):
+                logging.warning(
+                    "[feather_screen] invalid touch device status: %r",
+                    line[:MAX_TOUCH_EVENT])
             elif line.startswith("touch "):
                 self._handle_continuous_touch(line)
             elif line.startswith("tap "):
@@ -697,6 +711,43 @@ class FeatherScreen(FeatherPagesMixin, FeatherControlsMixin):
                     self._handle_touch_action(action)
                 else:
                     logging.info("[feather_screen] stale touch ignored: %s", raw_action)
+
+    def _show_touch_unavailable(self):
+        if (getattr(self, "touch_available", None) is not False
+                or getattr(self, "touch_warning_visible", False)
+                or not self.renderer.touch_warning_allowed):
+            return False
+        was_frozen = self.renderer.output_frozen
+        if was_frozen:
+            self.renderer.thaw_output()
+        self.renderer.touch_unavailable_modal()
+        self.renderer.freeze_output()
+        self.touch_warning_restore_frozen = was_frozen
+        self.touch_warning_visible = True
+        return True
+
+    def _handle_touch_device_status(self, available):
+        available = bool(available)
+        previous = getattr(self, "touch_available", None)
+        self.touch_available = available
+        if previous != available:
+            logging.info(
+                "[feather_screen] touch device %s",
+                "connected" if available else "unavailable")
+        if not available:
+            self._show_touch_unavailable()
+            return
+        if not getattr(self, "touch_warning_visible", False):
+            return
+
+        restore_frozen = getattr(
+            self, "touch_warning_restore_frozen", False)
+        self.touch_warning_visible = False
+        self.touch_warning_restore_frozen = False
+        self.renderer.thaw_output()
+        self._show_page(self.page)
+        if restore_frozen:
+            self.renderer.freeze_output()
 
     def _handle_continuous_touch(self, line):
         fields = line.split()
@@ -1135,6 +1186,7 @@ class FeatherScreen(FeatherPagesMixin, FeatherControlsMixin):
             self._render_message()
         elif page == ScreenPage.ERROR:
             self._render_error()
+        self._show_touch_unavailable()
 
     def _go_back(self):
         manager = getattr(self, "feature_manager", None)

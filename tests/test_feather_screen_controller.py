@@ -2864,6 +2864,79 @@ class ControllerSafetyTest(unittest.TestCase):
             controller.renderer._buttons["error.firmware_restart"][5],
             "danger")
 
+    def test_touch_warning_covers_and_restores_frozen_restart_dialog(self):
+        controller = ScenarioController.__new__(ScenarioController)
+        controller.renderer = FEATHER.FeatherRenderer()
+        batches = []
+        controller.renderer.send = batches.append
+        controller.page = FEATHER.ScreenPage.ERROR
+        controller.error_message = "MCU shutdown"
+        controller.error_recovery = "firmware_restart"
+        controller.touch_available = True
+        controller.touch_warning_visible = False
+        controller.renderer.footer(
+            "NOZZLE 21/220C | BED 24/60C", "192.168.2.4 | IDLE")
+        controller._render_error()
+        controller.renderer.freeze_output()
+        controller._show_page = lambda page: controller._render_error()
+
+        controller._handle_touch_device_status(False)
+
+        self.assertFalse(controller.touch_available)
+        self.assertTrue(controller.touch_warning_visible)
+        self.assertTrue(controller.renderer.output_frozen)
+        self.assertIn("TOUCH INPUT UNAVAILABLE", "\n".join(batches[-1]))
+
+        controller._handle_touch_device_status(True)
+
+        self.assertTrue(controller.touch_available)
+        self.assertFalse(controller.touch_warning_visible)
+        self.assertTrue(controller.renderer.output_frozen)
+        self.assertIn("MCU shutdown", "\n".join(batches[-1]))
+        self.assertIn("192.168.2.4 | IDLE", "\n".join(batches[-1]))
+        self.assertIn(
+            "error.firmware_restart", controller.renderer._buttons)
+
+    def test_touch_warning_waits_until_startup_loader_is_replaced(self):
+        controller = ScenarioController.__new__(ScenarioController)
+        controller.renderer = FEATHER.FeatherRenderer()
+        batches = []
+        controller.renderer.send = batches.append
+        controller.touch_available = True
+        controller.touch_warning_visible = False
+        controller.renderer.startup_modal(
+            "INITIALIZING KLIPPER", "INITIALIZING PRINTER SERVICES")
+
+        controller._handle_touch_device_status(False)
+
+        self.assertFalse(controller.touch_available)
+        self.assertFalse(controller.touch_warning_visible)
+        self.assertEqual(len(batches), 1)
+
+        commands = controller.renderer.begin_page("Ready")
+        commands += controller.renderer.button(
+            "ready.confirm", 220, 300, 360, 100, "CONTINUE")
+        controller.renderer.send(commands)
+        controller._show_touch_unavailable()
+
+        self.assertTrue(controller.touch_warning_visible)
+        self.assertIn("TOUCH INPUT UNAVAILABLE", "\n".join(batches[-1]))
+
+    def test_touch_device_protocol_dispatches_availability_transitions(self):
+        controller = ScenarioController.__new__(ScenarioController)
+        controller.renderer = type("Renderer", (), {"event_fd": 7})()
+        controller.event_partial = ""
+        transitions = []
+        controller._handle_touch_device_status = transitions.append
+
+        with mock.patch.object(
+                FEATHER.os, "read",
+                return_value=(b"touch-device unavailable\n"
+                              b"touch-device connected\n")):
+            controller._process_touch_events(100.0)
+
+        self.assertEqual(transitions, [False, True])
+
     def test_shutdown_message_is_wrapped_by_typer_inside_dialog(self):
         controller = ScenarioController.__new__(ScenarioController)
         controller.renderer = FEATHER.FeatherRenderer()

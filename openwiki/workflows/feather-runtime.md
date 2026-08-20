@@ -88,7 +88,7 @@ The plugin registers `klippy:ready`, `klippy:shutdown`, and `klippy:disconnect`.
 
 ## Boot and restart chain
 
-On a non-Stock boot, [`.shell/boot/boot.sh`](../../.shell/boot/boot.sh) starts `netd --adopt-existing` when the mod-owned `network.conf` already exists. The daemon preserves an already-working connection only when its transport, exact Wi-Fi SSID where applicable, address, and DHCP client all match that configuration. It takes ownership of the matching processes and removes the other transport without rewriting network configuration. If the live state cannot be accepted completely, `netd` performs a fresh cleanup and starts the saved target normally. An older installation without `network.conf` starts netd without the adoption flag so the existing one-shot bootstrap can create the mod target first. Feather then starts `S35tslib`, boots the MCU and launches [`.shell/commands/zstart_klipper.sh`](../../.shell/commands/zstart_klipper.sh) without waiting for connectivity. Guppy and Headless instead invoke `netd-cli wait --timeout 180` before continuing, preserving their Stock fallback behavior. The three-minute limit belongs to boot only; the daemon has no retry quota for its desired network. The latter Klipper launcher executes `/opt/klipper/start.sh`, optionally under `chrt -r 5`.
+On a non-Stock boot, [`.shell/boot/boot.sh`](../../.shell/boot/boot.sh) starts `netd --adopt-existing` when the mod-owned `network.conf` already exists. The daemon preserves an already-working connection only when its transport, exact Wi-Fi SSID where applicable, address, and DHCP client all match that configuration. It takes ownership of the matching processes and removes the other transport without rewriting network configuration. If the live state cannot be accepted completely, `netd` performs a fresh cleanup and starts the saved target normally. An older installation without `network.conf` starts netd without the adoption flag so the existing one-shot bootstrap can create the mod target first. Feather then boots the MCU and launches [`.shell/commands/zstart_klipper.sh`](../../.shell/commands/zstart_klipper.sh) without waiting for connectivity. The later `S99root` stage invokes [`.root/start.sh`](../../.root/start.sh), which owns `S35tslib` startup for Feather and Guppy as part of the restartable Buildroot service lifecycle. Typer tolerates that startup order by retrying a missing touch device until it appears. Guppy and Headless instead invoke `netd-cli wait --timeout 180` before continuing, preserving their Stock fallback behavior. The three-minute limit belongs to boot only; the daemon has no retry quota for its desired network. The Klipper launcher executes `/opt/klipper/start.sh`, optionally under `chrt -r 5`.
 
 A controlled `netd` shutdown stops its started or adopted supplicant and DHCP clients. Startup has three explicit contracts. `--migrate-existing` is the one-shot live Stock → Feather path: it determines the working vendor transport and may copy that selection and Wi-Fi profile into mod storage. `--adopt-existing` never migrates configuration: it accepts only the live connection matching the existing mod target and removes the other transport. With neither flag, or when requested adoption cannot be completed, startup stops existing network processes, clears both interfaces, and establishes the saved target afresh.
 
@@ -215,7 +215,8 @@ coverage pixels remain on their existing paths.
 
 The `[feather_screen]` status object exposes `worker_state`, queue depth/capacity
 and high-watermark, submitted/rendered/coalesced/dropped batch counters,
-`typer_restarts`, and `worker_last_error` for on-printer diagnosis.
+`typer_restarts`, `worker_last_error`, `touch_available`, and
+`touch_warning_visible` for on-printer diagnosis.
 
 ## Touch transport
 
@@ -229,9 +230,9 @@ touch 18:move.joy.xy move 410 213
 touch 18:move.joy.xy end 410 213
 ```
 
-For continuous input, Typer emits a `move` heartbeat every 100 ms while a finger is stationary and emits a final `end` when the touch fd fails. If input/event fds disappear, it retries opening them in its poll loop.
+For continuous input, Typer emits a `move` heartbeat every 100 ms while a finger is stationary and emits a final `end` when the touch fd fails. It reports `touch-device unavailable` after a missing or lost device and `touch-device connected` after opening one. The event FIFO remains open while only touch is unavailable, and Typer retries the stable device path in its poll loop.
 
-`FeatherScreen._process_touch_events()` handles partial FIFO reads, validates generation and format, wakes a dimmed panel on the first touch, debounces actions, and applies page/state gates. Continuous motion is further limited to the Move page, idle state, correct homing, and active joystick mode; actual motion remains inside Klipper's planner/toolhead path.
+`FeatherScreen._process_touch_events()` handles partial FIFO reads, validates generation and format, wakes a dimmed panel on the first touch, debounces actions, and applies page/state gates. A lost device replaces an ordinary interactive page or a button-bearing modal with a non-interactive warning. Pre-ready startup and operation loaders are not covered. Reconnection canonically renders the current page again, restoring any page-owned modal and preserving a frozen shutdown screen's ownership. Continuous motion is further limited to the Move page, idle state, correct homing, and active joystick mode; actual motion remains inside Klipper's planner/toolhead path.
 
 Startup and error pages clear the normal page hitboxes. The only actionable shutdown control is the generation-tagged `FIRMWARE_RESTART` button that Feather exposes after classifying an MCU recovery condition; it still routes through Klipper's normal G-code command path.
 

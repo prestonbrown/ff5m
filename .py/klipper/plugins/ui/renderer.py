@@ -134,6 +134,14 @@ class FeatherRenderer:
     def output_frozen(self):
         return self._output_frozen
 
+    @property
+    def touch_warning_allowed(self):
+        """Whether the visible surface has controls worth protecting."""
+        actions = set(self._buttons)
+        actions.update(
+            action for action in self._hitboxes if action != "global.wake")
+        return not self._loader_active and bool(actions)
+
     def discard_pending_output(self):
         """Drop untouched ordinary batches, preserving critical screens."""
         self._batch_queue.discard_noncritical()
@@ -1027,14 +1035,16 @@ class FeatherRenderer:
             self._wire_action(action), x, y, width, height, direction, state)
 
     def dialog(self, title, lines, buttons, x=160, y=130, width=480,
-               height=220, tone="warning", modal=True):
+               height=220, tone="warning", modal=True,
+               preserve_header_action=True):
         """Build a modal dialog from standard panel, text, and button primitives.
 
         ``buttons`` contains ``(action, label, state)`` tuples. Clearing all
         existing hitboxes makes a dialog genuinely modal even when it only
         covers one control region visually. Set ``modal`` to false for a
         localized overlay whose caller will explicitly re-register the
-        controls that remain available.
+        controls that remain available. Set ``preserve_header_action`` to
+        false when loss of input makes even that action unusable.
         """
         tones = {
             "warning": ThemeColor.WARNING,
@@ -1043,7 +1053,8 @@ class FeatherRenderer:
         }
         border = tones.get(tone, ThemeColor.PRIMARY)
         commands = []
-        preserve_header_action = self._header_action is not None
+        show_header_action = (
+            preserve_header_action and self._header_action is not None)
         if modal:
             self._buttons = {}
             self._toggles = {}
@@ -1078,7 +1089,7 @@ class FeatherRenderer:
                     action, x + margin + index * (button_width + gap),
                     button_y, button_width, 42, label, state=state,
                     font="JetBrainsMono 8pt")
-        if modal and preserve_header_action:
+        if modal and show_header_action:
             commands += self._header_action_commands()
         return commands
 
@@ -1213,12 +1224,15 @@ class FeatherRenderer:
     def footer(self, left, right):
         values = (str(left), str(right))
         self._footer_values = values
-        if values == self._last_footer:
+        if self._footer_drawn and values == self._last_footer:
             return
-        self._last_footer = values
-        self._footer_drawn = True
+        self._footer_drawn = False
+        if self._output_frozen:
+            return
         self.prioritize_next_batch("state", "footer")
-        self.send(self._footer_commands(values))
+        if self.send(self._footer_commands(values)) is not False:
+            self._last_footer = values
+            self._footer_drawn = True
 
     def toast(self, message):
         y = 397
@@ -1357,6 +1371,26 @@ class FeatherRenderer:
         commands = [self.fill(374, 206, 53, 53, ThemeColor.PANEL)]
         commands += self.filled_circle(400, 232, pulse, ThemeColor.SECONDARY)
         return commands
+
+    def touch_unavailable_modal(self):
+        """Replace an interactive surface until touch input reconnects."""
+        self._generation += 1
+        self._footer_drawn = False
+        commands = [
+            self.fill(0, 0, SCREEN_WIDTH, SCREEN_HEIGHT, ThemeColor.OVERLAY),
+        ]
+        commands += self.dialog(
+            "Touch input unavailable", (), (),
+            x=110, y=110, width=580, height=270, tone="warning",
+            preserve_header_action=False)
+        commands.append(self.text(
+            400, 245,
+            "THE TOUCH DEVICE IS NOT AVAILABLE. "
+            "WAITING FOR AUTOMATIC RECONNECTION.",
+            ThemeColor.TEXT, "JetBrainsMono 12pt", "center", "middle",
+            max_width=524, max_height=108, wrap=True, truncate=True))
+        self.prioritize_next_batch("critical", "touch-unavailable")
+        self.send(commands)
 
     def applying_modal(self, message="APPLYING CHANGES"):
         """Dim the page and draw a non-interactive modal progress panel."""
