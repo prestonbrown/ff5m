@@ -300,28 +300,64 @@ class FeatherUtilitiesTest(unittest.TestCase):
 
     def test_shared_text_keyboard_applies_layout_filter_and_length(self):
         keyboard = KEYBOARD.TEXT_KEYBOARD
-        value, shift, symbols = keyboard.apply(
-            "", "keyboard.shift", False, False)
-        value, shift, symbols = keyboard.apply(
-            value, "keyboard.key.a", shift, symbols)
-        self.assertEqual((value, shift, symbols), ("A", True, False))
+        value, cursor, shift, symbols = keyboard.apply(
+            "", 0, "keyboard.shift", False, False)
+        value, cursor, shift, symbols = keyboard.apply(
+            value, cursor, "keyboard.key.a", shift, symbols)
+        self.assertEqual((value, cursor, shift, symbols),
+                         ("A", 1, True, False))
 
-        value, shift, symbols = keyboard.apply(
-            value, "keyboard.symbols", shift, symbols)
+        value, cursor, shift, symbols = keyboard.apply(
+            value, cursor, "keyboard.symbols", shift, symbols)
         self.assertEqual((shift, symbols), (False, True))
-        value, shift, symbols = keyboard.apply(
-            value, "keyboard.shift", shift, symbols)
-        value, shift, symbols = keyboard.apply(
-            value, "keyboard.key.pipe", shift, symbols)
+        value, cursor, shift, symbols = keyboard.apply(
+            value, cursor, "keyboard.shift", shift, symbols)
+        value, cursor, shift, symbols = keyboard.apply(
+            value, cursor, "keyboard.key.pipe", shift, symbols)
         self.assertEqual(value, "A|")
 
-        value, shift, symbols = keyboard.apply(
-            value, "keyboard.key.tilde", shift, symbols,
+        value, cursor, shift, symbols = keyboard.apply(
+            value, cursor, "keyboard.key.tilde", shift, symbols,
             allowed_characters=lambda character: character.isalnum())
         self.assertEqual(value, "A|")
-        value, shift, symbols = keyboard.apply(
-            value, "keyboard.space", shift, symbols, max_length=2)
+        value, cursor, shift, symbols = keyboard.apply(
+            value, cursor, "keyboard.space", shift, symbols, max_length=2)
         self.assertEqual(value, "A|")
+
+    def test_shared_text_keyboard_edits_at_cursor_and_clamps_movement(self):
+        keyboard = KEYBOARD.TEXT_KEYBOARD
+        value, cursor, shift, symbols = keyboard.apply(
+            "ac", 2, "keyboard.left")
+        value, cursor, shift, symbols = keyboard.apply(
+            value, cursor, "keyboard.key.b", shift, symbols)
+        self.assertEqual((value, cursor), ("abc", 2))
+
+        value, cursor, shift, symbols = keyboard.apply(
+            value, cursor, "keyboard.backspace", shift, symbols)
+        self.assertEqual((value, cursor), ("ac", 1))
+        for _step in range(3):
+            value, cursor, shift, symbols = keyboard.apply(
+                value, cursor, "keyboard.left", shift, symbols)
+        self.assertEqual((value, cursor), ("ac", 0))
+        for _step in range(4):
+            value, cursor, shift, symbols = keyboard.apply(
+                value, cursor, "keyboard.right", shift, symbols)
+        self.assertEqual((value, cursor), ("ac", 2))
+
+    def test_shared_text_keyboard_keeps_caret_inside_long_value_field(self):
+        renderer = FEATHER.FeatherRenderer()
+        commands = KEYBOARD.TEXT_KEYBOARD.render_value(
+            renderer, "a" * 64, 32, 42, 147, 575,
+            UI.ThemeColor.PRIMARY)
+
+        caret = commands[-1]
+        match = re.search(
+            r"fill -p (\d+) (\d+) -s (\d+) (\d+)", caret)
+        self.assertIsNotNone(match)
+        self.assertGreaterEqual(int(match.group(1)), 42)
+        self.assertLessEqual(int(match.group(1)), 615)
+        self.assertGreater(int(match.group(3)), 0)
+        self.assertGreater(int(match.group(4)), 0)
 
     def test_duration_formatting(self):
         duration = FEATHER.FeatherScreen._duration
@@ -1921,6 +1957,7 @@ class RendererStateTest(unittest.TestCase):
 
         controller.selected_network = {"ssid": "Workshop"}
         controller.password = "secret123"
+        controller.password_cursor = len(controller.password)
         controller.password_visible = False
         controller.keyboard_symbols = False
         controller.keyboard_shift = False

@@ -2091,6 +2091,8 @@ class ControllerSafetyTest(unittest.TestCase):
         drawing = "\n".join(controller.draw_batches[-1])
         self.assertIn("--id 1:mod.dot", drawing)
         self.assertNotIn("--id 1:mod.sign", drawing)
+        self.assertNotIn("keyboard.left", controller.renderer._buttons)
+        self.assertNotIn("keyboard.right", controller.renderer._buttons)
         controller.mod_edit_value = ""
         for action in ("mod.key.9", "mod.dot", "mod.key.5", "mod.key.9"):
             controller._handle_mod_action(action)
@@ -2111,8 +2113,10 @@ class ControllerSafetyTest(unittest.TestCase):
         self.assertIn("keyboard.key.1", dict(controller.renderer._buttons))
         self.assertIn("keyboard.key.0", dict(controller.renderer._buttons))
         controller._handle_mod_action("keyboard.key.hash")
-        controller._handle_mod_action("keyboard.backspace")
+        controller._handle_mod_action("keyboard.left")
         controller._handle_mod_action("keyboard.key.dot")
+        controller._handle_mod_action("keyboard.right")
+        controller._handle_mod_action("keyboard.backspace")
         controller._handle_mod_action("mod.save")
 
         self.assertEqual(controller.params.updated, [("midi_on", "A .")])
@@ -2128,6 +2132,7 @@ class ControllerSafetyTest(unittest.TestCase):
         wifi.renderer.send = lambda commands: None
         wifi.selected_network = {"ssid": "Workshop"}
         wifi.password = "secret123"
+        wifi.password_cursor = len(wifi.password)
         wifi.password_visible = False
         wifi.keyboard_symbols = False
         wifi.keyboard_shift = False
@@ -2144,8 +2149,31 @@ class ControllerSafetyTest(unittest.TestCase):
                    if action.startswith("keyboard.")))
         for action in shared_actions:
             self.assertEqual(mod_buttons[action], wifi_buttons[action], action)
+        left = mod_buttons["keyboard.left"]
+        space = mod_buttons["keyboard.space"]
+        right = mod_buttons["keyboard.right"]
+        self.assertLessEqual(left[0] + left[2], space[0])
+        self.assertLessEqual(space[0] + space[2], right[0])
         self.assertIn("net.password.toggle", wifi_buttons)
         self.assertIn("net.connect", wifi_buttons)
+
+    def test_wifi_password_editor_inserts_at_moved_cursor(self):
+        wifi = FEATHER.FeatherScreen.__new__(FEATHER.FeatherScreen)
+        wifi.renderer = FEATHER.FeatherRenderer()
+        wifi.renderer.send = lambda commands: None
+        wifi.selected_network = {"ssid": "Workshop"}
+        wifi.password = "pasword"
+        wifi.password_cursor = len(wifi.password)
+        wifi.password_visible = False
+        wifi.keyboard_symbols = False
+        wifi.keyboard_shift = False
+
+        for _step in range(4):
+            wifi._handle_network_action("keyboard.left")
+        wifi._handle_network_action("keyboard.key.s")
+
+        self.assertEqual(wifi.password, "password")
+        self.assertEqual(wifi.password_cursor, 4)
 
     def test_mod_page_hitboxes_stay_above_persistent_footer(self):
         params = [mod_param("flag%d" % index, bool, False,

@@ -86,6 +86,7 @@ class FeatherNetworkPagesMixin:
         self.network_page = 0
         self.selected_network = None
         self.password = ""
+        self.password_cursor = 0
         self.keyboard_shift = False
         self.keyboard_symbols = False
         self.password_visible = False
@@ -146,6 +147,7 @@ class FeatherNetworkPagesMixin:
             if offset is not None:
                 self.selected_network = self.networks[offset]
                 self.password = ""
+                self.password_cursor = 0
                 self.keyboard_shift = self.keyboard_symbols = False
                 if self.selected_network.get("saved"):
                     self._connect_saved_wifi()
@@ -156,6 +158,7 @@ class FeatherNetworkPagesMixin:
                     or not self.selected_network.get("saved")):
                 raise RuntimeError("No saved Wi-Fi password is selected")
             self.password = ""
+            self.password_cursor = 0
             self.keyboard_shift = self.keyboard_symbols = False
             self._show_page(ScreenPage.WIFI_PASSWORD)
         elif action == "net.connect":
@@ -169,9 +172,9 @@ class FeatherNetworkPagesMixin:
             self.password_visible = not self.password_visible
             self._render_keyboard()
         elif is_keyboard_action(action):
-            (self.password, self.keyboard_shift,
+            (self.password, self.password_cursor, self.keyboard_shift,
              self.keyboard_symbols) = TEXT_KEYBOARD.apply(
-                self.password, action, self.keyboard_shift,
+                self.password, self.password_cursor, action, self.keyboard_shift,
                 self.keyboard_symbols, max_length=64)
             self._render_keyboard()
 
@@ -454,8 +457,6 @@ class FeatherNetworkPagesMixin:
     def _render_keyboard(self):
         ssid = self.selected_network["ssid"]
         commands = self.renderer.begin_page(ssid, back=True)
-        masked = (self.password if self.password_visible
-                  else "*" * len(self.password))
         commands += [
             self.renderer.text(
                 25, 73, "WI-FI PASSWORD", ThemeColor.PRIMARY,
@@ -466,10 +467,11 @@ class FeatherNetworkPagesMixin:
                 truncate=True),
             self.renderer.fill(25, 120, 750, 53, ThemeColor.PANEL),
             self.renderer.stroke(25, 120, 750, 53, ThemeColor.PRIMARY, 2),
-            self.renderer.text(
-                42, 147, masked or "_", ThemeColor.PRIMARY,
-                "JetBrainsMono 12pt", max_width=575, truncate=True),
         ]
+        commands += TEXT_KEYBOARD.render_value(
+            self.renderer, self.password, self.password_cursor,
+            42, 147, 575, ThemeColor.PRIMARY,
+            masked=not self.password_visible)
         commands += self.renderer.button(
             "net.password.toggle", 645, 128, 120, 37,
             "HIDE" if self.password_visible else "SHOW",
@@ -496,6 +498,7 @@ class FeatherNetworkPagesMixin:
         self._require_network_ready()
         password = self.password
         self.password = ""
+        self.password_cursor = 0
         if not self.network_client.connect_wifi(
                 self.selected_network["ssid"], password):
             raise RuntimeError("Network service is unavailable")

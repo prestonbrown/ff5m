@@ -1157,6 +1157,7 @@ class FeatherPagesMixin(FeatherNetworkPagesMixin):
             return
         self.mod_parameter = param
         self.mod_edit_value = mod_ui.current_edit_value(self.params, param)
+        self.mod_edit_cursor = len(self.mod_edit_value)
         self.mod_keyboard_shift = False
         self.mod_keyboard_symbols = False
         if kind == "enum" or param.key == "feather_theme":
@@ -1356,9 +1357,10 @@ class FeatherPagesMixin(FeatherNetworkPagesMixin):
             self.mod_edit_value = mod_ui.numeric_input_spec(param).apply(
                 self.mod_edit_value, token)
         elif kind == "str" and is_keyboard_action(action):
-            (self.mod_edit_value, self.mod_keyboard_shift,
+            (self.mod_edit_value, self.mod_edit_cursor,
+             self.mod_keyboard_shift,
              self.mod_keyboard_symbols) = TEXT_KEYBOARD.apply(
-                self.mod_edit_value, action,
+                self.mod_edit_value, self.mod_edit_cursor, action,
                 self.mod_keyboard_shift, self.mod_keyboard_symbols,
                 max_length=mod_ui.MAX_VALUE_LENGTH)
         self._render_mod_value()
@@ -1451,10 +1453,10 @@ class FeatherPagesMixin(FeatherNetworkPagesMixin):
                                truncate=True),
             self.renderer.fill(25, 120, 750, 53, ThemeColor.PANEL),
             self.renderer.stroke(25, 120, 750, 53, ThemeColor.PRIMARY, 2),
-            self.renderer.text(42, 147, self.mod_edit_value or "_", ThemeColor.PRIMARY,
-                               "JetBrainsMono 12pt", max_width=710,
-                               truncate=True),
         ]
+        commands += TEXT_KEYBOARD.render_value(
+            self.renderer, self.mod_edit_value, self.mod_edit_cursor,
+            42, 147, 710, ThemeColor.PRIMARY)
         commands += self._render_mod_text_keys()
         self.renderer.send(commands)
 
