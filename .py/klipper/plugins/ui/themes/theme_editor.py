@@ -1,4 +1,10 @@
 #!/usr/bin/env python3
+## Small zero-dependency local web editor for Feather UI themes.
+##
+## Copyright (C) 2026, Alexander K <https://github.com/drA1ex>
+##
+## This file may be distributed under the terms of the GNU GPLv3 license
+
 """Small zero-dependency local web editor for Feather UI themes.
 
 Typical zero-config use when this file itself lives in the themes directory:
@@ -10,8 +16,10 @@ The editor:
 - discovers theme JSON files in the current directory;
 - finds theme.schema.json next to them;
 - searches upward for theme.py / framework/ui/theme.py;
-- serves only on 127.0.0.1;
+- serves on 127.0.0.1 by default, with configurable bind and URL hosts;
 - opens the browser unless --no-open is supplied;
+- generates light or dark palettes from common color harmonies;
+- keeps generated themes in local browser storage;
 - edits ThemeColor and ThemeRole values live;
 - validates and downloads a custom theme JSON.
 
@@ -352,14 +360,14 @@ body { font:14px/1.45 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; }
 button,input,select,textarea { font:inherit; }
 button { cursor:pointer; }
 .app {
-  max-width:1600px; height:100vh; margin:0 auto; padding:16px 22px 22px;
+  max-width:1760px; height:100vh; margin:0 auto; padding:16px 22px 22px;
   display:grid; grid-template-rows:auto auto minmax(0,1fr); gap:12px;
 }
 .top {
   display:flex; gap:16px; align-items:end; justify-content:space-between;
   flex-wrap:wrap;
 }
-h1 { margin:0 0 4px; font-size:24px; }
+h1 { margin:0; font-size:24px; }
 .sub { color:var(--app-dim); }
 .toolbar { display:flex; gap:10px; align-items:end; flex-wrap:wrap; }
 .field { display:grid; gap:5px; }
@@ -375,6 +383,17 @@ h1 { margin:0 0 4px; font-size:24px; }
   background:var(--app-accent); border:0; font-weight:700;
 }
 .primary-action:disabled { opacity:.35; cursor:not-allowed; }
+.generate-action {
+  min-height:38px; padding:8px 15px; color:var(--app-accent);
+  background:var(--app-panel2); border:1px solid var(--app-accent); font-weight:700;
+}
+.theme-select-wrap { display:flex; gap:6px; }
+.theme-select-wrap select { min-width:180px; }
+.delete-theme {
+  width:38px; min-height:38px; padding:0; color:var(--bad);
+  background:var(--app-panel2); border:1px solid #6b3535; font-size:20px;
+}
+.delete-theme[hidden] { display:none; }
 .status {
   border:1px solid var(--app-border); background:var(--app-panel);
   padding:9px 12px; color:var(--app-dim); min-height:38px;
@@ -567,6 +586,52 @@ h1 { margin:0 0 4px; font-size:24px; }
   padding:7px 10px; color:var(--app-text); background:var(--app-panel2);
   border:1px solid var(--app-border);
 }
+.generator-dialog {
+  width:min(680px,calc(100vw - 32px)); max-height:calc(100vh - 32px);
+  padding:0; color:var(--app-text); background:var(--app-panel);
+  border:1px solid var(--app-border); box-shadow:0 24px 80px #000b;
+}
+.generator-dialog::backdrop { background:#05080bcc; }
+.generator-head {
+  display:flex; justify-content:space-between; align-items:start; gap:16px;
+  padding:18px 20px; border-bottom:1px solid var(--app-border);
+}
+.generator-head h2 { margin:0 0 4px; font-size:19px; }
+.generator-close {
+  width:34px; height:34px; color:var(--app-dim); background:transparent;
+  border:1px solid var(--app-border); font-size:20px; line-height:1;
+}
+.generator-body { display:grid; gap:16px; padding:20px; overflow:auto; }
+.generator-row { display:grid; grid-template-columns:1fr 1fr; gap:14px; }
+.generator-color { display:grid; grid-template-columns:48px 1fr; gap:8px; }
+.generator-color input[type=color] {
+  width:48px; height:38px; padding:2px; background:transparent;
+  border:1px solid var(--app-border);
+}
+.generator-mode { display:grid; grid-template-columns:1fr 1fr; gap:8px; }
+.generator-mode label {
+  display:flex; align-items:center; justify-content:center; gap:8px;
+  min-height:38px; padding:8px; border:1px solid var(--app-border);
+  background:var(--app-panel2); cursor:pointer;
+}
+.generator-mode label:has(input:checked) { border-color:var(--app-accent); color:var(--app-accent); }
+.generator-palette { display:grid; grid-template-columns:repeat(3,1fr); gap:8px; }
+.generator-swatch {
+  min-height:76px; padding:8px; border:1px solid var(--app-border);
+  display:grid; align-content:space-between; font-size:11px;
+  position:relative; cursor:pointer;
+}
+.generator-swatch:hover,.generator-swatch:focus-within {
+  outline:2px solid var(--app-accent); outline-offset:1px;
+}
+.generator-swatch input[type=color] {
+  position:absolute; inset:0; width:100%; height:100%; opacity:0; cursor:pointer;
+}
+.generator-swatch .edit-hint { font-size:9px; opacity:.75; }
+.generator-footer {
+  display:flex; justify-content:flex-end; gap:9px; padding:15px 20px;
+  border-top:1px solid var(--app-border);
+}
 @media (max-width:1100px) {
   html,body { height:auto; overflow:auto; }
   .app { height:auto; min-height:100vh; display:block; }
@@ -577,6 +642,7 @@ h1 { margin:0 0 4px; font-size:24px; }
 }
 @media (max-width:720px) {
   .app { padding:12px; }
+  .generator-row { grid-template-columns:1fr; }
   .color-row { grid-template-columns:1fr 48px 120px; }
   .role-row { grid-template-columns:1fr; }
   .preview-grid,.runtime-grid,.role-combinations,.physical-grid { grid-template-columns:1fr; }
@@ -587,14 +653,16 @@ h1 { margin:0 0 4px; font-size:24px; }
 <body>
 <div class="app">
   <div class="top">
-    <div>
-      <h1>Feather Theme Editor</h1>
-      <div class="sub" id="sourceInfo">Loading…</div>
-    </div>
+    <h1>Feather Theme Editor</h1>
     <div class="toolbar">
+      <button id="generateButton" class="generate-action">Generate</button>
       <div class="field">
-        <label>Base theme</label>
-        <select id="themeSelect"></select>
+        <label>Theme / starting point</label>
+        <div class="theme-select-wrap">
+          <select id="themeSelect"></select>
+          <button id="deleteTheme" class="delete-theme" title="Delete saved theme"
+            aria-label="Delete saved theme" hidden>×</button>
+        </div>
       </div>
       <div class="field name-field">
         <label>Custom theme name</label>
@@ -719,11 +787,141 @@ h1 { margin:0 0 4px; font-size:24px; }
   </div>
 </div>
 
+<dialog id="generatorDialog" class="generator-dialog" aria-labelledby="generatorTitle">
+  <div class="generator-head">
+    <div>
+      <h2 id="generatorTitle">Generate a new theme</h2>
+      <div class="sub">
+        Choose one color. The harmony rotates its hue while keeping its saturation and lightness.
+      </div>
+    </div>
+    <button id="generatorClose" class="generator-close" aria-label="Close">×</button>
+  </div>
+  <div class="generator-body">
+    <div class="generator-row">
+      <div class="field">
+        <label for="generatorHex">Base color</label>
+        <div class="generator-color">
+          <input id="generatorColor" type="color" value="#35d9e6" aria-label="Base color picker">
+          <input id="generatorHex" class="hex-input" type="text" value="35d9e6" maxlength="7" aria-label="Base color HEX">
+        </div>
+      </div>
+      <div class="field">
+        <label for="generatorHarmony">Color harmony</label>
+        <select id="generatorHarmony">
+          <option value="triadic">Triadic</option>
+          <option value="complementary">Complementary</option>
+          <option value="analogous">Analogous</option>
+          <option value="split">Split complementary</option>
+        </select>
+      </div>
+    </div>
+    <div class="field">
+      <label>Appearance</label>
+      <div class="generator-mode">
+        <label><input type="radio" name="generatorMode" value="dark" checked> Dark</label>
+        <label><input type="radio" name="generatorMode" value="light"> Light</label>
+      </div>
+    </div>
+    <div class="field">
+      <label>Generated accent palette</label>
+      <div id="generatorPalette" class="generator-palette"></div>
+    </div>
+    <div class="field">
+      <label for="generatorName">Theme name</label>
+      <input id="generatorName" type="text" maxlength="32" placeholder="LIGHT TEAL">
+      <div class="note">You can edit every generated color after creating the theme.</div>
+    </div>
+  </div>
+  <div class="generator-footer">
+    <button id="generatorCancel" class="secondary-action">Cancel</button>
+    <button id="generatorCreate" class="primary-action">Create Theme</button>
+  </div>
+</dialog>
+
 <script>
 "use strict";
 
-const state = { config:null, doc:null, resolvedRoles:{} };
+const GENERATED_THEME_STORAGE_KEY = "feather-theme-editor.generated.v1";
+const state = {
+  config:null,
+  doc:null,
+  resolvedRoles:{},
+  generatedThemes:[],
+  currentGeneratedId:null,
+  storageWarning:"",
+};
 const $ = id => document.getElementById(id);
+
+function loadGeneratedThemes() {
+  try {
+    const stored = JSON.parse(localStorage.getItem(GENERATED_THEME_STORAGE_KEY) || "[]");
+    if (!Array.isArray(stored)) return [];
+
+    const seen = new Set();
+    return stored.filter(item => {
+      const valid = item && typeof item.id === "string" && !seen.has(item.id) &&
+        item.doc && typeof item.doc === "object" && item.doc.colors && typeof item.doc.colors === "object" &&
+        state.config.colors.every(name => isHex(item.doc.colors[name]));
+      if (valid) seen.add(item.id);
+      return valid;
+    });
+  } catch (error) {
+    console.warn("Could not load saved generated themes", error);
+    state.storageWarning = "saved generated themes could not be read";
+    return [];
+  }
+}
+
+function saveGeneratedThemes() {
+  try {
+    localStorage.setItem(GENERATED_THEME_STORAGE_KEY, JSON.stringify(state.generatedThemes));
+    state.storageWarning = "";
+    return true;
+  } catch (error) {
+    console.warn("Could not save generated themes", error);
+    state.storageWarning = "browser storage unavailable; generated themes last only for this session";
+    return false;
+  }
+}
+
+function generatedOptionValue(id) { return `generated:${id}`; }
+
+function renderThemeOptions(selectedValue=null) {
+  const select = $("themeSelect");
+  select.innerHTML = "";
+  for (const theme of state.config.themes) {
+    const option = document.createElement("option");
+    option.value = theme.file;
+    option.textContent = theme.name;
+    select.appendChild(option);
+  }
+  for (const theme of state.generatedThemes) {
+    const option = document.createElement("option");
+    option.value = generatedOptionValue(theme.id);
+    option.textContent = `✦ ${theme.doc.name || "UNTITLED"}`;
+    select.appendChild(option);
+  }
+  if (selectedValue && [...select.options].some(option => option.value === selectedValue)) {
+    select.value = selectedValue;
+  }
+}
+
+function syncDeleteThemeButton() {
+  $("deleteTheme").hidden = state.currentGeneratedId === null;
+}
+
+function persistCurrentGeneratedTheme() {
+  if (state.currentGeneratedId === null) return;
+  const stored = state.generatedThemes.find(theme => theme.id === state.currentGeneratedId);
+  if (!stored) return;
+
+  stored.doc = exportDocument();
+  saveGeneratedThemes();
+  const value = generatedOptionValue(stored.id);
+  const option = [...$("themeSelect").options].find(item => item.value === value);
+  if (option) option.textContent = `✦ ${stored.doc.name || "UNTITLED"}`;
+}
 
 function hex(value) { return String(value || "").trim().replace(/^#/, "").toLowerCase(); }
 function isHex(value) { return /^[0-9a-f]{6}$/i.test(hex(value)); }
@@ -748,6 +946,162 @@ function contrastRatio(foreground, background) {
 }
 function diagnosticText(background) {
   return contrastRatio("000000", background) >= contrastRatio("ffffff", background) ? "000000" : "ffffff";
+}
+
+function clamp(value, low, high) { return Math.min(high, Math.max(low, value)); }
+function wrapHue(value) { return (value % 360 + 360) % 360; }
+
+function rgbToHsl(value) {
+  const [rawR,rawG,rawB] = rgbChannels(value), r = rawR / 255, g = rawG / 255, b = rawB / 255;
+  const high = Math.max(r,g,b), low = Math.min(r,g,b), delta = high - low;
+  let hue = 0;
+  if (delta) {
+    if (high === r) hue = 60 * (((g - b) / delta) % 6);
+    else if (high === g) hue = 60 * ((b - r) / delta + 2);
+    else hue = 60 * ((r - g) / delta + 4);
+  }
+  const lightness = (high + low) / 2;
+  const saturation = delta ? delta / (1 - Math.abs(2 * lightness - 1)) : 0;
+  return {h:wrapHue(hue), s:saturation * 100, l:lightness * 100};
+}
+
+function hslToHex(hue, saturation, lightness) {
+  const h = wrapHue(hue), s = clamp(saturation, 0, 100) / 100, l = clamp(lightness, 0, 100) / 100;
+  const chroma = (1 - Math.abs(2 * l - 1)) * s;
+  const segment = h / 60, middle = chroma * (1 - Math.abs(segment % 2 - 1));
+  let rgb = [0,0,0];
+  if (segment < 1) rgb = [chroma,middle,0];
+  else if (segment < 2) rgb = [middle,chroma,0];
+  else if (segment < 3) rgb = [0,chroma,middle];
+  else if (segment < 4) rgb = [0,middle,chroma];
+  else if (segment < 5) rgb = [middle,0,chroma];
+  else rgb = [chroma,0,middle];
+  const offset = l - chroma / 2;
+  return rgb.map(channel => Math.round((channel + offset) * 255).toString(16).padStart(2,"0")).join("");
+}
+
+const HARMONIES = {
+  complementary: {label:"Complementary", offsets:[0,180]},
+  triadic: {label:"Triadic", offsets:[0,120,240]},
+  analogous: {label:"Analogous", offsets:[0,-30,30]},
+  split: {label:"Split complementary", offsets:[0,150,210]},
+};
+
+function selectedGeneratorMode() {
+  return document.querySelector('input[name="generatorMode"]:checked').value;
+}
+
+function contrastAdjustedHex(hue, saturation, lightness, background, makeLighter) {
+  let value = hslToHex(hue, saturation, lightness);
+  for (let step = 0; step < 30 && contrastRatio(value, background) < 4.5; step++) {
+    lightness = clamp(lightness + (makeLighter ? 2 : -2), 10, 90);
+    value = hslToHex(hue, saturation, lightness);
+  }
+  return value;
+}
+
+function generatedAccentPalette(baseColor, harmony) {
+  const base = rgbToHsl(baseColor);
+  return HARMONIES[harmony].offsets.map(offset => {
+    const hue = wrapHue(base.h + offset);
+    return {h:hue, hex:offset === 0 ? hex(baseColor) : hslToHex(hue, base.s, base.l)};
+  });
+}
+
+function hueName(hue) {
+  const h = wrapHue(hue);
+  if (h < 15 || h >= 345) return "red";
+  if (h < 38) return "orange";
+  if (h < 52) return "amber";
+  if (h < 70) return "yellow";
+  if (h < 100) return "lime";
+  if (h < 150) return "green";
+  if (h < 180) return "teal";
+  if (h < 200) return "cyan";
+  if (h < 230) return "blue";
+  if (h < 265) return "indigo";
+  if (h < 290) return "violet";
+  if (h < 325) return "magenta";
+  return "rose";
+}
+
+function generatorSelection() {
+  const base = hex($("generatorColor").value), harmony = $("generatorHarmony").value;
+  const mode = selectedGeneratorMode();
+  const palette = generatedAccentPalette(base, harmony).map((color,index) => {
+    const override = generatorPaletteOverrides[index];
+    return override ? {h:rgbToHsl(override).h, hex:override} : color;
+  });
+  const names = palette.map(color => hueName(color.h));
+  return {base,harmony,mode,palette,names};
+}
+
+function generatedThemeName(selection) {
+  return `${selection.mode}_${selection.names[0]}`.toUpperCase().slice(0,32);
+}
+
+function generatedDescription(selection) {
+  const list = selection.names.length === 2 ? selection.names.join(" and ") :
+    selection.names.slice(0,-1).join(", ") + " and " + selection.names.at(-1);
+  const mode = selection.mode[0].toUpperCase() + selection.mode.slice(1);
+  return `${mode} ${list} palette (${HARMONIES[selection.harmony].label.toLowerCase()}).`;
+}
+
+function shiftedColor(value, lightnessDelta, saturationScale) {
+  const color = rgbToHsl(value);
+  return hslToHex(color.h, color.s * saturationScale, color.l + lightnessDelta);
+}
+
+function generatedColors(selection) {
+  const base = rgbToHsl(selection.base);
+  const first = selection.palette[0], second = selection.palette[1] || selection.palette[0];
+  const primaryDark = shiftedColor(first.hex, -24, .85);
+  const secondaryDark = shiftedColor(second.hex, selection.mode === "light" ? 10 : -24, .70);
+  if (selection.mode === "light") {
+    const panel = hslToHex(base.h, 10, 99);
+    return {
+      background:hslToHex(base.h, 12, 94), panel,
+      primary:first.hex, primary_dark:primaryDark,
+      secondary:second.hex, secondary_dark:secondaryDark,
+      warning:contrastAdjustedHex(42, 86, 34, panel, false),
+      danger:contrastAdjustedHex(355, 72, 39, panel, false),
+      danger_background:hslToHex(355, 58, 93), text:diagnosticText(panel),
+      bright:diagnosticText(panel), dim:hslToHex(base.h, 9, 40),
+      border:hslToHex(base.h, 10, 61), muted:hslToHex(base.h, 9, 70),
+      success:contrastAdjustedHex(145, 58, 31, panel, false),
+      pressed_background:hslToHex(base.h, 12, 83),
+      overlay:hslToHex(base.h, 16, 18),
+    };
+  }
+  const panel = hslToHex(base.h, Math.min(base.s * .30, 25), 9);
+  return {
+    background:hslToHex(base.h, Math.min(base.s * .28, 24), 4),
+    panel,
+    primary:first.hex, primary_dark:primaryDark,
+    secondary:second.hex, secondary_dark:secondaryDark,
+    warning:contrastAdjustedHex(42, 86, 64, panel, true),
+    danger:contrastAdjustedHex(355, 76, 64, panel, true),
+    danger_background:hslToHex(355, 52, 10), text:diagnosticText(panel),
+    bright:diagnosticText(panel), dim:hslToHex(base.h, 12, 48),
+    border:hslToHex(base.h, 20, 31), muted:hslToHex(base.h, 16, 18),
+    success:contrastAdjustedHex(145, 55, 59, panel, true),
+    pressed_background:hslToHex(base.h, 24, 22),
+    overlay:hslToHex(base.h, 18, 2),
+  };
+}
+
+function generatedRoles(selection, colors) {
+  const candidates = {
+    button_background:"panel", button_border:"border", button_text:"text",
+    button_selected_background:"primary_dark", button_selected_border:"primary",
+    button_selected_text:diagnosticText(colors.primary_dark),
+    accent_background:"secondary_dark", accent_border:"secondary",
+    accent_text:diagnosticText(colors.secondary_dark),
+    header_background:"primary_dark", header_text:diagnosticText(colors.primary_dark),
+    header_border:selection.palette[2]?.hex ?? "primary", temperature_nozzle:"danger",
+    temperature_bed:"warning", temperature_fan:"secondary",
+  };
+  return Object.fromEntries(state.config.roles.map(role => [role, candidates[role] ?? state.config.defaults[role]]));
 }
 
 function resolveRoleValue(value) {
@@ -1032,6 +1386,7 @@ function applyLiveState(activeControl=null) {
   renderPhysicalMap();
   renderRuntimeCombinations();
   updateJsonBox();
+  persistCurrentGeneratedTheme();
   scheduleValidation();
 }
 
@@ -1045,26 +1400,178 @@ async function validateCurrent() {
   } else {
     status.className = "status bad"; status.textContent = result.errors.join(" • "); button.disabled = true;
   }
+  if (state.storageWarning) status.textContent += " • " + state.storageWarning;
+}
+
+let generatorNameEdited = false;
+let generatorPaletteOverrides = [];
+
+function applyGeneratorAccent(picker) {
+  const index = Number(picker.dataset.index);
+  generatorPaletteOverrides[index] = hex(picker.value);
+  const selection = generatorSelection(), color = selection.palette[index];
+  const swatch = picker.closest(".generator-swatch"), label = diagnosticText(color.hex);
+  swatch.style.background = css(color.hex);
+  swatch.style.color = css(label);
+  swatch.querySelector("b").textContent = selection.names[index];
+  swatch.querySelector(".hex-label").textContent = `#${color.hex.toUpperCase()}`;
+  picker.setAttribute("aria-label", `Adjust ${selection.names[index]} accent`);
+  if (!generatorNameEdited) $("generatorName").value = generatedThemeName(selection);
+}
+
+function refreshGeneratorPreview(resetPalette=false) {
+  if (resetPalette) generatorPaletteOverrides = [];
+  const selection = generatorSelection(), root = $("generatorPalette");
+  root.style.gridTemplateColumns = `repeat(${selection.palette.length},1fr)`;
+  root.innerHTML = selection.palette.map((color,index) => {
+    const label = diagnosticText(color.hex);
+    return `<label class="generator-swatch" style="background:${css(color.hex)};color:${css(label)}">
+      <input type="color" value="${css(color.hex)}" data-index="${index}"
+        aria-label="Adjust ${selection.names[index]} accent">
+      <b>${selection.names[index]}</b><span class="hex-label">#${color.hex.toUpperCase()}</span>
+      <span class="edit-hint">click to adjust</span></label>`;
+  }).join("");
+  for (const picker of root.querySelectorAll('input[type="color"]')) {
+    picker.addEventListener("input", () => applyGeneratorAccent(picker));
+  }
+  if (!generatorNameEdited) $("generatorName").value = generatedThemeName(selection);
+}
+
+function openGenerator() {
+  if (!state.doc) return;
+  const primary = state.doc.colors.primary;
+  if (isHex(primary)) {
+    $("generatorColor").value = css(primary);
+    $("generatorHex").value = hex(primary);
+  }
+  const mode = luminance(state.doc.colors.background) > .45 ? "light" : "dark";
+  document.querySelector(`input[name="generatorMode"][value="${mode}"]`).checked = true;
+  $("generatorHarmony").value = "triadic";
+  generatorNameEdited = false;
+  refreshGeneratorPreview(true);
+  $("generatorDialog").showModal();
+}
+
+function normalizeGeneratedName(value, fallback) {
+  let name = String(value || "").trim().toUpperCase().replace(/[^A-Z0-9]+/g,"_").replace(/^_+|_+$/g,"");
+  if (!name) name = fallback;
+  if (!/^[A-Z]/.test(name)) name = "THEME_" + name;
+  return name.slice(0,32).replace(/_+$/g,"");
+}
+
+function newGeneratedThemeId() {
+  return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2,8)}`;
+}
+
+function showCurrentDocument(name, description) {
+  state.doc.roles ||= {};
+  $("themeName").value = name;
+  $("themeDescription").value = description;
+  syncDeleteThemeButton();
+  renderColorEditor();
+  renderRoleEditor();
+  renderRoleSpecimens();
+  applyLiveState();
+}
+
+function createGeneratedTheme() {
+  const selection = generatorSelection(), fallbackName = generatedThemeName(selection);
+  const next = JSON.parse(JSON.stringify(exportDocument()));
+  next.name = normalizeGeneratedName($("generatorName").value, fallbackName);
+  next.description = generatedDescription(selection);
+  const colors = generatedColors(selection);
+  next.colors = {...next.colors, ...colors};
+  next.roles = generatedRoles(selection, next.colors);
+
+  state.doc = next;
+  state.currentGeneratedId = newGeneratedThemeId();
+  state.generatedThemes.push({id:state.currentGeneratedId, doc:JSON.parse(JSON.stringify(next))});
+  saveGeneratedThemes();
+  renderThemeOptions(generatedOptionValue(state.currentGeneratedId));
+  showCurrentDocument(next.name, next.description);
+  $("generatorDialog").close();
 }
 
 async function loadTheme(filename) {
+  state.currentGeneratedId = null;
   const response = await fetch("/api/theme?file=" + encodeURIComponent(filename));
-  state.doc = await response.json(); state.doc.roles ||= {};
-  $("themeName").value = (state.doc.name || filename.replace(/\.json$/i, "")) + " CUSTOM";
-  $("themeDescription").value = state.doc.description || "";
-  renderColorEditor(); renderRoleEditor(); renderRoleSpecimens(); applyLiveState();
+  state.doc = await response.json();
+  const name = (state.doc.name || filename.replace(/\.json$/i, "")) + " CUSTOM";
+  showCurrentDocument(name, state.doc.description || "");
+}
+
+function loadGeneratedTheme(id) {
+  const stored = state.generatedThemes.find(theme => theme.id === id);
+  if (!stored) return;
+
+  state.currentGeneratedId = id;
+  state.doc = JSON.parse(JSON.stringify(stored.doc));
+  showCurrentDocument(state.doc.name || "", state.doc.description || "");
+}
+
+async function deleteCurrentGeneratedTheme() {
+  const id = state.currentGeneratedId;
+  const stored = state.generatedThemes.find(theme => theme.id === id);
+  if (!stored || !confirm(`Delete saved theme "${stored.doc.name || "UNTITLED"}"?`)) return;
+
+  state.generatedThemes = state.generatedThemes.filter(theme => theme.id !== id);
+  state.currentGeneratedId = null;
+  saveGeneratedThemes();
+  renderThemeOptions();
+  syncDeleteThemeButton();
+
+  if (state.config.themes.length) {
+    $("themeSelect").value = state.config.themes[0].file;
+    await loadTheme(state.config.themes[0].file);
+  } else if (state.generatedThemes.length) {
+    const next = state.generatedThemes[0];
+    $("themeSelect").value = generatedOptionValue(next.id);
+    loadGeneratedTheme(next.id);
+  } else {
+    $("validationStatus").className = "status bad";
+    $("validationStatus").textContent = "No themes available.";
+    $("downloadButton").disabled = true;
+  }
 }
 
 async function init() {
   state.config = await (await fetch("/api/config")).json();
-  $("sourceInfo").textContent = `${state.config.themes.length} themes • ${state.config.contract_mode} contract` + (state.config.schema ? ` • schema: ${state.config.schema}` : " • basic schema checks");
+  state.generatedThemes = loadGeneratedThemes();
+  renderThemeOptions();
   const select = $("themeSelect");
-  for (const theme of state.config.themes) {
-    const option = document.createElement("option"); option.value = theme.file; option.textContent = theme.name; select.appendChild(option);
+  select.addEventListener("change", () => {
+    if (select.value.startsWith("generated:")) loadGeneratedTheme(select.value.slice("generated:".length));
+    else loadTheme(select.value);
+  });
+  $("themeName").addEventListener("input", () => {
+    updateJsonBox(); persistCurrentGeneratedTheme(); scheduleValidation();
+  });
+  $("themeDescription").addEventListener("input", () => {
+    updateJsonBox(); persistCurrentGeneratedTheme(); scheduleValidation();
+  });
+  $("deleteTheme").addEventListener("click", deleteCurrentGeneratedTheme);
+  $("generateButton").addEventListener("click", openGenerator);
+  $("generatorClose").addEventListener("click", () => $("generatorDialog").close());
+  $("generatorCancel").addEventListener("click", () => $("generatorDialog").close());
+  $("generatorCreate").addEventListener("click", createGeneratedTheme);
+  $("generatorColor").addEventListener("input", () => {
+    $("generatorHex").value = hex($("generatorColor").value);
+    refreshGeneratorPreview(true);
+  });
+  $("generatorHex").addEventListener("input", () => {
+    const value = hex($("generatorHex").value);
+    if (!isHex(value)) return;
+    $("generatorColor").value = css(value);
+    refreshGeneratorPreview(true);
+  });
+  $("generatorHex").addEventListener("blur", () => {
+    $("generatorHex").value = hex($("generatorColor").value);
+  });
+  $("generatorHarmony").addEventListener("change", () => refreshGeneratorPreview(true));
+  for (const radio of document.querySelectorAll('input[name="generatorMode"]')) {
+    radio.addEventListener("change", () => refreshGeneratorPreview(true));
   }
-  select.addEventListener("change", () => loadTheme(select.value));
-  $("themeName").addEventListener("input", () => { updateJsonBox(); scheduleValidation(); });
-  $("themeDescription").addEventListener("input", () => { updateJsonBox(); scheduleValidation(); });
+  $("generatorName").addEventListener("input", () => { generatorNameEdited = true; });
   $("downloadButton").addEventListener("click", async () => {
     const response = await fetch("/api/export", {method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(exportDocument())});
     if (!response.ok) { const result = await response.json(); alert(result.errors.join("\n")); return; }
@@ -1080,8 +1587,17 @@ async function init() {
     } catch (error) { alert(error.message); }
   });
   $("copyJson").addEventListener("click", async () => navigator.clipboard.writeText($("jsonBox").value));
-  if (state.config.themes.length) { select.value = state.config.themes[0].file; await loadTheme(select.value); }
-  else { $("validationStatus").className = "status bad"; $("validationStatus").textContent = "No theme JSON files found."; $("downloadButton").disabled = true; }
+  if (state.config.themes.length) {
+    select.value = state.config.themes[0].file;
+    await loadTheme(select.value);
+  } else if (state.generatedThemes.length) {
+    select.value = generatedOptionValue(state.generatedThemes[0].id);
+    loadGeneratedTheme(state.generatedThemes[0].id);
+  } else {
+    $("validationStatus").className = "status bad";
+    $("validationStatus").textContent = "No theme JSON files found.";
+    $("downloadButton").disabled = true;
+  }
 }
 init();
 </script>
@@ -1124,12 +1640,13 @@ class App:
         return errors, schema_used
 
 
-def make_handler(app):
+def make_handler(app, log_requests=True):
     class Handler(BaseHTTPRequestHandler):
         server_version = "FeatherThemeEditor/1.2"
 
         def log_message(self, fmt, *args):
-            print("[http] " + fmt % args)
+            if log_requests:
+                print("[http] " + fmt % args)
 
         def send_bytes(self, data, content_type, status=HTTPStatus.OK, headers=None):
             self.send_response(status)
@@ -1215,8 +1732,12 @@ def parse_args():
         help="theme directory; defaults to cwd when cwd contains themes, otherwise ./themes")
     parser.add_argument("--theme-py", type=Path, help="path to theme.py; auto-detected when omitted")
     parser.add_argument("--schema", type=Path, help="path to theme.schema.json; auto-detected when omitted")
+    parser.add_argument("--host", default="127.0.0.1", help="HTTP bind address")
+    parser.add_argument(
+        "--url-host", help="host or IP printed in the editor URL; defaults to --host")
     parser.add_argument("--port", type=int, default=8765, help="local HTTP port, or 0 for any free port")
     parser.add_argument("--no-open", action="store_true", help="do not open the browser automatically")
+    parser.add_argument("--quiet-http", action="store_true", help="do not print HTTP request logs")
     return parser.parse_args()
 
 
@@ -1226,19 +1747,21 @@ def main():
     themes_dir = discover_themes_dir(base, args.themes_dir)
     theme_py = args.theme_py.expanduser().resolve() if args.theme_py else discover_theme_py(base)
     schema = args.schema.expanduser().resolve() if args.schema else discover_schema(base, themes_dir)
+    public_host = args.url_host or args.host
 
     app = App(themes_dir, theme_py, schema)
     themes = app.theme_list()
-    server = ThreadingHTTPServer(("127.0.0.1", args.port), make_handler(app))
-    host, port = server.server_address
-    url = "http://%s:%d/" % (host, port)
+    server = ThreadingHTTPServer(
+        (args.host, args.port), make_handler(app, not args.quiet_http))
+    _bind_host, port = server.server_address
+    url = "http://%s:%d/" % (public_host, port)
 
     print("Feather Theme Editor")
     print("  themes   : %s (%d found)" % (themes_dir, len(themes)))
     print("  theme.py : %s" % (theme_py or "not found; embedded contract"))
     print("  schema   : %s" % (schema or "not found; basic validation only"))
     print("  url      : %s" % url)
-    print("Press Ctrl+C to stop.")
+    print("Press Ctrl+C to stop.", flush=True)
 
     if not args.no_open:
         threading.Timer(0.35, lambda: webbrowser.open(url)).start()
