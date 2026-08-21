@@ -306,13 +306,13 @@ class ForgeXUpdateNotification:
              ("update.install", "UPDATE", "warning")),
             x=40, y=72, width=720, height=350, tone="info")
         commands.append(self.host.renderer.text(
-            72, 133, "CHANGES SINCE %s" %
+            72, 150, "CHANGES SINCE %s" %
             (self.installed_version or "CURRENT VERSION"),
             ThemeColor.PRIMARY, "JetBrainsMono Bold 8pt",
             max_width=570, truncate=True))
         for index, subject in enumerate(pagination.visible):
             commands.append(self.host.renderer.text(
-                78, 165 + index * 30, "- " + subject,
+                78, 184 + index * 30, "- " + subject,
                 ThemeColor.TEXT, "JetBrainsMono 8pt",
                 max_width=570, truncate=True))
         if pagination.page_count > 1:

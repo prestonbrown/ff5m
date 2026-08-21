@@ -54,6 +54,10 @@ Material presets are shared with the Forge-X filament macros. Feather remembers 
 
 The Calibration page includes guided workflows for bed screws, bed mesh, Safe Z, Z offset, extruder feed, PID, and Input Shaper. Follow the instructions on the screen and review the result before saving it.
 
+#### Update notifications
+
+When Moonraker reports that a newer Forge-X version is available, Feather can show the new version and a short, scrollable list of changes while the printer is idle. Select **UPDATE** to start the normal Forge-X OTA update, or **LATER** to hide that version until the printer or Klipper restarts. If a print starts, the notification closes immediately and may return after the printer is idle again.
+
 #### Network, settings, and themes
 
 Feather can scan for 2.4 and 5 GHz Wi-Fi networks, enter normal WPA/WPA2-PSK credentials with the on-screen keyboard, configure DHCP Ethernet, and show the live connection state, signal, and IP address. Its Wi-Fi list presents the band, SSID, and signal in separate columns. A saved network is marked in the scan list and reconnects immediately when selected; use **RESET PASSWORD** to replace its credential.
@@ -63,10 +67,6 @@ Feather starts without waiting for the saved network. While that startup connect
 Static addressing and enterprise Wi-Fi still require advanced configuration outside Feather.
 
 Feather Settings provides display brightness, chamber-light level, sound feedback, Forge-X parameters, and theme selection. Settings that require a Klipper or printer restart are identified before they are applied.
-
-#### Update notifications
-
-When Moonraker reports that a newer Forge-X version is available, Feather can show the new version and a short, scrollable list of changes while the printer is idle. Select **UPDATE** to start the normal Forge-X OTA update, or **LATER** to hide that version until the printer or Klipper restarts. If a print starts, the notification closes immediately and may return after the printer is idle again.
 
 Advanced operations such as unrestricted G-code, file deletion, static or enterprise Wi-Fi, and detailed diagnostics remain in Fluidd or Mainsail.
 
