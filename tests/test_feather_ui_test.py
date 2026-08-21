@@ -802,6 +802,131 @@ class RunnerContractTest(unittest.TestCase):
             (steps[returned + 2]["action"], steps[returned + 2]["page"]),
             ("nav.menu", FEATHER.ScreenPage.MAIN_MENU))
 
+    def test_ui_suite_capture_contract_matches_hybrid_coverage(self):
+        feature = UI_TEST.UITestRun(object())
+
+        captures = {
+            step["label"] for step in feature.scenarios.build_steps("UI")
+            if step["kind"] == "capture"
+        }
+
+        self.assertEqual(captures, HYBRID.UI_SUITE_LABELS)
+        self.assertIn("ui-update-short", captures)
+        self.assertIn("ui-update-long", captures)
+        self.assertEqual(
+            {"ui-extruder-" + phase for phase in (
+                "intro", "material", "cold-pull", "cut", "cooling",
+                "remove", "load", "mark-first", "mark-second",
+                "measure-ready", "input", "warning", "result",
+                "exit-warning", "saved")},
+            {label for label in captures if label.startswith("ui-extruder-")})
+
+    def test_every_ui_capture_has_a_visual_review_expectation(self):
+        expectations = json.loads(
+            (ROOT / "tests" / "visual_checks" / "expectations.json")
+            .read_text(encoding="utf-8"))["cases"]
+
+        missing = sorted(
+            label for label in HYBRID.UI_SUITE_LABELS
+            if "printer:" + label not in expectations)
+
+        self.assertEqual(missing, [])
+
+    def test_synthetic_ui_inputs_restore_absent_and_existing_fields(self):
+        target = type("Target", (), {"existing": "before"})()
+
+        with self.assertRaisesRegex(RuntimeError, "render failed"):
+            with SCENARIOS._temporary_attributes(target, {
+                    "existing": "during", "temporary": 42}):
+                self.assertEqual(target.existing, "during")
+                self.assertEqual(target.temporary, 42)
+                raise RuntimeError("render failed")
+
+        self.assertEqual(target.existing, "before")
+        self.assertNotIn("existing", vars(target))
+        self.assertFalse(hasattr(target, "temporary"))
+
+    def test_update_dialog_snapshots_render_without_starting_an_update(self):
+        notification = type("Notification", (), {
+            "installed_version": "installed-before",
+            "available_version": "available-before",
+            "changes": ("before",),
+            "change_page": 0,
+        })()
+        host = type("Host", (), {"update_notification": notification})()
+        feature = UI_TEST.UITestRun(host)
+        rendered = []
+        feature.scenarios._show = lambda page: rendered.append((
+            page, notification.installed_version,
+            notification.available_version, notification.changes,
+            notification.change_page))
+
+        feature.scenarios._render_update_snapshot(long=False)
+        feature.scenarios._render_update_snapshot(long=True)
+
+        self.assertEqual(
+            [item[0] for item in rendered],
+            [FEATHER.ScreenPage.UPDATE_NOTIFICATION] * 2)
+        self.assertEqual(len(rendered[0][3]), 1)
+        self.assertGreater(len(rendered[1][3]), 6)
+        self.assertEqual(rendered[1][4], 1)
+        self.assertEqual(notification.installed_version, "installed-before")
+        self.assertEqual(notification.available_version, "available-before")
+        self.assertEqual(notification.changes, ("before",))
+        self.assertEqual(notification.change_page, 0)
+
+    def test_ui_timer_pause_suppresses_and_restores_real_update_dialog(self):
+        class Notification:
+            def maybe_present(self):
+                return True
+
+        notification = Notification()
+        host = type("Host", (), {
+            "timer": None,
+            "update_notification": notification,
+        })()
+        feature = UI_TEST.UITestRun(host)
+
+        feature.scenarios._pause_ui_timer()
+        self.assertFalse(notification.maybe_present())
+
+        feature.scenarios.restore_synthetic_state()
+        self.assertTrue(notification.maybe_present())
+        self.assertNotIn("maybe_present", vars(notification))
+
+    def test_all_extruder_snapshots_use_disposable_sessions(self):
+        original_session = object()
+        extruder = type("ExtruderFeature", (), {
+            "extruder_calibration": original_session,
+        })()
+        manager = type("Manager", (), {
+            "get": lambda self, name: extruder,
+        })()
+        host = type("Host", (), {
+            "feature_manager": manager,
+            "cold_pull_materials": ("PLA",),
+            "_operation_context_status": lambda self, eventtime=None: {},
+        })()
+        feature = UI_TEST.UITestRun(host)
+        rendered = []
+        feature.scenarios._show = lambda page: rendered.append((
+            page, extruder.extruder_calibration.phase,
+            extruder.extruder_calibration.active))
+        phases = (
+            "intro", "material", "cold_pull", "cut", "cooling",
+            "remove", "load", "mark_first", "mark_second",
+            "measure_ready", "input", "warning", "result",
+            "exit_warning", "saved",
+        )
+
+        for phase in phases:
+            feature.scenarios._render_extruder_phase(phase)
+
+        self.assertEqual([item[1] for item in rendered], list(phases))
+        self.assertTrue(all(item[0] == FEATHER.ScreenPage.EXTRUDER_CALIBRATION
+                            and item[2] for item in rendered))
+        self.assertIs(extruder.extruder_calibration, original_session)
+
     def test_component_suite_discovers_declarative_pages_without_hardware(self):
         feature = UI_TEST.UITestRun(object())
 

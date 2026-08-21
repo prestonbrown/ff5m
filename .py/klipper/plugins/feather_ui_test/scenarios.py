@@ -11,6 +11,9 @@ import json
 import math
 import os
 import re
+from contextlib import contextmanager
+from decimal import Decimal
+from types import SimpleNamespace
 
 from ff5m_ui.screen import ScreenPage
 from ff5m_ui.print_state import PrintState
@@ -23,6 +26,25 @@ MOTION_STEP_INTERVAL = 0.1
 COMPONENT_CASE_ID = re.compile(r"^[a-z0-9][a-z0-9-]{0,95}$")
 MAX_COMPONENT_CASE_BYTES = 32 * 1024
 MAX_COMPONENT_CASES = 64
+_MISSING = object()
+
+
+@contextmanager
+def _temporary_attributes(target, values):
+    """Temporarily replace concrete UI inputs and always restore them."""
+    original = {}
+    namespace = vars(target)
+    for name, value in values.items():
+        original[name] = namespace.get(name, _MISSING)
+        setattr(target, name, value)
+    try:
+        yield
+    finally:
+        for name, value in original.items():
+            if value is _MISSING:
+                delattr(target, name)
+            else:
+                setattr(target, name, value)
 
 
 def _bounded_component_value(value, depth=0):
@@ -55,6 +77,7 @@ class ScenarioCatalog:
         self._mesh_snapshot = None
         self.ui_filament_target = None
         self.z_probe_local = None
+        self._update_maybe_present = None
 
     @property
     def host(self):
@@ -177,6 +200,11 @@ class ScenarioCatalog:
     def _add_capture(steps, label):
         steps.append({"kind": "capture", "label": label})
 
+    @classmethod
+    def _add_render_capture(cls, steps, label, callback):
+        cls._add_call(steps, label, callback)
+        cls._add_capture(steps, label)
+
     @staticmethod
     def _add_case_capture(steps, label, case_id):
         steps.append({
@@ -185,8 +213,8 @@ class ScenarioCatalog:
 
     def _steps_ui(self, steps):
         self._add_call(steps, "ui-pause-timer", self._pause_ui_timer)
-        self._add_call(steps, "ui-home-filled", self._render_filled_home)
-        self._add_capture(steps, "ui-home-filled")
+        self._add_render_capture(
+            steps, "ui-home-filled", self._render_filled_home)
         self._add_call(steps, "ui-home", lambda: self._show(ScreenPage.IDLE_HOME))
         self._add_capture(steps, "ui-home")
         self._add_tap(steps, "nav.filament", ScreenPage.FILAMENT_MATERIAL)
@@ -197,6 +225,13 @@ class ScenarioCatalog:
         self._add_capture(steps, "ui-main-menu")
         self._add_tap(steps, "nav.files", ScreenPage.FILE_BROWSER)
         self._add_capture(steps, "ui-files")
+        for label, callback in (
+                ("ui-files-loading", self._render_file_loading_snapshot),
+                ("ui-files-empty", self._render_empty_file_browser),
+                ("ui-files-usb", self._render_usb_file_browser)):
+            self._add_render_capture(steps, label, callback)
+        self._add_call(
+            steps, "ui-files-return", lambda: self._show(ScreenPage.FILE_BROWSER))
         self._add_call(steps, "ui-file-confirm", self._open_safe_file_confirm)
         self._add_capture(steps, "ui-file-confirm")
         self._add_call(steps, "ui-file-return", self._return_from_file_confirm)
@@ -217,11 +252,54 @@ class ScenarioCatalog:
         self._add_call(steps, "ui-calibration-pages",
                        self._render_calibration_variants)
         self._add_capture(steps, "ui-calibration-variants")
+        for kind in ("extruder", "axes"):
+            self._add_render_capture(
+                steps, "ui-calibration-guide-" + kind,
+                lambda value=kind: self._render_calibration_guide(value))
+        for kind in ("error", "cancelled", "tuning"):
+            self._add_render_capture(
+                steps, "ui-calibration-result-" + kind,
+                lambda value=kind: self._render_calibration_result(value))
+        for kind in ("normal", "warning", "save"):
+            self._add_render_capture(
+                steps, "ui-live-z-" + kind,
+                lambda value=kind: self._render_live_z(value))
+        for phase in (
+                "intro", "material", "cold_pull", "cut", "cooling",
+                "remove", "load", "mark_first", "mark_second",
+                "measure_ready", "input", "warning", "result",
+                "exit_warning", "saved"):
+            self._add_render_capture(
+                steps, "ui-extruder-" + phase.replace("_", "-"),
+                lambda value=phase: self._render_extruder_phase(value))
+        self._add_call(
+            steps, "ui-calibration-return",
+            lambda: self._show(ScreenPage.CALIBRATION_HOME))
         self._add_tap(steps, "nav.back", ScreenPage.CONTROL_HOME)
         self._add_tap(steps, "nav.settings", ScreenPage.SETTINGS)
         self._add_capture(steps, "ui-settings")
         self._add_tap(steps, "settings.mod", ScreenPage.MOD_SETTINGS)
         self._add_capture(steps, "ui-mod-parameters")
+        self._add_render_capture(
+            steps, "ui-mod-parameters-next", self._render_next_mod_page)
+        self._add_render_capture(
+            steps, "ui-parameter-options", self._render_parameter_options)
+        self._add_render_capture(
+            steps, "ui-parameter-options-disabled",
+            lambda: self._render_parameter_options(disabled_page=True))
+        self._add_render_capture(
+            steps, "ui-mod-value-numeric",
+            lambda: self._render_mod_value("numeric"))
+        self._add_render_capture(
+            steps, "ui-mod-value-text",
+            lambda: self._render_mod_value("text"))
+        self._add_render_capture(
+            steps, "ui-applying-changes", self._render_applying_changes)
+        self._add_render_capture(
+            steps, "ui-render-benchmark-populated",
+            self._render_populated_benchmark)
+        self._add_call(
+            steps, "ui-settings-return", lambda: self._show(ScreenPage.MOD_SETTINGS))
         self._add_tap(steps, "nav.back", ScreenPage.SETTINGS)
         self._add_tap(steps, "nav.back", ScreenPage.CONTROL_HOME)
         self._add_tap(steps, "nav.back", ScreenPage.MAIN_MENU)
@@ -242,8 +320,62 @@ class ScenarioCatalog:
         self._add_tap(steps, "nav.back", ScreenPage.MAIN_MENU)
         self._add_tap(steps, "nav.network", ScreenPage.NETWORK_HOME)
         self._add_capture(steps, "ui-network")
+        for kind in ("offline", "unavailable"):
+            self._add_render_capture(
+                steps, "ui-network-" + kind,
+                lambda value=kind: self._render_network_home_snapshot(value))
+        self._add_render_capture(
+            steps, "ui-wifi-scan", self._render_wifi_scan_snapshot)
+        self._add_render_capture(
+            steps, "ui-wifi-scan-empty",
+            lambda: self._render_wifi_scan_snapshot(empty=True))
+        self._add_render_capture(
+            steps, "ui-wifi-password-hidden",
+            lambda: self._render_wifi_password_snapshot(visible=False))
+        self._add_render_capture(
+            steps, "ui-wifi-password-valid",
+            lambda: self._render_wifi_password_snapshot(visible=True))
+        for kind in ("scan", "connect", "external", "cancel"):
+            self._add_render_capture(
+                steps, "ui-network-progress-" + kind,
+                lambda value=kind: self._render_network_progress_snapshot(value))
+        self._add_render_capture(
+            steps, "ui-message-two-actions", self._render_two_action_message)
+        self._add_call(
+            steps, "ui-network-return",
+            lambda: self._show(ScreenPage.NETWORK_HOME))
         self._add_tap(steps, "nav.back", ScreenPage.MAIN_MENU)
         self._add_tap(steps, "nav.back", ScreenPage.IDLE_HOME)
+        self._add_render_capture(
+            steps, "ui-print-preparing", self._render_preparing_print)
+        for kind in ("normal", "pending", "not-cancelable"):
+            self._add_render_capture(
+                steps, "ui-cancel-" + kind,
+                lambda value=kind: self._render_cancel_snapshot(value))
+        self._add_render_capture(
+            steps, "ui-recovery-cleanup", self._render_recovery_cleanup)
+        for kind in ("restart", "firmware-restart", "reconnecting"):
+            self._add_render_capture(
+                steps, "ui-error-" + kind,
+                lambda value=kind: self._render_error_snapshot(value))
+        self._add_render_capture(
+            steps, "ui-update-short",
+            lambda: self._render_update_snapshot(long=False))
+        self._add_render_capture(
+            steps, "ui-update-long",
+            lambda: self._render_update_snapshot(long=True))
+        for kind in ("startup", "restart", "shutdown"):
+            self._add_render_capture(
+                steps, "ui-lifecycle-" + kind,
+                lambda value=kind: self._render_lifecycle_snapshot(value))
+        self._add_render_capture(
+            steps, "ui-touch-unavailable", self._render_touch_unavailable)
+        self._add_call(
+            steps, "ui-overlay-base", lambda: self._show(ScreenPage.IDLE_HOME))
+        self._add_render_capture(
+            steps, "ui-busy-notice", self._render_busy_notice)
+        self._add_call(steps, "ui-busy-clear", self._clear_busy_notice)
+        self._add_render_capture(steps, "ui-toast", self._render_toast)
         self._add_call(steps, "ui-resume-timer", self._resume_ui_timer)
 
     @staticmethod
@@ -434,6 +566,394 @@ class ScenarioCatalog:
         finally:
             for name, value in original.items():
                 setattr(host, name, value)
+
+    def _render_file_loading_snapshot(self):
+        with _temporary_attributes(self.host, {
+                "file_scan_loading": False,
+                "file_scan_source": None,
+                "file_scan_phase": 0,
+        }):
+            self.host._render_file_loading("internal")
+
+    def _render_empty_file_browser(self):
+        with _temporary_attributes(self.host, {
+                "file_entries": [], "file_page": 0,
+                "file_source": "internal",
+        }):
+            self.host._render_file_entries()
+
+    def _render_usb_file_browser(self):
+        entries = [
+            {"name": "USB_BENCHY.gcode", "directory": False},
+            {"name": "CALIBRATION", "directory": True},
+        ]
+        with _temporary_attributes(self.host, {
+                "file_entries": entries, "file_page": 0,
+                "file_source": "usb",
+        }):
+            self.host._render_file_entries()
+
+    def _render_calibration_guide(self, kind):
+        feature = self.host.feature_manager.get("calibration")
+        with _temporary_attributes(feature, {"calibration_guide_kind": kind}):
+            self._show(ScreenPage.CALIBRATION_GUIDE)
+
+    def _render_calibration_result(self, kind):
+        feature = self.host.feature_manager.get("calibration")
+        values = {
+            "calibration_kind": "pid_bed" if kind == "tuning" else "mesh",
+            "calibration_error": (
+                "Probe samples exceeded the configured tolerance"
+                if kind == "error" else None),
+            "calibration_cancelled": kind == "cancelled",
+            "calibration_mesh": [],
+            "calibration_results": [],
+        }
+        with _temporary_attributes(feature, values):
+            self._show(ScreenPage.CALIBRATION_RESULT)
+
+    def _render_live_z(self, kind):
+        feature = self.host.feature_manager.get("z")
+        saved = float(feature._setting("z_offset", 0.0))
+        delta = (feature.z_adjust_warning_threshold + 0.1
+                 if kind == "warning" else 0.02)
+
+        class Status:
+            def __init__(self, values):
+                self.values = values
+
+            def get_status(self, _eventtime):
+                return dict(self.values)
+
+        with _temporary_attributes(self.host, {
+                "gcode_move": Status({"homing_origin": (0.0, 0.0, saved + delta)}),
+                "print_stats": Status({"state": "printing"}),
+                "toolhead": Status({"homed_axes": "xyz"}),
+                "print_state": PrintState.PRINTING,
+                "weight_sensor": None,
+        }), _temporary_attributes(feature, {
+                "live_z_step": 0.01,
+                "live_z_dialog": "save" if kind == "save" else (
+                    "limit" if kind == "warning" else None),
+                "z_weight_gauge": None,
+        }):
+            self._show(ScreenPage.LIVE_Z_OFFSET)
+
+    def _render_extruder_phase(self, phase):
+        from feather_extruder_calibration import (
+            ExtruderCalibrationSession, UserConfigSnapshot)
+
+        feature = self.host.feature_manager.get("extruder")
+        session = ExtruderCalibrationSession("/tmp/feather-ui-test-user.cfg")
+        session.begin(7.550)
+        session.phase = phase
+        session.temperature = 42.4
+        session.cooling_message = "COOLING SAFELY"
+        session.input_text = "98.750"
+        session.cold_pull_material = (
+            self.host.cold_pull_materials[0]
+            if self.host.cold_pull_materials else "PLA")
+        if phase == "warning":
+            session.set_measurement("130.000")
+        elif phase == "result":
+            session.set_measurement("96.250")
+            session.file_snapshot = UserConfigSnapshot(
+                session.user_cfg_path, b"", None, [], None, None,
+                Decimal("7.550"))
+        elif phase == "saved":
+            session.current_rotation = 7.267
+
+        operation = {
+            "contexts": (), "context_path": ("Cold pull",),
+            "context_types": ("cold_pull",),
+            "current_state": "HEATING NOZZLE", "cancel_available": True,
+            "cancel_pending": False, "cancel_request_id": "ui-test",
+            "cancel_target_type": "cold_pull",
+            "cancel_target_name": "Cold pull",
+            "cancel_target_mode": "cooperative",
+            "cancel_blocker_type": None, "cancel_blocker_name": None,
+            "revision": 1,
+        }
+        with _temporary_attributes(feature, {
+                "extruder_calibration": session,
+        }), _temporary_attributes(self.host, {
+                "_operation_context_status": lambda eventtime=None: operation,
+        }):
+            self._show(ScreenPage.EXTRUDER_CALIBRATION)
+
+    def _render_next_mod_page(self):
+        feature = self.host.feature_manager.get("settings")
+        with _temporary_attributes(feature, {"mod_page": 1}):
+            self._show(ScreenPage.MOD_SETTINGS)
+
+    def _mod_parameter(self, kind, key=None):
+        import feather_mod_settings as mod_ui
+
+        feature = self.host.feature_manager.get("settings")
+        for parameter in feature._mod_parameters():
+            if key is not None and parameter.key == key:
+                return parameter
+            if (key is None and mod_ui.parameter_kind(parameter) == kind
+                    and not (kind == "str"
+                             and parameter.key == "feather_theme")):
+                return parameter
+        raise RuntimeError("No visible %s mod parameter" % (key or kind))
+
+    def _render_parameter_options(self, disabled_page=False):
+        feature = self.host.feature_manager.get("settings")
+        parameter = self._mod_parameter("str", key="feather_theme")
+        entries = tuple(SimpleNamespace(
+            value=name, label=name, description=description, enabled=True)
+            for name, description in (
+                ("DEFAULT", "BUILT-IN PALETTE"),
+                ("AMBER", "HIGH CONTRAST"),
+                ("BLUE", "COOL PALETTE"),
+                ("GREEN", "SOFT PALETTE"),
+                ("MONO", "MONOCHROME"),
+                ("VIOLET", "CUSTOM PALETTE"),
+            )) + (SimpleNamespace(
+                value=None, label="BROKEN_THEME.JSON",
+                description="INVALID COLOR VALUE", enabled=False),)
+        with _temporary_attributes(feature, {
+                "mod_parameter": parameter,
+                "selected_parameter_option": "DEFAULT",
+                "_parameter_options_snapshot": entries,
+                "parameter_options_page_index": 1 if disabled_page else 0,
+        }):
+            self._show(ScreenPage.PARAMETER_OPTIONS)
+
+    def _render_mod_value(self, kind):
+        feature = self.host.feature_manager.get("settings")
+        parameter_kind = "int" if kind == "numeric" else "str"
+        parameter = self._mod_parameter(parameter_kind)
+        value = "75" if kind == "numeric" else "STARTUP-TONE.MID"
+        with _temporary_attributes(feature, {
+                "mod_parameter": parameter,
+                "mod_edit_value": value,
+                "mod_edit_cursor": len(value),
+                "mod_keyboard_shift": False,
+                "mod_keyboard_symbols": False,
+        }):
+            self._show(ScreenPage.MOD_VALUE)
+
+    def _render_applying_changes(self):
+        self.host.renderer.applying_modal()
+
+    def _render_populated_benchmark(self):
+        from ff5m_ui.benchmark.page import PAGE
+        from ff5m_ui.benchmark.state import BenchmarkState
+
+        values = {
+            BenchmarkState.ANGLE_X: 0.7,
+            BenchmarkState.ANGLE_Y: 1.1,
+            BenchmarkState.ANGLE_Z: 0.3,
+            BenchmarkState.MODE: "text",
+            BenchmarkState.COMMIT_FPS: 59.8,
+            BenchmarkState.FRAME_MEDIAN_MS: 15.9,
+            BenchmarkState.FRAME_P95_MS: 17.4,
+            BenchmarkState.TYPER_MS: 6.2,
+            BenchmarkState.CPU_MS: 2.1,
+            BenchmarkState.FLUSH_MS: 3.4,
+            BenchmarkState.PYTHON_MS: 1.8,
+            BenchmarkState.MISSED_PERCENT: 0.3,
+            BenchmarkState.RASTER: "NEON",
+            BenchmarkState.STATUS: "LIVE / 60.0 FPS",
+        }
+        self._render_component_case({"page": PAGE, "state": values})
+
+    def _render_network_home_snapshot(self, kind):
+        connected = kind != "unavailable"
+        status = {
+            "mode": "OFFLINE", "state": "DISCONNECTED",
+            "ssid": "", "signal": "", "ip": "",
+        }
+        with _temporary_attributes(self.host, {
+                "network_client": SimpleNamespace(connected=connected),
+                "network_status": status,
+                "network_operation": None,
+                "network_cancel_pending": False,
+        }):
+            self._show(ScreenPage.NETWORK_HOME)
+
+    def _render_wifi_scan_snapshot(self, empty=False):
+        networks = [] if empty else [
+            {"ssid": "FORGE-X LAB", "signal": -38,
+             "frequency": 5180, "saved": True},
+            {"ssid": "WORKSHOP 2.4G", "signal": -61,
+             "frequency": 2412, "saved": False},
+            {"ssid": "A VERY LONG ACCESS POINT NAME", "signal": -78,
+             "frequency": 2462, "saved": False},
+        ]
+        with _temporary_attributes(self.host, {
+                "networks": networks, "network_page": 0,
+        }):
+            self._show(ScreenPage.WIFI_SCAN)
+
+    def _render_wifi_password_snapshot(self, visible):
+        password = "valid-password" if visible else "secret12"
+        with _temporary_attributes(self.host, {
+                "selected_network": {"ssid": "FORGE-X LAB", "saved": False},
+                "password": password, "password_cursor": len(password),
+                "password_visible": visible, "keyboard_shift": False,
+                "keyboard_symbols": False,
+        }):
+            self._show(ScreenPage.WIFI_PASSWORD)
+
+    def _render_network_progress_snapshot(self, kind):
+        operation = {
+            "scan": "scan", "connect": "wifi",
+            "external": None, "cancel": None,
+        }[kind]
+        status = {
+            "state": "CONNECTING",
+            "progress": "HANDSHAKE" if kind == "connect" else "STARTUP",
+            "attempt": "2/3" if kind == "connect" else "",
+        }
+        with _temporary_attributes(self.host, {
+                "network_operation": operation,
+                "network_cancel_pending": kind == "cancel",
+                "network_status": status,
+        }):
+            self._show(ScreenPage.NETWORK_PROGRESS)
+
+    def _render_two_action_message(self):
+        with _temporary_attributes(self.host, {
+                "message": "The saved Wi-Fi password was rejected.",
+                "message_return": ScreenPage.WIFI_SCAN,
+                "message_actions": (
+                    ("message.ok", "CANCEL", "enabled"),
+                    ("net.reset.saved", "RESET PASSWORD", "warning"),
+                ),
+        }):
+            self._show(ScreenPage.MESSAGE)
+
+    def _render_preparing_print(self):
+        class Status:
+            def __init__(self, values):
+                self.values = values
+
+            def get_status(self, _eventtime):
+                return dict(self.values)
+
+        class VirtualSD:
+            def file_path(self):
+                return "/data/PREPARING_FIRST_LAYER_TEST.gcode"
+
+            def get_status(self, _eventtime):
+                return {"progress": 0.0, "estimate_print_time": 900.0}
+
+            def is_active(self):
+                return True
+
+        operation = {
+            "contexts": (), "context_path": ("Print",),
+            "context_types": ("print",),
+            "current_state": "CALIBRATING BED MESH",
+            "cancel_available": True, "cancel_pending": False,
+            "cancel_request_id": None, "cancel_target_type": "print",
+            "cancel_target_name": "Print", "cancel_target_mode": "cooperative",
+            "cancel_blocker_type": None, "cancel_blocker_name": None,
+            "revision": 1,
+        }
+        with _temporary_attributes(self.host, {
+                "print_state": PrintState.PREPARING,
+                "print_stats": Status({
+                    "state": "printing", "print_duration": 12.0,
+                    "info": {"current_layer": 0, "total_layer": 120},
+                }),
+                "virtual_sdcard": VirtualSD(),
+                "toolhead": Status({
+                    "homed_axes": "xyz", "position": (110.0, 110.0, 0.3, 0.0),
+                }),
+                "motion_report": None,
+                "_operation_context_status": lambda eventtime=None: operation,
+        }):
+            self._show(ScreenPage.PRINTING)
+
+    def _render_cancel_snapshot(self, kind):
+        mode = "not_cancelable" if kind == "not-cancelable" else kind
+        operation = {
+            "contexts": (), "context_path": ("Bed mesh",),
+            "context_types": ("calibration",),
+            "current_state": "PROBING POINT 12 OF 25",
+            "cancel_available": True, "cancel_pending": kind == "pending",
+            "cancel_request_id": "ui-test", "cancel_target_type": "calibration",
+            "cancel_target_name": "Bed mesh", "cancel_target_mode": "cooperative",
+            "cancel_blocker_type": None, "cancel_blocker_name": None,
+            "revision": 1,
+        }
+        with _temporary_attributes(self.host, {
+                "cancel_mode": mode,
+                "operation_cancel_target_name": "Bed mesh",
+                "operation_cancel_target_mode": "cooperative",
+                "cancel_waiting_for_heat": False,
+                "busy_phase": 2,
+                "_operation_context_status": lambda eventtime=None: operation,
+        }):
+            self._show(ScreenPage.CANCEL_CONFIRM)
+
+    def _render_recovery_cleanup(self):
+        with _temporary_attributes(self.host, {"recovery_action": "cleanup"}):
+            self._show(ScreenPage.RECOVERY_CONFIRM)
+
+    def _render_error_snapshot(self, kind):
+        recovery = {
+            "restart": "restart",
+            "firmware-restart": "firmware_restart",
+            "reconnecting": None,
+        }[kind]
+        message = {
+            "restart": "Klipper configuration could not be loaded.",
+            "firmware-restart": "MCU shutdown: timer too close.",
+            "reconnecting": "Klipper disconnected; reconnecting to host.",
+        }[kind]
+        with _temporary_attributes(self.host, {
+                "error_message": message,
+                "error_category": "",
+                "error_recovery": recovery,
+        }):
+            self._show(ScreenPage.ERROR)
+
+    def _render_update_snapshot(self, long):
+        notification = getattr(self.host, "update_notification", None)
+        if notification is None:
+            raise RuntimeError("Update notification feature is unavailable")
+        changes = (("Fix Wi-Fi password screen subtitle",)
+                   if not long else tuple(
+                       "CHANGE %02d: EXERCISE PAGINATED RELEASE NOTES" % index
+                       for index in range(1, 15)))
+        with _temporary_attributes(notification, {
+                "installed_version": "1.4.1-243",
+                "available_version": "1.4.1-244",
+                "changes": changes,
+                "change_page": 1 if long else 0,
+        }):
+            self._show(ScreenPage.UPDATE_NOTIFICATION)
+
+    def _render_lifecycle_snapshot(self, kind):
+        title, detail, critical = {
+            "startup": (
+                "INITIALIZING KLIPPER", "INITIALIZING PRINTER SERVICES", False),
+            "restart": (
+                "INITIALIZING KLIPPER",
+                "RESTART IN PROGRESS - DISPLAY MAY PAUSE", True),
+            "shutdown": ("FORGE-X", "SHUTTING DOWN", True),
+        }[kind]
+        self.host.renderer.startup_modal(
+            title, detail, phase=2, critical=critical)
+
+    def _render_touch_unavailable(self):
+        self.host.renderer.touch_unavailable_modal()
+
+    def _render_busy_notice(self):
+        self.host.renderer.busy_notice("KLIPPER BUSY")
+
+    def _clear_busy_notice(self):
+        self.host.renderer.clear_busy_notice()
+        self._show(ScreenPage.IDLE_HOME)
+
+    def _render_toast(self):
+        self.host.renderer.toast("SETTINGS UPDATED")
 
     def _steps_motion(self, steps):
         self._add_call(steps, "motion-open", lambda: self._show(ScreenPage.CONTROL_MOVE))
@@ -890,6 +1410,14 @@ class ScenarioCatalog:
             self.host._show_page(ScreenPage.FILE_BROWSER)
 
     def _pause_ui_timer(self):
+        notification = getattr(self.host, "update_notification", None)
+        if (notification is not None
+                and self._update_maybe_present is None):
+            namespace = vars(notification)
+            self._update_maybe_present = (
+                "maybe_present" in namespace,
+                namespace.get("maybe_present"))
+            notification.maybe_present = lambda: False
         timer = getattr(self.host, "timer", None)
         if timer is None:
             return
@@ -897,11 +1425,23 @@ class ScenarioCatalog:
         self.host.timer = None
 
     def _resume_ui_timer(self):
+        self.restore_synthetic_state()
         if (self.snapshot is None or not self.snapshot.timer_active
                 or getattr(self.host, "timer", None) is not None):
             return
         self.host.timer = self.reactor.register_timer(
             self.host._update, self.reactor.NOW)
+
+    def restore_synthetic_state(self):
+        notification = getattr(self.host, "update_notification", None)
+        saved = self._update_maybe_present
+        if notification is not None and saved is not None:
+            had_override, callback = saved
+            if had_override:
+                notification.maybe_present = callback
+            else:
+                delattr(notification, "maybe_present")
+        self._update_maybe_present = None
 
     def _render_safe_filament_action(self):
         self._render_safe_filament_snapshot(130.4, 250.0)

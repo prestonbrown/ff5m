@@ -59,9 +59,24 @@ VALID_SUITES = frozenset((
 NONPHYSICAL_SUITES = frozenset(("UI", "COMPONENT", "RENDER"))
 EXTENDED_CONTEXT_SUITES = frozenset(("CONTEXT_PRINT", "CONTEXT_MATERIAL"))
 UI_FINGERPRINT_FILES = (
+    "feather_extruder_calibration.py",
+    "feather_feature_benchmark.py",
+    "feather_feature_calibration.py",
+    "feather_feature_extruder.py",
+    "feather_feature_filament.py",
+    "feather_feature_manager.py",
+    "feather_feature_settings.py",
+    "feather_feature_z.py",
     "feather_screen.py",
+    "feather_screen_controls.py",
+    "feather_screen_pages.py",
+    "feather_network_ui.py",
+    "feather_update_notification.py",
     "feather_feature_ui_test.py",
+    "feather_keyboard.py",
+    "feather_mod_settings.py",
     "feather_operation_context_fixtures.py",
+    "feather_pagination.py",
 )
 UI_FINGERPRINT_PACKAGES = ("ui", "ff5m_ui", "feather_ui_test")
 
@@ -1023,6 +1038,7 @@ class UITestRun:
 
     def _restore_state(self):
         first_error = None
+        self.scenarios.restore_synthetic_state()
         try:
             self._restore_context_runtime()
         except Exception as exc:

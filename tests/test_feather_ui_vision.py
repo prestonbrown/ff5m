@@ -1932,8 +1932,12 @@ class RegressionOrchestratorTest(unittest.TestCase):
 
             self.assertEqual(report["status"], "disabled")
             self.assertEqual(report["coverage"]["designer"], 2)
-            self.assertEqual(report["coverage"]["printer_captured"], 20)
-            self.assertEqual(report["coverage"]["legacy_printer"], 17)
+            printer_frames = len(HYBRID.UI_SUITE_LABELS) + 2
+            self.assertEqual(
+                report["coverage"]["printer_captured"], printer_frames)
+            self.assertEqual(
+                report["coverage"]["legacy_printer"],
+                len(HYBRID.UI_SUITE_LABELS) - 1)
             self.assertEqual(report["coverage"]["replaced"], 1)
             self.assertEqual(report["coverage"]["parity_pairs"], 2)
             self.assertEqual(
@@ -1944,7 +1948,8 @@ class RegressionOrchestratorTest(unittest.TestCase):
                 [item["id"] for item in report["pipeline"]],
                 ["designer", "printer", "merge", "llm"])
             self.assertEqual(
-                report["pipeline"][1]["counts"]["captured_frames"], 20)
+                report["pipeline"][1]["counts"]["captured_frames"],
+                printer_frames)
             self.assertIn("Screenshot overview", page)
             self.assertIn("Designer ↔ real printer", page)
             self.assertIn(
