@@ -113,6 +113,8 @@ UI_SUITE_LABELS = frozenset((
     "ui-error-reconnecting",
     "ui-update-short",
     "ui-update-long",
+    "ui-update-progress",
+    "ui-update-restart",
     "ui-lifecycle-startup",
     "ui-lifecycle-restart",
     "ui-lifecycle-shutdown",

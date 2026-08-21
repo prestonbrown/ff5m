@@ -20,6 +20,7 @@ CHANGE_PAGE_SIZE = 6
 MAX_CHANGE_ITEMS = 24
 MAX_VERSION_LENGTH = 64
 MAX_CHANGE_LENGTH = 160
+MAX_PROGRESS_LENGTH = 160
 
 _ACTIVE_PRINT_STATES = frozenset((
     PrintState.PREPARING, PrintState.PRINTING, PrintState.PAUSED,
@@ -45,10 +46,15 @@ class ForgeXUpdateNotification:
         self.dismissed_version = None
         self.changes = ()
         self.change_page = 0
+        self.installing = False
+        self.install_confirmed = False
+        self.install_token = 0
 
         if self.webhooks is not None:
             self.webhooks.register_endpoint(
                 "feather/update_status", self.handle_status_response)
+            self.webhooks.register_endpoint(
+                "feather/update_progress", self.handle_update_progress)
 
     def start(self):
         if self.started and self.active:
@@ -59,6 +65,7 @@ class ForgeXUpdateNotification:
         self._schedule_check(STARTUP_DELAY)
 
     def stop(self):
+        self._clear_install_progress()
         self.active = False
         self.check_in_flight = False
         self.check_pending = False
@@ -267,7 +274,8 @@ class ForgeXUpdateNotification:
                 and not getattr(self.host, "busy_message", None))
 
     def maybe_present(self):
-        if (self.dialog_visible or self.available_version is None
+        if (self.installing or self.dialog_visible
+                or self.available_version is None
                 or self.available_version == self.dismissed_version
                 or not self._can_present()):
             return False
@@ -282,6 +290,8 @@ class ForgeXUpdateNotification:
 
     def on_print_state_changed(self, _old_state, new_state, _stats_state):
         if new_state in _ACTIVE_PRINT_STATES:
+            if self.installing:
+                return
             if self.dialog_visible:
                 logging.info(
                     "[feather_screen] update notification interrupted by print")
@@ -294,6 +304,12 @@ class ForgeXUpdateNotification:
                 self.maybe_present()
 
     def render(self):
+        if self.installing:
+            self.host.renderer.loader(
+                getattr(self.host, "busy_message", None)
+                or "UPDATING FORGE-X...",
+                getattr(self.host, "busy_phase", 0))
+            return
         pagination = Pagination(
             self.changes or ("CHANGELOG UNAVAILABLE",),
             self.change_page, CHANGE_PAGE_SIZE)
@@ -328,6 +344,68 @@ class ForgeXUpdateNotification:
                 ThemeColor.DIM, "JetBrainsMono 8pt", "center", "middle"))
         self.host.renderer.send(commands)
 
+    @staticmethod
+    def _bounded_progress(value):
+        if not isinstance(value, str):
+            return ""
+        return " ".join(value.split())[:MAX_PROGRESS_LENGTH]
+
+    def _show_install_progress(self, message, detail=None):
+        message = self._bounded_progress(message) or "UPDATING FORGE-X..."
+        if detail:
+            detail = self._bounded_progress(detail)
+            if detail:
+                message += "\n" + detail
+        self.installing = True
+        self.host.busy_message = message
+        self.host.busy_phase = 0
+        if self.dialog_visible:
+            self.render()
+
+    def _clear_install_progress(self):
+        if not self.installing:
+            return
+        self.installing = False
+        self.install_confirmed = False
+        self.host.busy_message = None
+
+    def handle_update_progress(self, web_request):
+        try:
+            return self._handle_update_progress(web_request)
+        except Exception:
+            logging.exception(
+                "[feather_screen] update progress failed: malformed response")
+            return "ok"
+
+    def _handle_update_progress(self, web_request):
+        token = web_request.get_int("token")
+        if not self.installing or token != self.install_token:
+            return "ok"
+        state = web_request.get_str("state", "")
+        message = self._bounded_progress(
+            web_request.get_str("message", ""))
+        if state in ("accepted", "progress"):
+            self.install_confirmed = True
+            self._show_install_progress(message)
+            return "ok"
+        if state in ("complete", "restarting"):
+            self.install_confirmed = True
+            self._show_install_progress(
+                "PRINTER WILL RESTART NOW",
+                "IF IT DOES NOT RESTART AUTOMATICALLY, RESTART IT MANUALLY")
+            return "ok"
+        if state != "failed":
+            return "ok"
+
+        self._clear_install_progress()
+        logging.info("[feather_screen] update failed: %s", message)
+        self.host._show_message(
+            "Unable to update Forge-X: %s" %
+            (message or "unknown error"),
+            ScreenPage.UPDATE_NOTIFICATION)
+        self._schedule_check(FAILURE_RETRY_INTERVAL)
+        return "ok"
+
     def handle_action(self, action):
         if action in ("update.prev", "update.next"):
             pagination = Pagination(
@@ -357,10 +435,16 @@ class ForgeXUpdateNotification:
             return
 
         version = self.available_version
+        self.install_token += 1
+        token = self.install_token
+        self.install_confirmed = False
+        self._show_install_progress("PREPARING FORGE-X UPDATE...")
         try:
             self.webhooks.call_remote_method(
-                "feather_start_forge_x_update", expected_version=version)
+                "feather_start_forge_x_update", expected_version=version,
+                token=token)
         except Exception as exc:
+            self._clear_install_progress()
             logging.exception(
                 "[feather_screen] update request failed: dispatch")
             self.host._show_message(
@@ -369,8 +453,17 @@ class ForgeXUpdateNotification:
             self._schedule_check(FAILURE_RETRY_INTERVAL)
             return
         logging.info("[feather_screen] update requested: %s", version)
-        self.available_version = None
-        self.changes = ()
-        self._schedule_check(RECHECK_INTERVAL)
-        self.host._show_message(
-            "Starting Forge-X update", ScreenPage.IDLE_HOME)
+
+        def start_timeout(_eventtime):
+            if (not self.installing or self.install_token != token
+                    or self.install_confirmed):
+                return
+            self._clear_install_progress()
+            logging.info("[feather_screen] update request failed: timeout")
+            self.host._show_message(
+                "Unable to start Forge-X update: Moonraker did not respond",
+                ScreenPage.UPDATE_NOTIFICATION)
+            self._schedule_check(FAILURE_RETRY_INTERVAL)
+
+        self.reactor.register_callback(
+            start_timeout, self.reactor.monotonic() + CHECK_TIMEOUT)

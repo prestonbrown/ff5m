@@ -364,6 +364,10 @@ class ScenarioCatalog:
         self._add_render_capture(
             steps, "ui-update-long",
             lambda: self._render_update_snapshot(long=True))
+        self._add_render_capture(
+            steps, "ui-update-progress", self._render_update_progress_snapshot)
+        self._add_render_capture(
+            steps, "ui-update-restart", self._render_update_restart_snapshot)
         for kind in ("startup", "restart", "shutdown"):
             self._add_render_capture(
                 steps, "ui-lifecycle-" + kind,
@@ -927,6 +931,32 @@ class ScenarioCatalog:
                 "available_version": "1.4.1-244",
                 "changes": changes,
                 "change_page": 1 if long else 0,
+        }):
+            self._show(ScreenPage.UPDATE_NOTIFICATION)
+
+    def _render_update_progress_snapshot(self):
+        notification = getattr(self.host, "update_notification", None)
+        if notification is None:
+            raise RuntimeError("Update notification feature is unavailable")
+        with _temporary_attributes(notification, {
+                "installing": True,
+        }), _temporary_attributes(self.host, {
+                "busy_message": "RECEIVING UPDATE: 42%",
+                "busy_phase": 2,
+        }):
+            self._show(ScreenPage.UPDATE_NOTIFICATION)
+
+    def _render_update_restart_snapshot(self):
+        notification = getattr(self.host, "update_notification", None)
+        if notification is None:
+            raise RuntimeError("Update notification feature is unavailable")
+        with _temporary_attributes(notification, {
+                "installing": True,
+        }), _temporary_attributes(self.host, {
+                "busy_message": (
+                    "PRINTER WILL RESTART NOW\n"
+                    "IF IT DOES NOT RESTART AUTOMATICALLY, RESTART IT MANUALLY"),
+                "busy_phase": 2,
         }):
             self._show(ScreenPage.UPDATE_NOTIFICATION)
 

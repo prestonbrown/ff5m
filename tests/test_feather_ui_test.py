@@ -813,6 +813,8 @@ class RunnerContractTest(unittest.TestCase):
         self.assertEqual(captures, HYBRID.UI_SUITE_LABELS)
         self.assertIn("ui-update-short", captures)
         self.assertIn("ui-update-long", captures)
+        self.assertIn("ui-update-progress", captures)
+        self.assertIn("ui-update-restart", captures)
         self.assertEqual(
             {"ui-extruder-" + phase for phase in (
                 "intro", "material", "cold-pull", "cut", "cooling",

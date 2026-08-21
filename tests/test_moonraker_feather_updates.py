@@ -68,7 +68,9 @@ class InternalTransport:
         self.calls = []
         self.status_error = None
         self.update_error = None
+        self.update_result = "ok"
         self.after_status = None
+        self.update_event = None
 
     async def call_method(self, method, **kwargs):
         self.calls.append((method, kwargs))
@@ -81,7 +83,11 @@ class InternalTransport:
         if method == "machine.update.client":
             if self.update_error is not None:
                 raise self.update_error
-            return "ok"
+            if self.update_event is not None:
+                result = self.update_event()
+                if result is not None:
+                    await result
+            return self.update_result
         raise AssertionError("unexpected internal method: " + method)
 
 
@@ -114,12 +120,19 @@ class Server:
         self.klippy_connection = KlippyConnection()
         self.job_state = JobState()
         self.remote_methods = {}
+        self.event_handlers = {}
 
     def lookup_component(self, name):
         return getattr(self, name)
 
     def register_remote_method(self, name, callback):
         self.remote_methods[name] = callback
+
+    def register_event_handler(self, name, callback):
+        self.event_handlers[name] = callback
+
+    def send_event(self, name, value):
+        return self.event_handlers[name](value)
 
 
 class Config:
@@ -196,11 +209,13 @@ class FeatherUpdatesComponentTest(unittest.TestCase):
         self.server = Server()
         self.component = FEATHER.FeatherUpdates(Config(self.server))
 
-    def test_registers_the_two_klipper_remote_methods(self):
+    def test_registers_remote_methods_and_update_progress_handler(self):
         self.assertEqual(set(self.server.remote_methods), {
             "feather_request_forge_x_update_status",
             "feather_start_forge_x_update",
         })
+        self.assertIn(
+            "update_manager:update_response", self.server.event_handlers)
 
     def test_status_uses_cached_internal_api_and_replies_to_klipper(self):
         asyncio.run(self.component._handle_status_request(17))
@@ -224,12 +239,62 @@ class FeatherUpdatesComponentTest(unittest.TestCase):
         self.assertEqual(response["error"], "status unavailable")
 
     def test_update_delegates_to_canonical_internal_api(self):
-        asyncio.run(self.component._handle_update_request("1.4.3"))
+        asyncio.run(self.component._handle_update_request("1.4.3", 31))
 
         self.assertEqual(self.server.internal_transport.calls, [
             ("machine.update.status", {"refresh": False}),
             ("machine.update.client", {"name": "forge-x"}),
         ])
+        states = [
+            request.get_args()["state"]
+            for request in self.server.klippy_connection.requests]
+        self.assertEqual(states, ["accepted", "complete"])
+
+    def test_update_forwards_only_its_own_progress(self):
+        def send_progress():
+            unrelated = self.server.send_event(
+                "update_manager:update_response", {
+                    "application": "mainsail", "message": "Ignore me"})
+            self.assertIsNone(unrelated)
+            return self.server.send_event("update_manager:update_response", {
+                "application": "forge-x",
+                "message": "Receiving objects: 42%",
+            })
+
+        self.server.internal_transport.update_event = send_progress
+
+        asyncio.run(self.component._handle_update_request("1.4.3", 32))
+
+        progress = [
+            request.get_args()
+            for request in self.server.klippy_connection.requests
+            if request.get_args()["state"] == "progress"]
+        self.assertEqual(progress, [{
+            "token": 32,
+            "state": "progress",
+            "message": "Receiving objects: 42%",
+        }])
+
+    def test_managed_service_restart_is_forwarded_as_terminal_stage(self):
+        def send_restart():
+            return self.server.send_event("update_manager:update_response", {
+                "application": "forge-x",
+                "message": "Git Repo forge-x: Restarting service forge-x...",
+            })
+
+        self.server.internal_transport.update_event = send_restart
+
+        asyncio.run(self.component._handle_update_request("1.4.3", 39))
+
+        restarting = [
+            request.get_args()
+            for request in self.server.klippy_connection.requests
+            if request.get_args()["state"] == "restarting"]
+        self.assertEqual(restarting, [{
+            "token": 39,
+            "state": "restarting",
+            "message": "RESTARTING PRINTER...",
+        }])
 
     def test_configured_key_selects_status_and_canonical_update_target(self):
         server = Server()
@@ -238,7 +303,7 @@ class FeatherUpdatesComponentTest(unittest.TestCase):
         component = FEATHER.FeatherUpdates(Config(
             server, update_key="feather-release"))
 
-        asyncio.run(component._handle_update_request("1.4.3"))
+        asyncio.run(component._handle_update_request("1.4.3", 33))
 
         self.assertEqual(server.internal_transport.calls, [
             ("machine.update.status", {"refresh": False}),
@@ -252,21 +317,27 @@ class FeatherUpdatesComponentTest(unittest.TestCase):
     def test_update_is_rejected_while_paused(self):
         self.server.job_state.state = "paused"
 
-        asyncio.run(self.component._handle_update_request("1.4.3"))
+        asyncio.run(self.component._handle_update_request("1.4.3", 34))
 
         self.assertEqual(self.server.internal_transport.calls, [])
+        response = self.server.klippy_connection.requests[-1].get_args()
+        self.assertEqual(response["state"], "failed")
+        self.assertIn("idle", response["message"])
 
     def test_update_is_rejected_if_available_version_changed(self):
-        asyncio.run(self.component._handle_update_request("1.4.4"))
+        asyncio.run(self.component._handle_update_request("1.4.4", 35))
 
         self.assertEqual(self.server.internal_transport.calls, [
             ("machine.update.status", {"refresh": False})])
+        self.assertEqual(
+            self.server.klippy_connection.requests[-1].get_args()["state"],
+            "failed")
 
     def test_update_rechecks_idle_after_reading_status(self):
         self.server.internal_transport.after_status = lambda: setattr(
             self.server.job_state, "state", "printing")
 
-        asyncio.run(self.component._handle_update_request("1.4.3"))
+        asyncio.run(self.component._handle_update_request("1.4.3", 36))
 
         self.assertEqual(self.server.internal_transport.calls, [
             ("machine.update.status", {"refresh": False})])
@@ -276,11 +347,24 @@ class FeatherUpdatesComponentTest(unittest.TestCase):
             "update unavailable")
 
         with self.assertLogs(level="ERROR"):
-            asyncio.run(self.component._handle_update_request("1.4.3"))
+            asyncio.run(self.component._handle_update_request("1.4.3", 37))
 
         self.assertEqual(
             self.server.internal_transport.calls[-1][0],
             "machine.update.client")
+        response = self.server.klippy_connection.requests[-1].get_args()
+        self.assertEqual(response["state"], "failed")
+        self.assertIn("update unavailable", response["message"])
+
+    def test_update_manager_refusal_is_reported_as_failure(self):
+        self.server.internal_transport.update_result = (
+            "Object forge-x is currently being updated")
+
+        asyncio.run(self.component._handle_update_request("1.4.3", 38))
+
+        response = self.server.klippy_connection.requests[-1].get_args()
+        self.assertEqual(response["state"], "failed")
+        self.assertIn("currently being updated", response["message"])
 
 
 if __name__ == "__main__":

@@ -352,7 +352,71 @@ class ForgeXUpdateNotificationTest(unittest.TestCase):
         method, params = self.host.webhooks.remote_calls[-1]
         self.assertEqual(method, "feather_start_forge_x_update")
         self.assertEqual(params["expected_version"], "1.4.3")
+        self.assertEqual(params["token"], self.notification.install_token)
+        self.assertEqual(self.host.page, ScreenPage.UPDATE_NOTIFICATION)
+        self.assertTrue(self.notification.installing)
+        self.assertEqual(
+            self.host.busy_message, "PREPARING FORGE-X UPDATE...")
+
+    def test_update_progress_replaces_loader_text_and_ignores_stale_token(self):
+        self.request_and_respond()
+        self.notification.handle_action("update.install")
+
+        self.notification.handle_update_progress(WebRequest(
+            token=self.notification.install_token - 1,
+            state="progress", message="STALE"))
+        self.assertNotEqual(self.host.busy_message, "STALE")
+
+        self.notification.handle_update_progress(WebRequest(
+            token=self.notification.install_token,
+            state="progress", message="Receiving objects: 42%"))
+        self.assertEqual(self.host.busy_message, "Receiving objects: 42%")
+        self.assertTrue(self.notification.installing)
+
+    def test_update_start_timeout_restores_retryable_dialog(self):
+        self.request_and_respond()
+        self.notification.handle_action("update.install")
+
+        self.host.reactor.run_until(
+            self.host.reactor.monotonic() + CHECK_TIMEOUT)
+
+        self.assertFalse(self.notification.installing)
+        self.assertIsNone(self.host.busy_message)
+        self.assertEqual(self.notification.available_version, "1.4.3")
         self.assertEqual(self.host.page, ScreenPage.MESSAGE)
+        self.assertIn("did not respond", self.host.messages[-1][0])
+
+    def test_update_failure_clears_loader_and_keeps_update_retryable(self):
+        self.request_and_respond()
+        self.notification.handle_action("update.install")
+
+        self.notification.handle_update_progress(WebRequest(
+            token=self.notification.install_token,
+            state="failed", message="Network unavailable"))
+
+        self.assertFalse(self.notification.installing)
+        self.assertIsNone(self.host.busy_message)
+        self.assertEqual(self.notification.available_version, "1.4.3")
+        self.assertEqual(self.host.page, ScreenPage.MESSAGE)
+        self.assertIn("Network unavailable", self.host.messages[-1][0])
+        self.assertEqual(
+            self.host.messages[-1][1], ScreenPage.UPDATE_NOTIFICATION)
+
+    def test_update_completion_shows_automatic_and_manual_restart_instructions(self):
+        self.request_and_respond()
+        self.notification.handle_action("update.install")
+
+        self.notification.handle_update_progress(WebRequest(
+            token=self.notification.install_token,
+            state="restarting", message="RESTARTING PRINTER..."))
+
+        self.assertTrue(self.notification.installing)
+        self.assertEqual(self.host.busy_message, (
+            "PRINTER WILL RESTART NOW\n"
+            "IF IT DOES NOT RESTART AUTOMATICALLY, RESTART IT MANUALLY"))
+        drawing = "\n".join(self.host.draw_batches[-1])
+        self.assertIn("PRINTER WILL RESTART NOW", drawing)
+        self.assertIn("RESTART IT MANUALLY", drawing)
 
 
 if __name__ == "__main__":

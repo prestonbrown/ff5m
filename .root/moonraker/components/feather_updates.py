@@ -24,6 +24,8 @@ MAX_UPDATE_KEY_LENGTH = 64
 MAX_VERSION_LENGTH = 64
 MAX_SUBJECT_LENGTH = 160
 MAX_ERROR_LENGTH = 160
+MAX_PROGRESS_LENGTH = 160
+RESTARTING_MESSAGE = "RESTARTING PRINTER..."
 
 
 def _version(value: Any) -> Optional[str]:
@@ -103,6 +105,7 @@ class FeatherUpdates:
             "klippy_connection")
         self.job_state: JobState
         self.job_state = self.server.lookup_component("job_state")
+        self.update_token: Optional[int] = None
 
         self.server.register_remote_method(
             "feather_request_forge_x_update_status",
@@ -110,6 +113,8 @@ class FeatherUpdates:
         self.server.register_remote_method(
             "feather_start_forge_x_update",
             self._handle_update_request)
+        self.server.register_event_handler(
+            "update_manager:update_response", self._handle_update_progress)
 
     def _printer_busy(self) -> bool:
         try:
@@ -146,32 +151,99 @@ class FeatherUpdates:
             logging.exception(
                 "Unable to return Forge-X update status to Feather")
 
-    async def _handle_update_request(self, expected_version: str) -> None:
+    @staticmethod
+    def _progress_message(value: Any) -> str:
+        if not isinstance(value, (str, bytes)):
+            return ""
+        if isinstance(value, bytes):
+            value = value.decode(errors="replace")
+        message = " ".join(value.split())[:MAX_PROGRESS_LENGTH]
+        if "restarting service forge-x" in message.lower():
+            return RESTARTING_MESSAGE
+        return message
+
+    async def _send_update_state(
+        self, token: int, state: str, message: str
+    ) -> None:
+        try:
+            await self.klippy_connection.request(WebRequest(
+                "feather/update_progress", {
+                    "token": token,
+                    "state": state,
+                    "message": self._progress_message(message),
+                }))
+        except Exception:
+            logging.exception(
+                "Unable to return Forge-X update progress to Feather")
+
+    def _handle_update_progress(self, update: Any) -> Any:
+        if (self.update_token is None or not isinstance(update, dict)
+                or update.get("application") != self.update_key):
+            return None
+        message = self._progress_message(update.get("message", ""))
+        if not message:
+            return None
+        state = "restarting" if message == RESTARTING_MESSAGE else "progress"
+        return self._send_update_state(
+            self.update_token, state, message)
+
+    async def _handle_update_request(
+        self, expected_version: str, token: int
+    ) -> None:
+        try:
+            token = int(token)
+        except (TypeError, ValueError):
+            logging.info("Feather Forge-X update refused: invalid token")
+            return
+        if self.update_token is not None:
+            await self._send_update_state(
+                token, "failed", "Another update is already in progress")
+            return
         if self._printer_busy():
             logging.info(
                 "Feather Forge-X update refused: Klippy is not safely idle")
+            await self._send_update_state(
+                token, "failed", "Printer is not safely idle")
             return
 
         try:
             snapshot = await self._cached_forge_x_status()
-        except Exception:
+        except Exception as exc:
             logging.exception("Unable to verify Forge-X update status")
+            await self._send_update_state(token, "failed", str(exc))
             return
         if (not snapshot["available"]
                 or snapshot["available_version"] != expected_version):
             logging.info(
                 "Feather Forge-X update refused: available version changed")
+            await self._send_update_state(
+                token, "failed", "Available version changed; check again")
             return
         if self._printer_busy():
             logging.info(
                 "Feather Forge-X update refused: Klippy is not safely idle")
+            await self._send_update_state(
+                token, "failed", "Printer is not safely idle")
             return
 
+        self.update_token = token
+        await self._send_update_state(
+            token, "accepted", "PREPARING FORGE-X UPDATE...")
         try:
-            await self.internal_transport.call_method(
+            result = await self.internal_transport.call_method(
                 "machine.update.client", name=self.update_key)
-        except Exception:
-            logging.exception("Unable to start Forge-X update")
+        except Exception as exc:
+            logging.exception("Forge-X update failed")
+            await self._send_update_state(token, "failed", str(exc))
+        else:
+            if result != "ok":
+                logging.info("Forge-X update refused: %s", result)
+                await self._send_update_state(token, "failed", str(result))
+                return
+            await self._send_update_state(
+                token, "complete", "UPDATE COMPLETE. RESTARTING PRINTER...")
+        finally:
+            self.update_token = None
 
 
 def load_component(config: ConfigHelper) -> FeatherUpdates:
