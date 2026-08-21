@@ -69,7 +69,8 @@ EMBEDDED_COLORS = (
 EMBEDDED_ROLES = (
     "button_background", "button_border", "button_text",
     "button_selected_background", "button_selected_border",
-    "button_selected_text", "header_background", "header_text",
+    "button_selected_text", "accent_background", "accent_border",
+    "accent_text", "header_background", "header_text",
     "header_border", "temperature_nozzle", "temperature_bed",
     "temperature_fan",
 )
@@ -81,6 +82,9 @@ EMBEDDED_DEFAULTS = {
     "button_selected_background": "panel",
     "button_selected_border": "secondary",
     "button_selected_text": "secondary",
+    "accent_background": "primary_dark",
+    "accent_border": "primary",
+    "accent_text": "bright",
     "header_background": "panel",
     "header_text": "primary",
     "header_border": "border",
@@ -685,6 +689,8 @@ def role_group(role):
         return "button_selected"
     if role.startswith("button_"):
         return "button"
+    if role.startswith("accent_"):
+        return "accent"
     if role.startswith("header_"):
         return "header"
     if role.startswith("temperature_"):
@@ -709,6 +715,12 @@ def role_component(draw, box, role, roles, colors, fonts):
             roles["button_selected_border"],
             roles["button_selected_text"],
             "SELECTED", fonts)
+    elif group == "accent":
+        rect(
+            draw, box,
+            roles["accent_background"],
+            roles["accent_border"], 2)
+        centered(draw, box, "ACCENT", fonts.specimen, roles["accent_text"])
     elif group == "header":
         rect(
             draw, box,
@@ -740,6 +752,9 @@ def role_contrast(role, roles, colors):
         return contrast_ratio(
             roles["button_selected_text"],
             roles["button_selected_background"])
+    if group == "accent":
+        return contrast_ratio(
+            roles["accent_text"], roles["accent_background"])
     if group == "header":
         return contrast_ratio(
             roles["header_text"], roles["header_background"])

@@ -45,7 +45,8 @@ FALLBACK_COLORS = (
 FALLBACK_ROLES = (
     "button_background", "button_border", "button_text",
     "button_selected_background", "button_selected_border",
-    "button_selected_text", "header_background", "header_text",
+    "button_selected_text", "accent_background", "accent_border",
+    "accent_text", "header_background", "header_text",
     "header_border", "temperature_nozzle", "temperature_bed",
     "temperature_fan",
 )
@@ -57,6 +58,9 @@ FALLBACK_DEFAULTS = {
     "button_selected_background": "panel",
     "button_selected_border": "secondary",
     "button_selected_text": "secondary",
+    "accent_background": "primary_dark",
+    "accent_border": "primary",
+    "accent_text": "bright",
     "header_background": "panel",
     "header_text": "primary",
     "header_border": "border",
@@ -497,39 +501,50 @@ h1 { margin:0 0 4px; font-size:24px; }
 }
 .physical-meta { font-size:9px; color:var(--app-dim); overflow-wrap:anywhere; }
 .physical-meta b { color:var(--app-text); font-size:10px; }
-.role-specimens { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:9px; }
-.role-specimen {
+.role-combinations { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:10px; }
+.role-combination {
   border:1px solid var(--app-border); background:var(--app-panel2);
-  padding:9px; min-width:0;
+  padding:10px; min-width:0;
 }
-.role-specimen-head {
-  display:flex; align-items:start; justify-content:space-between; gap:8px;
-  margin-bottom:7px; min-width:0;
+.role-combination-head {
+  display:flex; align-items:baseline; justify-content:space-between;
+  gap:8px; margin-bottom:8px;
 }
-.role-specimen-head code { color:var(--app-text); overflow-wrap:anywhere; font-size:10px; }
-.role-specimen-source { color:var(--app-dim); font-size:9px; text-align:right; white-space:nowrap; }
-.role-specimen-sample {
+.role-combination-head h3 { margin:0; color:var(--app-text); font-size:11px; }
+.role-combination-head span { color:var(--app-dim); font-size:9px; }
+.role-combination-sample {
   min-height:54px; display:flex; align-items:center; justify-content:center;
-  padding:7px; margin-bottom:7px;
+  padding:7px; margin-bottom:9px;
 }
 .role-mini-button { width:100%; min-height:42px; font-weight:700; }
 .role-mini-header {
   width:100%; min-height:42px; display:flex; align-items:center;
   justify-content:center; font-weight:700;
 }
-.role-mini-temp {
-  width:100%; min-height:42px; display:flex; align-items:center;
-  padding:0 12px; font-weight:700;
+.role-mini-temperatures {
+  width:100%; min-height:42px; display:grid; grid-template-columns:repeat(3,1fr);
+  align-items:center; gap:6px; padding:0 10px; font-weight:700;
+  background:var(--c-panel); border:1px solid var(--c-border); text-align:center;
 }
-.role-mini-generic {
-  width:100%; min-height:42px; display:flex; align-items:center;
-  justify-content:center; font-weight:700;
+.role-combination-colors {
+  display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:6px;
 }
-.role-specimen-foot {
-  display:grid; grid-template-columns:1fr 1fr; gap:6px;
-  color:var(--app-dim); font-size:9px;
+.role-color-item {
+  min-width:0; padding:7px; border:1px solid var(--app-border);
+  background:var(--app-panel);
 }
-.role-chip { display:flex; align-items:center; gap:5px; min-width:0; }
+.role-color-head,.role-color-value {
+  display:flex; align-items:center; justify-content:space-between; gap:5px;
+}
+.role-color-head { margin-bottom:6px; }
+.role-color-head b { color:var(--app-text); font-size:9px; }
+.role-source-badge {
+  padding:1px 4px; border:1px solid var(--app-border); color:var(--app-dim);
+  font-size:8px; line-height:1.35; white-space:nowrap;
+}
+.role-source-badge.override { color:var(--app-accent); border-color:var(--app-accent); }
+.role-color-value { justify-content:flex-start; color:var(--app-text); font-size:9px; }
+.role-color-value code { overflow-wrap:anywhere; }
 .role-chip-color {
   width:22px; height:22px; padding:0; border:1px solid var(--app-border);
   border-radius:2px; flex:0 0 auto; cursor:pointer; background:transparent;
@@ -537,7 +552,11 @@ h1 { margin:0 0 4px; font-size:24px; }
 .role-chip-color::-webkit-color-swatch-wrapper { padding:1px; }
 .role-chip-color::-webkit-color-swatch { border:0; }
 .role-chip-color::-moz-color-swatch { border:0; }
-.role-chip:hover .role-chip-color { outline:2px solid var(--app-accent); outline-offset:1px; }
+.role-color-value:hover .role-chip-color { outline:2px solid var(--app-accent); outline-offset:1px; }
+.role-color-meta {
+  display:grid; gap:2px; margin-top:5px; color:var(--app-dim);
+  font-size:8px; overflow-wrap:anywhere;
+}
 .json-box {
   width:100%; min-height:250px; resize:vertical; color:var(--app-text);
   background:#0c0f12; border:1px solid var(--app-border); padding:12px;
@@ -560,7 +579,7 @@ h1 { margin:0 0 4px; font-size:24px; }
   .app { padding:12px; }
   .color-row { grid-template-columns:1fr 48px 120px; }
   .role-row { grid-template-columns:1fr; }
-  .preview-grid,.runtime-grid,.role-specimens,.physical-grid { grid-template-columns:1fr; }
+  .preview-grid,.runtime-grid,.role-combinations,.physical-grid { grid-template-columns:1fr; }
   .palette-grid { grid-template-columns:repeat(2,1fr); }
 }
 </style>
@@ -670,10 +689,12 @@ h1 { margin:0 0 4px; font-size:24px; }
       </section>
 
       <section class="panel">
-        <h2>All ThemeRole specimens</h2>
+        <h2>ThemeRole usage combinations</h2>
         <div class="panel-body">
-          <div id="roleSpecimens" class="role-specimens"></div>
-          <div class="note">Every contract role is shown. Current/default chips are editable; editing default creates a current override without mutating the contract default.</div>
+          <div id="roleSpecimens" class="role-combinations"></div>
+          <div class="note">
+            Every role is shown once in its runtime combination. Each color is marked DEFAULT or OVERRIDE.
+          </div>
         </div>
       </section>
 
@@ -742,7 +763,6 @@ function effectiveRoles() {
   state.resolvedRoles = out;
   return out;
 }
-function fallbackRoleValue(role) { return resolveRoleValue(state.config.defaults[role]); }
 function roleSource(role) { return (state.doc.roles || {})[role] ?? state.config.defaults[role]; }
 function exportDocument() {
   const copy = JSON.parse(JSON.stringify(state.doc));
@@ -818,6 +838,7 @@ function renderRuntimeCombinations() {
     ["TOGGLE OFF / AUX", "DIM / MUTED", c.dim, c.panel, c.muted, "DIM text + MUTED structure → PANEL"],
     ["DANGER ACTION", "ABORT / CANCEL", c.danger, c.danger_background, c.danger, "DANGER → DANGER_BACKGROUND"],
     ["SELECTED ROLE SET", "SELECTED", r.button_selected_text, r.button_selected_background, r.button_selected_border, "resolved selected button roles"],
+    ["ACCENT ROLE SET", "ACCENT", r.accent_text, r.accent_background, r.accent_border, "resolved accent surface roles"],
   ];
 
   $("runtimeGrid").innerHTML = cases.map(([title,text,fg,bg,border,detail]) => {
@@ -830,41 +851,71 @@ function renderRuntimeCombinations() {
   }).join("");
 }
 
-function roleFamily(role) {
-  if (role.startsWith("button_selected_")) return "button_selected";
-  if (role.startsWith("button_")) return "button";
-  if (role.startsWith("header_")) return "header";
-  if (role.startsWith("temperature_")) return "temperature";
-  return "generic";
-}
+const ROLE_SPECIMEN_GROUPS = [
+  {key:"button", title:"BUTTON", roles:[
+    ["BG", "button_background"], ["BORDER", "button_border"], ["TEXT", "button_text"],
+  ]},
+  {key:"selected", title:"SELECTED BUTTON", roles:[
+    ["BG", "button_selected_background"], ["BORDER", "button_selected_border"],
+    ["TEXT", "button_selected_text"],
+  ]},
+  {key:"accent", title:"ACCENT SURFACE", roles:[
+    ["BG", "accent_background"], ["BORDER", "accent_border"], ["TEXT", "accent_text"],
+  ]},
+  {key:"header", title:"HEADER", roles:[
+    ["BG", "header_background"], ["BORDER", "header_border"], ["TEXT", "header_text"],
+  ]},
+  {key:"temperature", title:"TEMPERATURES", roles:[
+    ["NOZZLE", "temperature_nozzle"], ["BED", "temperature_bed"], ["FAN", "temperature_fan"],
+  ]},
+];
 
-function roleSampleHtml(role) {
-  const family = roleFamily(role);
-  if (family === "button") return `<button class="role-mini-button" style="background:var(--r-button-background);color:var(--r-button-text);border:2px solid var(--r-button-border)">BUTTON</button>`;
-  if (family === "button_selected") return `<button class="role-mini-button" style="background:var(--r-button-selected-background);color:var(--r-button-selected-text);border:2px solid var(--r-button-selected-border)">SELECTED</button>`;
-  if (family === "header") return `<div class="role-mini-header" style="background:var(--r-header-background);color:var(--r-header-text);border:2px solid var(--r-header-border)">HEADER</div>`;
-  if (family === "temperature") {
-    const label = role === "temperature_nozzle" ? "NOZZLE 150C" : role === "temperature_bed" ? "BED 60C" : role === "temperature_fan" ? "FAN 80%" : role.toUpperCase();
-    return `<div class="role-mini-temp" style="background:var(--c-panel);color:var(${cssVarName("r", role)});border:1px solid var(--c-border)">${label}</div>`;
-  }
-  return `<div class="role-mini-generic" data-generic-sample>GENERIC</div>`;
+function roleCombinationSample(group) {
+  if (group.key === "button") return `<button class="role-mini-button"
+    style="background:var(--r-button-background);color:var(--r-button-text);
+      border:2px solid var(--r-button-border)">BUTTON</button>`;
+  if (group.key === "selected") return `<button class="role-mini-button"
+    style="background:var(--r-button-selected-background);color:var(--r-button-selected-text);
+      border:2px solid var(--r-button-selected-border)">SELECTED</button>`;
+  if (group.key === "accent") return `<div class="role-mini-header"
+    style="background:var(--r-accent-background);color:var(--r-accent-text);
+      border:2px solid var(--r-accent-border)">ACCENT</div>`;
+  if (group.key === "header") return `<div class="role-mini-header"
+    style="background:var(--r-header-background);color:var(--r-header-text);
+      border:2px solid var(--r-header-border)">HEADER</div>`;
+  return `<div class="role-mini-temperatures">
+    <span style="color:var(--r-temperature-nozzle)">NOZZLE</span>
+    <span style="color:var(--r-temperature-bed)">BED</span>
+    <span style="color:var(--r-temperature-fan)">FAN</span>
+  </div>`;
 }
 
 function renderRoleSpecimens() {
-  $("roleSpecimens").innerHTML = state.config.roles.map(role => `
-    <div class="role-specimen" data-role="${role}">
-      <div class="role-specimen-head"><code>${role}</code><span class="role-specimen-source"></span></div>
-      <div class="role-specimen-sample">${roleSampleHtml(role)}</div>
-      <div class="role-specimen-foot">
-        <span class="role-chip"><input class="role-chip-color role-current-picker" type="color" title="Edit current role color"><span class="current-label"></span></span>
-        <span class="role-chip"><input class="role-chip-color role-default-picker" type="color" title="Start override from default color"><span class="default-label"></span></span>
-      </div>
+  const groupedRoles = ROLE_SPECIMEN_GROUPS.flatMap(group => group.roles.map(item => item[1]));
+  const missing = state.config.roles.filter(role => !groupedRoles.includes(role));
+  const unknown = groupedRoles.filter(role => !state.config.roles.includes(role));
+  if (missing.length || unknown.length || new Set(groupedRoles).size !== groupedRoles.length) {
+    throw new Error("ThemeRole specimen groups do not match the theme contract");
+  }
+
+  $("roleSpecimens").innerHTML = ROLE_SPECIMEN_GROUPS.map(group => `
+    <div class="role-combination" data-combination="${group.key}">
+      <div class="role-combination-head"><h3>${group.title}</h3><span>${group.roles.length} COLORS</span></div>
+      <div class="role-combination-sample">${roleCombinationSample(group)}</div>
+      <div class="role-combination-colors">${group.roles.map(([label, role]) => `
+        <div class="role-color-item" data-role="${role}">
+          <div class="role-color-head"><b>${label}</b><span class="role-source-badge"></span></div>
+          <div class="role-color-value">
+            <input class="role-chip-color role-current-picker" type="color" title="Edit current role color">
+            <code class="current-label"></code>
+          </div>
+          <div class="role-color-meta"><code>${role}</code><span class="role-source-label"></span></div>
+        </div>`).join("")}</div>
     </div>`).join("");
 
-  for (const card of $("roleSpecimens").querySelectorAll(".role-specimen")) {
-    const role = card.dataset.role;
-    const currentPicker = card.querySelector(".role-current-picker");
-    const defaultPicker = card.querySelector(".role-default-picker");
+  for (const item of $("roleSpecimens").querySelectorAll(".role-color-item")) {
+    const role = item.dataset.role;
+    const currentPicker = item.querySelector(".role-current-picker");
 
     const applyPicker = picker => {
       state.doc.roles ||= {};
@@ -876,35 +927,25 @@ function renderRoleSpecimens() {
 
     currentPicker.addEventListener("input", () => applyPicker(currentPicker));
     currentPicker.addEventListener("change", () => applyLiveState());
-    defaultPicker.addEventListener("input", () => applyPicker(defaultPicker));
-    defaultPicker.addEventListener("change", () => applyLiveState());
   }
   syncRoleSpecimens();
 }
 
 function syncRoleSpecimens(activePicker=null) {
   const roles = effectiveRoles();
-  for (const card of $("roleSpecimens").querySelectorAll(".role-specimen")) {
-    const role = card.dataset.role;
-    const current = roles[role], fallback = fallbackRoleValue(role);
+  for (const item of $("roleSpecimens").querySelectorAll(".role-color-item")) {
+    const role = item.dataset.role;
+    const current = roles[role];
     const source = roleSource(role);
     const inherited = (state.doc.roles || {})[role] === undefined;
-    const currentPicker = card.querySelector(".role-current-picker");
-    const defaultPicker = card.querySelector(".role-default-picker");
+    const currentPicker = item.querySelector(".role-current-picker");
+    const badge = item.querySelector(".role-source-badge");
 
-    card.querySelector(".role-specimen-source").textContent = `${inherited ? "fallback" : "override"}: ${source}`;
-    card.querySelector(".current-label").textContent = `current #${hex(current).toUpperCase()}`;
-    card.querySelector(".default-label").textContent = `default #${hex(fallback).toUpperCase()}`;
+    badge.textContent = inherited ? "DEFAULT" : "OVERRIDE";
+    badge.classList.toggle("override", !inherited);
+    item.querySelector(".current-label").textContent = `#${hex(current).toUpperCase()}`;
+    item.querySelector(".role-source-label").textContent = `${inherited ? "default" : "source"}: ${source}`;
     if (currentPicker !== activePicker) currentPicker.value = css(current);
-    if (defaultPicker !== activePicker) defaultPicker.value = css(fallback);
-
-    const generic = card.querySelector("[data-generic-sample]");
-    if (generic) {
-      generic.textContent = role.toUpperCase();
-      generic.style.background = css(current);
-      generic.style.color = css(diagnosticText(current));
-      generic.style.border = `1px solid ${css(state.doc.colors.border)}`;
-    }
   }
 }
 

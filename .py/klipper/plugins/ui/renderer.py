@@ -67,12 +67,13 @@ class FeatherRenderer:
         "busy": (ThemeRole.BUTTON_BACKGROUND, ThemeColor.WARNING,
                  ThemeColor.WARNING),
         "pressed": (ThemeColor.PRESSED_BACKGROUND, ThemeColor.BRIGHT, ThemeColor.BRIGHT),
-        "keypad": (ThemeColor.PRIMARY_DARK, ThemeColor.PRIMARY,
-                   ThemeColor.BRIGHT),
+        "keypad": (ThemeRole.ACCENT_BACKGROUND, ThemeRole.ACCENT_BORDER,
+                   ThemeRole.ACCENT_TEXT),
         "keypad_aux": (ThemeColor.PANEL, ThemeColor.SECONDARY,
                        ThemeColor.SECONDARY),
-        "keypad_confirm": (ThemeColor.PRIMARY_DARK, ThemeColor.PRIMARY,
-                           ThemeColor.BRIGHT),
+        "keypad_confirm": (
+            ThemeRole.ACCENT_BACKGROUND, ThemeRole.ACCENT_BORDER,
+            ThemeRole.ACCENT_TEXT),
     }
     BUTTON_TEXT_PADDING = 16
     HINT_TEXT_PADDING = 20

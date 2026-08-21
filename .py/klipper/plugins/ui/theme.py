@@ -43,6 +43,9 @@ class ThemeRole(str, Enum):
     BUTTON_SELECTED_BACKGROUND = "button_selected_background"
     BUTTON_SELECTED_BORDER = "button_selected_border"
     BUTTON_SELECTED_TEXT = "button_selected_text"
+    ACCENT_BACKGROUND = "accent_background"
+    ACCENT_BORDER = "accent_border"
+    ACCENT_TEXT = "accent_text"
     HEADER_BACKGROUND = "header_background"
     HEADER_TEXT = "header_text"
     HEADER_BORDER = "header_border"
@@ -61,6 +64,9 @@ DEFAULT_THEME_ROLES = MappingProxyType({
     ThemeRole.BUTTON_SELECTED_BACKGROUND: ThemeColor.PANEL,
     ThemeRole.BUTTON_SELECTED_BORDER: ThemeColor.SECONDARY,
     ThemeRole.BUTTON_SELECTED_TEXT: ThemeColor.SECONDARY,
+    ThemeRole.ACCENT_BACKGROUND: ThemeColor.PRIMARY_DARK,
+    ThemeRole.ACCENT_BORDER: ThemeColor.PRIMARY,
+    ThemeRole.ACCENT_TEXT: ThemeColor.BRIGHT,
     ThemeRole.HEADER_BACKGROUND: ThemeColor.PANEL,
     ThemeRole.HEADER_TEXT: ThemeColor.PRIMARY,
     ThemeRole.HEADER_BORDER: ThemeColor.BORDER,
