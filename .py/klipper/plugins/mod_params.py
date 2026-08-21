@@ -414,8 +414,9 @@ class ModParamManagement:
                     raise
                 changed = True
 
-        if changed and self.changes_gcode_present:
-            self.reactor.register_callback(lambda _, p=param: self._notify_changed(p))
+        if changed:
+            self.reactor.register_callback(
+                lambda _, p=param: self._notify_committed_change(p))
 
         return changed
 
@@ -440,7 +441,11 @@ class ModParamManagement:
             self._print_param(gcmd, param)
 
     def cmd_RELOAD_MOD_PARAMS(self, _):
+        previous = dict(self.variables)
         self._reload()
+        if self.variables != previous:
+            self.reactor.register_callback(
+                lambda _: self._emit_changed_event())
 
     def cmd_GET_MOD_PARAM(self, gcmd):
         key = gcmd.get('PARAM')
@@ -517,6 +522,17 @@ class ModParamManagement:
             self.gcode.run_script(template)
         except:
             logging.exception(f"mod_params: Script running error:\n{template}")
+
+    def _emit_changed_event(self):
+        try:
+            self.printer.send_event("mod_params:changed")
+        except Exception:
+            logging.exception("mod_params: changed event handler failed")
+
+    def _notify_committed_change(self, param: Parameter):
+        self._emit_changed_event()
+        if self.changes_gcode_present:
+            self._notify_changed(param)
 
     def get_status(self, _):
         return {'variables': self.variables}

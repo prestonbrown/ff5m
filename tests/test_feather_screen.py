@@ -803,6 +803,7 @@ class FeatherUtilitiesTest(unittest.TestCase):
         manager.variables = dict((param.key, param.default)
                                  for param in manager.params)
         cases = (
+            ("mod_check_update_interval", "mod_check_update", False, True),
             ("backlight_eco", "display_eco", False, True),
             ("weight_check_max", "weight_check", False, True),
             ("bed_mesh_validation_clear", "bed_mesh_validation", False, True),
@@ -820,6 +821,26 @@ class FeatherUtilitiesTest(unittest.TestCase):
                 self.assertIn(
                     child, [param.key for param in
                             MOD_UI.visible_parameters(manager)])
+
+    def test_update_check_declaration_exposes_runtime_defaults_and_bounds(self):
+        declaration_path = pathlib.Path(__file__).parents[1] / "mod_params.json"
+        manager = MOD_PARAMS.ModParamManagement.__new__(
+            MOD_PARAMS.ModParamManagement)
+        manager.declaration = str(declaration_path)
+        manager.printer = type("Printer", (), {
+            "command_error": staticmethod(RuntimeError)})()
+        manager._load_declaration()
+
+        enabled = manager.params_map["mod_check_update"]
+        interval = manager.params_map["mod_check_update_interval"]
+        self.assertIs(enabled.type, bool)
+        self.assertTrue(enabled.default)
+        self.assertIs(interval.type, int)
+        self.assertEqual(interval.default, 360)
+        self.assertEqual(interval.minimum, 1)
+        self.assertIsNone(interval.restart)
+        self.assertEqual(enabled.ui_category, "system_services")
+        self.assertEqual(interval.ui_category, "system_services")
 
     def test_renamed_parameter_carries_stored_values_to_the_current_key(self):
         declaration_path = pathlib.Path(__file__).parents[1] / "mod_params.json"
@@ -924,6 +945,9 @@ class FeatherUtilitiesTest(unittest.TestCase):
             manager.filename = variables_file.name
             manager._variables_lock = threading.RLock()
             manager.changes_gcode_present = False
+            manager.reactor = Reactor()
+            manager.printer = type("Printer", (), {
+                "send_event": staticmethod(lambda _name: None)})()
             manager.gcode = type("GCode", (), {
                 "error": staticmethod(RuntimeError)})()
 
@@ -979,6 +1003,9 @@ class FeatherUtilitiesTest(unittest.TestCase):
         manager.variables = {"first": 0, "second": 0}
         manager._variables_lock = threading.RLock()
         manager.changes_gcode_present = False
+        manager.reactor = Reactor()
+        manager.printer = type("Printer", (), {
+            "send_event": staticmethod(lambda _name: None)})()
         first_snapshot_ready = threading.Event()
         release_first_snapshot = threading.Event()
         second_save_entered = threading.Event()
@@ -1073,6 +1100,9 @@ class FeatherUtilitiesTest(unittest.TestCase):
         saved = []
         manager._save_all = lambda: saved.append(dict(manager.variables))
         manager.changes_gcode_present = False
+        manager.reactor = Reactor()
+        manager.printer = type("Printer", (), {
+            "send_event": staticmethod(lambda _name: None)})()
 
         result = manager.set_value(parameter.key, "1")
 
@@ -1101,6 +1131,8 @@ class FeatherUtilitiesTest(unittest.TestCase):
         manager._save_all = lambda: saved.append(dict(manager.variables))
         manager.changes_gcode_present = True
         manager.reactor = Reactor()
+        manager.printer = type("Printer", (), {
+            "send_event": staticmethod(lambda _name: None)})()
         manager._notify_changed = lambda param: notified.append(param.key)
 
         result = manager.set_value("display", "GUPPY")
@@ -1109,6 +1141,53 @@ class FeatherUtilitiesTest(unittest.TestCase):
         self.assertEqual(manager.variables["display"], 3)
         self.assertEqual(saved, [{"display": 3}])
         self.assertEqual(notified, ["display"])
+
+    def test_mod_params_emits_post_commit_event_before_optional_change_gcode(self):
+        parameter = MOD_PARAMS.Parameter("value", int, 1, "Value")
+        manager = MOD_PARAMS.ModParamManagement.__new__(
+            MOD_PARAMS.ModParamManagement)
+        manager.params = [parameter]
+        manager.params_map = {parameter.key: parameter}
+        manager.variables = {parameter.key: 1}
+        manager._variables_lock = threading.RLock()
+        manager.changes_gcode_present = True
+        manager.reactor = Reactor()
+        order = []
+        manager._save_all = lambda: order.append("persisted")
+        manager.printer = type("Printer", (), {
+            "send_event": lambda _self, name: order.append(name)})()
+        manager._notify_changed = lambda _param: order.append("changes_gcode")
+
+        manager.set_value("value", "2")
+        manager.set_value("value", "2")
+
+        self.assertEqual(order, [
+            "persisted", "mod_params:changed", "changes_gcode"])
+
+    def test_reload_emits_once_only_for_effective_snapshot_change(self):
+        manager = MOD_PARAMS.ModParamManagement.__new__(
+            MOD_PARAMS.ModParamManagement)
+        manager.variables = {"value": 1}
+        manager.reactor = DeferredReactor()
+        events = []
+        manager.printer = type("Printer", (), {
+            "send_event": lambda _self, name: events.append(name)})()
+        manager._reload = lambda: setattr(manager, "variables", {"value": 2})
+
+        manager.cmd_RELOAD_MOD_PARAMS(None)
+        self.assertEqual(events, [])
+        manager.reactor.run_until(manager.reactor.now)
+        self.assertEqual(events, ["mod_params:changed"])
+
+        manager.cmd_RELOAD_MOD_PARAMS(None)
+        manager.reactor.run_until(manager.reactor.now)
+        self.assertEqual(events, ["mod_params:changed"])
+
+        manager._reload = mock.Mock(side_effect=RuntimeError("reload failed"))
+        with self.assertRaisesRegex(RuntimeError, "reload failed"):
+            manager.cmd_RELOAD_MOD_PARAMS(None)
+        manager.reactor.run_until(manager.reactor.now)
+        self.assertEqual(events, ["mod_params:changed"])
 
     def test_screws_output_parser(self):
         parse = FEATHER.FeatherScreen.parse_screw_result

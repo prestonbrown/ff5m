@@ -38,7 +38,7 @@ def _version(value: Any) -> Optional[str]:
 
 
 def forge_x_update_snapshot(status: Any) -> Dict[str, Any]:
-    """Return the bounded subset of cached status consumed by Feather."""
+    """Return the bounded subset of update status consumed by Feather."""
     if not isinstance(status, dict):
         raise ValueError("Forge-X update status is not an object")
     installed = _version(status.get("version"))
@@ -127,6 +127,14 @@ class FeatherUpdates:
     async def _cached_forge_x_status(self) -> Dict[str, Any]:
         status = await self.internal_transport.call_method(
             "machine.update.status", refresh=False)
+        return self._forge_x_snapshot(status)
+
+    async def _fresh_forge_x_status(self) -> Dict[str, Any]:
+        status = await self.internal_transport.call_method(
+            "machine.update.refresh", name=self.update_key)
+        return self._forge_x_snapshot(status)
+
+    def _forge_x_snapshot(self, status: Any) -> Dict[str, Any]:
         if not isinstance(status, dict):
             raise ValueError("Moonraker update status is unavailable")
         versions = status.get("version_info")
@@ -139,7 +147,7 @@ class FeatherUpdates:
     async def _handle_status_request(self, token: int) -> None:
         response: Dict[str, Any] = {"token": int(token), "error": ""}
         try:
-            response.update(await self._cached_forge_x_status())
+            response.update(await self._fresh_forge_x_status())
         except Exception as exc:
             logging.info("Feather update status unavailable: %s", exc)
             response["error"] = str(exc)[:MAX_ERROR_LENGTH]

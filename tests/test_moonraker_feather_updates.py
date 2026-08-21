@@ -74,7 +74,7 @@ class InternalTransport:
 
     async def call_method(self, method, **kwargs):
         self.calls.append((method, kwargs))
-        if method == "machine.update.status":
+        if method in ("machine.update.status", "machine.update.refresh"):
             if self.status_error is not None:
                 raise self.status_error
             if self.after_status is not None:
@@ -217,11 +217,11 @@ class FeatherUpdatesComponentTest(unittest.TestCase):
         self.assertIn(
             "update_manager:update_response", self.server.event_handlers)
 
-    def test_status_uses_cached_internal_api_and_replies_to_klipper(self):
+    def test_status_refreshes_only_configured_updater_and_replies_to_klipper(self):
         asyncio.run(self.component._handle_status_request(17))
 
         self.assertEqual(self.server.internal_transport.calls, [
-            ("machine.update.status", {"refresh": False})])
+            ("machine.update.refresh", {"name": "forge-x"})])
         request = self.server.klippy_connection.requests[0]
         self.assertEqual(request.get_endpoint(), "feather/update_status")
         self.assertEqual(request.get_args()["token"], 17)
@@ -308,6 +308,12 @@ class FeatherUpdatesComponentTest(unittest.TestCase):
         self.assertEqual(server.internal_transport.calls, [
             ("machine.update.status", {"refresh": False}),
             ("machine.update.client", {"name": "feather-release"}),
+        ])
+
+        server.internal_transport.calls.clear()
+        asyncio.run(component._handle_status_request(34))
+        self.assertEqual(server.internal_transport.calls, [
+            ("machine.update.refresh", {"name": "feather-release"}),
         ])
 
     def test_empty_configured_key_is_rejected(self):

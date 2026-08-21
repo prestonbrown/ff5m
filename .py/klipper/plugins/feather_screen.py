@@ -312,6 +312,8 @@ class FeatherScreen(FeatherPagesMixin, FeatherControlsMixin):
         self.printer.register_event_handler("klippy:ready", self._init)
         self.printer.register_event_handler("klippy:shutdown", self._shutdown)
         self.printer.register_event_handler("klippy:disconnect", self._disconnect)
+        self.printer.register_event_handler(
+            "mod_params:changed", self.update_notification.on_mod_params_changed)
         self.gcode.register_command(
             "FEATHER_ABORT", self.cmd_FEATHER_ABORT,
             desc=self.cmd_FEATHER_ABORT_help)

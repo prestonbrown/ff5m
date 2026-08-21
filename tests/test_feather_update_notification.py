@@ -7,6 +7,7 @@
 import pathlib
 import sys
 import unittest
+from unittest import mock
 
 
 PLUGINS = (pathlib.Path(__file__).parents[1] / ".py" / "klipper" /
@@ -14,8 +15,8 @@ PLUGINS = (pathlib.Path(__file__).parents[1] / ".py" / "klipper" /
 sys.path.insert(0, str(PLUGINS))
 
 from feather_update_notification import (  # noqa: E402
-    CHECK_TIMEOUT, FAILURE_RETRY_INTERVAL, ForgeXUpdateNotification,
-    STARTUP_DELAY)
+    CHECK_TIMEOUT, DEFAULT_UPDATE_INTERVAL_MINUTES, FAILURE_RETRY_INTERVAL,
+    MAX_FAILURE_RETRY_INTERVAL, ForgeXUpdateNotification, STARTUP_DELAY)
 from ff5m_ui.print_state import PrintState  # noqa: E402
 from ff5m_ui.screen import ScreenPage  # noqa: E402
 from ui import FeatherRenderer  # noqa: E402
@@ -90,6 +91,10 @@ class Host:
         self.operation_active = False
         self.busy_message = None
         self.messages = []
+        self.params = type("Params", (), {"variables": {
+            "mod_check_update": True,
+            "mod_check_update_interval": DEFAULT_UPDATE_INTERVAL_MINUTES,
+        }})()
         self.update_notification = ForgeXUpdateNotification(
             self, self.webhooks)
 
@@ -149,6 +154,101 @@ class ForgeXUpdateNotificationTest(unittest.TestCase):
             self.host.webhooks.remote_calls[0][0],
             "feather_request_forge_x_update_status")
 
+    def test_disabled_startup_schedules_no_check_and_runtime_enable_is_safe(self):
+        self.host.params.variables["mod_check_update"] = False
+        self.notification.start()
+        self.host.reactor.run_until(100.0 + STARTUP_DELAY)
+        self.assertEqual(self.host.webhooks.remote_calls, [])
+        self.assertIsNone(self.notification._scheduled_at)
+
+        self.host.print_active = True
+        self.host.print_state = PrintState.PRINTING
+        self.host.params.variables["mod_check_update"] = True
+        self.notification.on_mod_params_changed()
+        self.host.reactor.run_until(self.host.reactor.monotonic())
+        self.assertEqual(self.host.webhooks.remote_calls, [])
+        self.assertTrue(self.notification.check_pending)
+
+        self.host.print_active = False
+        self.host.print_state = PrintState.IDLE
+        self.notification.on_print_state_changed(
+            PrintState.PRINTING, PrintState.IDLE, "standby")
+        self.assertEqual(len(self.host.webhooks.remote_calls), 1)
+
+    def test_invalid_runtime_interval_falls_back_to_six_hours(self):
+        for invalid in (0, -1, 3.5, "15", True):
+            with self.subTest(invalid=invalid):
+                self.host.params.variables[
+                    "mod_check_update_interval"] = invalid
+                enabled, interval = self.notification._read_settings()
+                self.assertTrue(enabled)
+                self.assertEqual(
+                    interval, DEFAULT_UPDATE_INTERVAL_MINUTES * 60.0)
+
+    def test_interval_change_replaces_idle_deadline_and_inflight_uses_new_value(self):
+        self.notification.start()
+        self.host.params.variables["mod_check_update_interval"] = 12
+        self.notification.on_mod_params_changed()
+        self.assertEqual(
+            self.notification._scheduled_at,
+            self.host.reactor.monotonic() + 12 * 60.0)
+
+        self.notification.request_check()
+        self.assertTrue(self.notification.check_in_flight)
+        self.host.params.variables["mod_check_update_interval"] = 17
+        self.notification.on_mod_params_changed()
+        self.assertIsNone(self.notification._scheduled_at)
+        self.assertEqual(len(self.host.webhooks.remote_calls), 1)
+
+        self.notification.handle_status_response(status_response(
+            self.notification, available=False, version="1.4.2", changes=[]))
+        self.assertEqual(
+            self.notification._scheduled_at,
+            self.host.reactor.monotonic() + 17 * 60.0)
+
+    def test_disable_invalidates_late_reply_even_after_reenable(self):
+        self.notification.start()
+        self.notification.request_check()
+        old_token = self.notification.check_token
+
+        self.host.params.variables["mod_check_update"] = False
+        self.notification.on_mod_params_changed()
+        self.assertFalse(self.notification.check_in_flight)
+        self.assertIsNone(self.notification._scheduled_at)
+
+        self.host.params.variables["mod_check_update"] = True
+        self.notification.on_mod_params_changed()
+        self.host.reactor.run_until(self.host.reactor.monotonic())
+        new_token = self.notification.check_token
+        self.assertGreater(new_token, old_token)
+        self.assertTrue(self.notification.check_in_flight)
+
+        self.notification.handle_status_response(status_response(
+            self.notification, token=old_token))
+        self.assertTrue(self.notification.check_in_flight)
+        self.assertFalse(self.notification.dialog_visible)
+
+        self.notification.handle_status_response(status_response(
+            self.notification, token=new_token))
+        self.assertTrue(self.notification.dialog_visible)
+
+    def test_disable_hides_offer_but_preserves_dismissal_and_interval(self):
+        self.notification.start()
+        self.request_and_respond()
+        self.notification.dismissed_version = "1.4.1"
+        self.host.params.variables["mod_check_update_interval"] = 19
+        self.host.params.variables["mod_check_update"] = False
+
+        self.notification.on_mod_params_changed()
+
+        self.assertEqual(self.host.page, ScreenPage.IDLE_HOME)
+        self.assertIsNone(self.notification.available_version)
+        self.assertIsNone(self.notification.installed_version)
+        self.assertEqual(self.notification.changes, ())
+        self.assertEqual(self.notification.dismissed_version, "1.4.1")
+        self.assertEqual(self.notification.check_interval, 19 * 60.0)
+        self.assertIsNone(self.notification._scheduled_at)
+
     def test_startup_check_defers_until_printer_returns_idle(self):
         self.host.print_active = True
         self.host.print_state = PrintState.PRINTING
@@ -176,6 +276,7 @@ class ForgeXUpdateNotificationTest(unittest.TestCase):
         self.host.reactor.run_until(
             100.0 + STARTUP_DELAY + 300.0)
         self.assertEqual(len(self.host.webhooks.remote_calls), 1)
+        self.assertEqual(self.notification.failure_streak, 0)
 
     def test_no_update_available_does_not_open_dialog(self):
         self.request_and_respond(available=False, version="1.4.2", changes=[])
@@ -271,7 +372,9 @@ class ForgeXUpdateNotificationTest(unittest.TestCase):
 
     def test_timeout_and_malformed_response_leave_printer_ui_usable(self):
         self.notification.request_check()
-        self.host.reactor.run_until(100.0 + CHECK_TIMEOUT)
+        self.host.reactor.run_until(159.99)
+        self.assertTrue(self.notification.check_in_flight)
+        self.host.reactor.run_until(160.0)
         self.assertFalse(self.notification.check_in_flight)
         self.assertEqual(self.host.page, ScreenPage.IDLE_HOME)
 
@@ -304,6 +407,62 @@ class ForgeXUpdateNotificationTest(unittest.TestCase):
         self.host.reactor.run_until(
             self.host.reactor.monotonic() + FAILURE_RETRY_INTERVAL)
         self.assertEqual(len(self.host.webhooks.remote_calls), 2)
+
+    def test_failures_back_off_exponentially_and_valid_reply_resets_cadence(self):
+        expected = [5, 10, 20, 40, 80, 160, 320, 360, 360]
+        for minutes in expected:
+            self.notification.request_check()
+            self.notification.handle_status_response(status_response(
+                self.notification, error="Moonraker unavailable"))
+            self.assertEqual(
+                self.notification._scheduled_at,
+                self.host.reactor.monotonic() + minutes * 60.0)
+
+        self.host.params.variables["mod_check_update_interval"] = 23
+        self.notification.on_mod_params_changed()
+        self.notification.request_check()
+        self.notification.handle_status_response(status_response(
+            self.notification, available=False,
+            version="1.4.2", changes=[]))
+        self.assertEqual(self.notification.failure_streak, 0)
+        self.assertEqual(
+            self.notification._scheduled_at,
+            self.host.reactor.monotonic() + 23 * 60.0)
+
+    def test_missing_bridge_retries_and_recovers_without_ui_error(self):
+        self.notification.webhooks = None
+        self.assertFalse(self.notification.request_check())
+        self.assertEqual(
+            self.notification._scheduled_at,
+            self.host.reactor.monotonic() + FAILURE_RETRY_INTERVAL)
+        self.assertEqual(self.host.messages, [])
+
+        self.notification.webhooks = self.host.webhooks
+        self.host.reactor.run_until(self.notification._scheduled_at)
+        self.assertEqual(len(self.host.webhooks.remote_calls), 1)
+
+    def test_dispatch_timeout_and_malformed_reply_use_failure_retry(self):
+        original_call = self.host.webhooks.call_remote_method
+        self.host.webhooks.call_remote_method = mock.Mock(
+            side_effect=RuntimeError("dispatch failed"))
+        with self.assertLogs(level="ERROR"):
+            self.assertFalse(self.notification.request_check())
+        self.assertEqual(self.notification.failure_streak, 1)
+
+        self.host.webhooks.call_remote_method = original_call
+        self.notification.request_check()
+        self.host.reactor.run_until(
+            self.host.reactor.monotonic() + CHECK_TIMEOUT)
+        self.assertEqual(self.notification.failure_streak, 2)
+
+        self.notification.request_check()
+        with self.assertLogs(level="ERROR"):
+            self.notification.handle_status_response(WebRequest(
+                token=self.notification.check_token, available="yes"))
+        self.assertEqual(self.notification.failure_streak, 3)
+        self.assertLessEqual(
+            self.notification._scheduled_at - self.host.reactor.monotonic(),
+            MAX_FAILURE_RETRY_INTERVAL)
 
     def test_long_changelog_is_bounded_scrollable_and_explicitly_truncated(self):
         changes = ["Change %02d" % index for index in range(80)]
@@ -378,7 +537,10 @@ class ForgeXUpdateNotificationTest(unittest.TestCase):
         self.notification.handle_action("update.install")
 
         self.host.reactor.run_until(
-            self.host.reactor.monotonic() + CHECK_TIMEOUT)
+            self.host.reactor.monotonic() + 14.99)
+        self.assertTrue(self.notification.installing)
+        self.host.reactor.run_until(
+            self.host.reactor.monotonic() + 0.01)
 
         self.assertFalse(self.notification.installing)
         self.assertIsNone(self.host.busy_message)
@@ -401,6 +563,24 @@ class ForgeXUpdateNotificationTest(unittest.TestCase):
         self.assertIn("Network unavailable", self.host.messages[-1][0])
         self.assertEqual(
             self.host.messages[-1][1], ScreenPage.UPDATE_NOTIFICATION)
+
+    def test_disabling_checks_does_not_interrupt_confirmed_installation(self):
+        self.request_and_respond()
+        self.notification.handle_action("update.install")
+        self.notification.handle_update_progress(WebRequest(
+            token=self.notification.install_token,
+            state="accepted", message="Installing"))
+        install_token = self.notification.install_token
+
+        self.host.params.variables["mod_check_update"] = False
+        self.notification.started = True
+        self.notification.on_mod_params_changed()
+
+        self.assertTrue(self.notification.installing)
+        self.assertTrue(self.notification.install_confirmed)
+        self.assertEqual(self.notification.install_token, install_token)
+        self.assertEqual(self.host.busy_message, "Installing")
+        self.assertEqual(self.host.page, ScreenPage.UPDATE_NOTIFICATION)
 
     def test_update_completion_shows_automatic_and_manual_restart_instructions(self):
         self.request_and_respond()

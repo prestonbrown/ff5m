@@ -13,9 +13,12 @@ from ui import ThemeColor
 
 
 STARTUP_DELAY = 5.0
-CHECK_TIMEOUT = 15.0
+CHECK_TIMEOUT = 60.0
+INSTALL_ACK_TIMEOUT = 15.0
 FAILURE_RETRY_INTERVAL = 300.0
-RECHECK_INTERVAL = 21600.0
+MAX_FAILURE_RETRY_INTERVAL = 21600.0
+SAFETY_RETRY_INTERVAL = 300.0
+DEFAULT_UPDATE_INTERVAL_MINUTES = 360
 CHANGE_PAGE_SIZE = 6
 MAX_CHANGE_ITEMS = 24
 MAX_VERSION_LENGTH = 64
@@ -39,6 +42,9 @@ class ForgeXUpdateNotification:
         self.check_in_flight = False
         self.check_pending = False
         self.check_token = 0
+        self.failure_streak = 0
+        self.check_enabled = True
+        self.check_interval = DEFAULT_UPDATE_INTERVAL_MINUTES * 60.0
         self._schedule_generation = 0
         self._scheduled_at = None
         self.installed_version = None
@@ -61,6 +67,11 @@ class ForgeXUpdateNotification:
             return
         self.started = True
         self.active = True
+        self.check_enabled, self.check_interval = self._read_settings()
+        if not self.check_enabled:
+            self._disable_availability_check()
+            logging.info("[feather_screen] update checks disabled")
+            return
         logging.info("[feather_screen] update check scheduled")
         self._schedule_check(STARTUP_DELAY)
 
@@ -69,6 +80,7 @@ class ForgeXUpdateNotification:
         self.active = False
         self.check_in_flight = False
         self.check_pending = False
+        self.check_token += 1
         self._schedule_generation += 1
         self._scheduled_at = None
 
@@ -77,8 +89,59 @@ class ForgeXUpdateNotification:
         return getattr(
             self.host, "page", None) == ScreenPage.UPDATE_NOTIFICATION
 
+    def _read_settings(self):
+        params = getattr(self.host, "params", None)
+        if params is None:
+            printer = getattr(self.host, "printer", None)
+            if printer is not None:
+                params = printer.lookup_object("mod_params", None)
+        variables = getattr(params, "variables", {})
+
+        enabled = bool(variables.get("mod_check_update", True))
+        minutes = variables.get(
+            "mod_check_update_interval", DEFAULT_UPDATE_INTERVAL_MINUTES)
+        if (not isinstance(minutes, int) or isinstance(minutes, bool)
+                or minutes <= 0):
+            minutes = DEFAULT_UPDATE_INTERVAL_MINUTES
+        return enabled, minutes * 60.0
+
+    def on_mod_params_changed(self):
+        enabled, interval = self._read_settings()
+        enabled_changed = enabled != self.check_enabled
+        interval_changed = interval != self.check_interval
+        self.check_enabled = enabled
+        self.check_interval = interval
+
+        if not self.started or not self.active:
+            return
+        if enabled_changed and not enabled:
+            self._disable_availability_check()
+            return
+        if enabled_changed:
+            self.failure_streak = 0
+            self._replace_scheduled_check(0.0)
+            return
+        if enabled and interval_changed and not self.check_in_flight:
+            self.failure_streak = 0
+            self._replace_scheduled_check(interval)
+
+    def _disable_availability_check(self):
+        self._cancel_scheduled_check()
+        self.check_pending = False
+        self.check_in_flight = False
+        self.check_token += 1
+        if self.installing:
+            return
+
+        self.installed_version = None
+        self.available_version = None
+        self.changes = ()
+        self.change_page = 0
+        if self.dialog_visible:
+            self.host._show_page(self.host.page_for_print_state())
+
     def _schedule_check(self, delay):
-        if not self.active:
+        if not self.active or not self.check_enabled:
             return
         deadline = self.reactor.monotonic() + max(0.0, float(delay))
         if self._scheduled_at is not None and self._scheduled_at <= deadline:
@@ -100,6 +163,18 @@ class ForgeXUpdateNotification:
             return
         self._schedule_generation += 1
         self._scheduled_at = None
+
+    def _replace_scheduled_check(self, delay):
+        self._cancel_scheduled_check()
+        self._schedule_check(delay)
+
+    def _schedule_failure_retry(self):
+        exponent = min(self.failure_streak, 7)
+        delay = min(
+            FAILURE_RETRY_INTERVAL * (2 ** exponent),
+            MAX_FAILURE_RETRY_INTERVAL)
+        self.failure_streak += 1
+        self._schedule_check(delay)
 
     def _print_active(self):
         if getattr(self.host, "print_state", None) in _ACTIVE_PRINT_STATES:
@@ -128,17 +203,18 @@ class ForgeXUpdateNotification:
             return True
 
     def request_check(self):
-        if self.check_in_flight:
+        if not self.active or not self.check_enabled or self.check_in_flight:
             return False
         if self._printer_busy():
             self.check_pending = True
             logging.info("[feather_screen] update check skipped: printer busy")
             if not self._print_active():
-                self._schedule_check(FAILURE_RETRY_INTERVAL)
+                self._schedule_check(SAFETY_RETRY_INTERVAL)
             return False
         if self.webhooks is None:
             logging.info(
                 "[feather_screen] update check failed: Moonraker bridge unavailable")
+            self._schedule_failure_retry()
             return False
 
         self.check_token += 1
@@ -153,16 +229,15 @@ class ForgeXUpdateNotification:
             self.check_in_flight = False
             logging.exception(
                 "[feather_screen] update check failed: request dispatch")
-            self._schedule_check(FAILURE_RETRY_INTERVAL)
+            self._schedule_failure_retry()
             return False
 
         def check_timeout(_eventtime):
-            if not self.active:
-                return
-            if self.check_in_flight and self.check_token == token:
+            if (self.active and self.check_enabled and self.check_in_flight
+                    and self.check_token == token):
                 self.check_in_flight = False
                 logging.info("[feather_screen] update check failed: timeout")
-                self._schedule_check(FAILURE_RETRY_INTERVAL)
+                self._schedule_failure_retry()
 
         self.reactor.register_callback(
             check_timeout, self.reactor.monotonic() + CHECK_TIMEOUT)
@@ -203,56 +278,67 @@ class ForgeXUpdateNotification:
 
     def handle_status_response(self, web_request):
         try:
-            return self._handle_status_response(web_request)
-        except Exception:
-            self.check_in_flight = False
-            logging.exception(
-                "[feather_screen] update check failed: malformed response")
-            self._schedule_check(FAILURE_RETRY_INTERVAL)
-            return "ok"
-
-    def _handle_status_response(self, web_request):
-        try:
             token = web_request.get_int("token")
         except Exception:
             logging.info(
                 "[feather_screen] update check failed: malformed response token")
             return "ok"
-        if not self.check_in_flight or token != self.check_token:
+        if not self._owns_check(token):
             return "ok"
-        self.check_in_flight = False
+
+        try:
+            return self._handle_status_response(web_request, token)
+        except Exception:
+            if not self._owns_check(token):
+                return "ok"
+            self.check_in_flight = False
+            logging.exception(
+                "[feather_screen] update check failed: malformed response")
+            self._schedule_failure_retry()
+            return "ok"
+
+    def _owns_check(self, token):
+        return (self.active and self.check_enabled and self.check_in_flight
+                and token == self.check_token)
+
+    def _handle_status_response(self, web_request, token):
+        if not self._owns_check(token):
+            return "ok"
 
         error = web_request.get_str("error", "")
         if error:
+            self.check_in_flight = False
             logging.info("[feather_screen] update check failed: %s", error)
-            self._schedule_check(FAILURE_RETRY_INTERVAL)
-            return "ok"
-        if web_request.get("available", False) is not True:
-            self.installed_version = None
-            self.available_version = None
-            self.changes = ()
-            self._schedule_check(RECHECK_INTERVAL)
+            self._schedule_failure_retry()
             return "ok"
 
+        update_available = web_request.get("available", None)
+        if not isinstance(update_available, bool):
+            raise ValueError("availability is not boolean")
         installed = self._bounded_version(
             web_request.get("installed_version", None))
         available = self._bounded_version(
             web_request.get("available_version", None))
-        try:
-            changes = self._bounded_changes(
-                web_request.get("changes", ()),
-                web_request.get("changes_total", 0))
-        except (TypeError, ValueError):
-            logging.info(
-                "[feather_screen] update check failed: malformed update information")
-            self._schedule_check(FAILURE_RETRY_INTERVAL)
-            return "ok"
-        if installed is None or available is None or installed == available:
-            logging.info(
-                "[feather_screen] update check failed: incomplete version information")
-            self._schedule_check(FAILURE_RETRY_INTERVAL)
+        if installed is None or available is None:
+            raise ValueError("incomplete version information")
+
+        if not update_available:
+            self.check_in_flight = False
+            self.failure_streak = 0
+            self.installed_version = None
+            self.available_version = None
+            self.changes = ()
+            self._schedule_check(self.check_interval)
             return "ok"
 
+        changes = self._bounded_changes(
+            web_request.get("changes", ()),
+            web_request.get("changes_total", 0))
+        if installed == available:
+            raise ValueError("available version matches installed version")
+
+        self.check_in_flight = False
+        self.failure_streak = 0
         self.installed_version = installed
         self.available_version = available
         self.changes = changes or ("CHANGELOG UNAVAILABLE",)
@@ -260,7 +346,7 @@ class ForgeXUpdateNotification:
         logging.info("[feather_screen] update available: %s -> %s",
                      installed, available)
         if available == self.dismissed_version:
-            self._schedule_check(RECHECK_INTERVAL)
+            self._schedule_check(self.check_interval)
             return "ok"
         if not self.maybe_present():
             logging.info("[feather_screen] update notification deferred")
@@ -423,7 +509,7 @@ class ForgeXUpdateNotification:
             self.dismissed_version = self.available_version
             logging.info("[feather_screen] update dismissed: %s",
                          self.dismissed_version)
-            self._schedule_check(RECHECK_INTERVAL)
+            self._schedule_check(self.check_interval)
             self.host._show_page(ScreenPage.IDLE_HOME)
             return
         if action != "update.install":
@@ -466,4 +552,4 @@ class ForgeXUpdateNotification:
             self._schedule_check(FAILURE_RETRY_INTERVAL)
 
         self.reactor.register_callback(
-            start_timeout, self.reactor.monotonic() + CHECK_TIMEOUT)
+            start_timeout, self.reactor.monotonic() + INSTALL_ACK_TIMEOUT)
