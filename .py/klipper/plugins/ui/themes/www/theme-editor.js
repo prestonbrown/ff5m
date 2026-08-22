@@ -1186,7 +1186,7 @@ async function applyCurrentTheme() {
   }
 
   status.className = "status ok";
-  status.textContent = `Applied ${result.name} • ${result.filename}`;
+  status.textContent = `Applied ${result.name} • ${result.filename} • splash/${result.screen_filename}`;
   persistCurrentGeneratedTheme();
 }
 

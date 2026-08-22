@@ -21,7 +21,7 @@ The editor:
 - generates light or dark palettes from common color harmonies;
 - keeps generated themes in local browser storage;
 - edits ThemeColor and ThemeRole values live;
-- validates, downloads, and optionally applies a custom theme JSON.
+- validates, downloads, and optionally applies UI plus splash/logged themes.
 
 No mandatory third-party dependencies are required. If jsonschema is installed,
 theme.schema.json is additionally used for validation.
@@ -93,6 +93,25 @@ FALLBACK_DEFAULTS = {
     "temperature_bed": "primary",
     "temperature_fan": "primary",
 }
+
+SCREEN_THEME_COLOR_SOURCES = (
+    ("background", "background"),
+    ("text", "primary"),
+    ("text_highlight", "bright"),
+    ("accent", "secondary"),
+    ("wire", "text"),
+    ("shadow", "primary_dark"),
+    ("beam", "bright"),
+    ("glitch_primary", "primary"),
+    ("glitch_secondary", "secondary"),
+    ("glitch_cut", "overlay"),
+    ("subtitle", "text"),
+    ("debug", "dim"),
+    ("info", "text"),
+    ("warn", "warning"),
+    ("error", "danger"),
+    ("uptime", "secondary"),
+)
 
 
 def normalize_hex(value):
@@ -362,6 +381,19 @@ def safe_filename(name):
     return value or "custom-theme"
 
 
+def screen_theme_document(document):
+    colors = document["colors"]
+    return {
+        "schema_version": 1,
+        "name": document["name"],
+        "description": document["description"],
+        "colors": {
+            screen_role: normalize_hex(colors[theme_color])
+            for screen_role, theme_color in SCREEN_THEME_COLOR_SOURCES
+        },
+    }
+
+
 class ThemeApplyError(RuntimeError):
     def __init__(self, message, status=HTTPStatus.CONFLICT, saved=False):
         super().__init__(message)
@@ -405,6 +437,7 @@ class App:
         self.schema = Path(schema) if schema else None
         self.www_dir = Path(www_dir)
         self.user_themes_dir = Path(user_themes_dir)
+        self.screen_themes_dir = self.user_themes_dir / "splash"
         self.printer_marker = Path(printer_marker)
         self.moonraker_url = str(moonraker_url).rstrip("/")
         self.requester = requester or urllib.request.urlopen
@@ -559,11 +592,40 @@ class App:
                 "Theme exceeds the %d-byte runtime limit." %
                 MAX_THEME_FILE_BYTES, HTTPStatus.BAD_REQUEST)
         path = self.user_themes_dir / filename
+
+        screen_document = screen_theme_document(document)
+        screen_data = (json.dumps(screen_document, ensure_ascii=False, indent=2)
+                       + "\n").encode("utf-8")
+        screen_path = (self.screen_themes_dir /
+                       (safe_filename(document["name"]) + ".json"))
         try:
-            atomic_write(path, data)
+            previous_screen_data = screen_path.read_bytes()
+        except FileNotFoundError:
+            previous_screen_data = None
         except OSError as exc:
             raise ThemeApplyError(
-                "Unable to save theme on the printer: %s" % exc,
+                "Unable to read the existing splash/logged theme: %s" % exc,
+                HTTPStatus.INTERNAL_SERVER_ERROR) from exc
+
+        screen_written = False
+        try:
+            atomic_write(screen_path, screen_data)
+            screen_written = True
+            atomic_write(path, data)
+        except OSError as exc:
+            if screen_written:
+                try:
+                    if previous_screen_data is None:
+                        screen_path.unlink(missing_ok=True)
+                    else:
+                        atomic_write(screen_path, previous_screen_data)
+                except OSError as rollback_exc:
+                    raise ThemeApplyError(
+                        "Unable to save the theme pair; restoring the prior "
+                        "splash/logged theme also failed: %s" % rollback_exc,
+                        HTTPStatus.INTERNAL_SERVER_ERROR) from exc
+            raise ThemeApplyError(
+                "Unable to save the theme pair on the printer: %s" % exc,
                 HTTPStatus.INTERNAL_SERVER_ERROR) from exc
 
         command = "_APPLY_TM_EDITOR_THEME THEME='%s'" % document["name"]
@@ -578,6 +640,7 @@ class App:
             "ok": True,
             "name": document["name"],
             "filename": filename,
+            "screen_filename": screen_path.name,
         }
 
 
