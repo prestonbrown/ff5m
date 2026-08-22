@@ -1,6 +1,7 @@
 # Feather UI Custom Themes
 
-The **Theme Editor** lets you create a custom Feather UI theme in your browser, preview the changes, and download a ready-to-use JSON file.
+The **Theme Editor** lets you create a custom Feather UI theme in your browser,
+preview the changes, and save a ready-to-use JSON file.
 
 You do not need to edit JSON manually or install extra Python packages.
 
@@ -107,9 +108,13 @@ Keep the terminal open while using the editor. Press `Ctrl+C` to stop it.
 4. Enter a unique theme name.
 5. Optionally enter a description.
 6. Make sure the theme is reported as valid.
-7. Click **Download JSON**.
+7. Open **Save** and click **Download JSON**.
 
 The downloaded JSON file is your custom theme.
+
+When the editor is started from the printer, the **Save** menu also offers
+**Apply to printer**. It saves the theme in `mod_data/themes/` and activates it
+immediately. Apply is disabled while a print is active or paused.
 
 ## 4. Install the Theme
 
@@ -149,4 +154,7 @@ Create it in the Fluidd or Mainsail configuration file browser.
 
 ## For Developers
 
-The editor also supports optional JSON Schema validation with `jsonschema`. The separate `theme_preview.py` tool can generate static theme previews and requires Pillow. Neither is needed for normal theme creation.
+The editor also supports optional JSON Schema validation with `jsonschema`.
+Its HTML, CSS, and JavaScript files live in `www/`. The separate
+`theme_preview.py` tool can generate static theme previews and requires Pillow.
+Neither is needed for normal theme creation.

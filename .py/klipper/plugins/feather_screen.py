@@ -28,7 +28,7 @@ if not sys.path or sys.path[0] != _PLUGIN_ROOT:
 
 from ui import (
     Command, DismissToast, FeatherRenderer, ThemeColor,
-    parse_render_receipt,
+    normalize_theme_name, parse_render_receipt,
 )
 from ff5m_ui.screen import ScreenPage
 from ff5m_ui.move import runtime as move_ui
@@ -318,6 +318,8 @@ class FeatherScreen(FeatherPagesMixin, FeatherControlsMixin):
             "FEATHER_ABORT", self.cmd_FEATHER_ABORT,
             desc=self.cmd_FEATHER_ABORT_help)
         self.gcode.register_immediate_command("FEATHER_ABORT")
+        self.gcode.register_command(
+            "_REFRESH_FEATHER_THEME", self.cmd_REFRESH_FEATHER_THEME)
         # Intentionally undocumented.  The implementation remains a cold
         # lazy feature until ACTION=RUN is explicitly requested on a printer.
         self.gcode.register_command("_FEATHER_UI_TEST", self.cmd_FEATHER_UI_TEST)
@@ -676,6 +678,17 @@ class FeatherScreen(FeatherPagesMixin, FeatherControlsMixin):
                 str(gcmd.get("CAPTURE_INTERVAL", "0")).strip())
         except Exception as exc:
             raise gcmd.error(str(exc))
+
+    def cmd_REFRESH_FEATHER_THEME(self, gcmd):
+        """Reload user themes and redraw the configured palette."""
+        self._require_idle()
+        name = normalize_theme_name(self._setting("feather_theme", "DEFAULT"))
+        self.renderer.reload_user_themes()
+        if name not in self.renderer.theme_names():
+            raise gcmd.error("Theme %s is unavailable or invalid" % name)
+        self.renderer.set_theme(name)
+        self._show_page(self.page)
+        gcmd.respond_info("Feather theme refreshed: %s" % name)
 
     def _process_touch_events(self, eventtime):
         try:
