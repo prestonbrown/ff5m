@@ -21,7 +21,9 @@ SAFETY_RETRY_INTERVAL = 300.0
 DEFAULT_UPDATE_INTERVAL_MINUTES = 360
 CHANGE_PAGE_SIZE = 6
 MAX_CHANGE_ITEMS = 24
+MAX_RECOVERY_FILES = 64
 MAX_VERSION_LENGTH = 64
+MAX_REVISION_LENGTH = 128
 MAX_CHANGE_LENGTH = 160
 MAX_PROGRESS_LENGTH = 160
 
@@ -49,11 +51,16 @@ class ForgeXUpdateNotification:
         self._scheduled_at = None
         self.installed_version = None
         self.available_version = None
-        self.dismissed_version = None
+        self.available_revision = None
+        self.dismissed_offer = None
         self.changes = ()
         self.change_page = 0
+        self.recovery_files = ()
+        self.reset_confirmation = False
+        self.resetting = False
         self.installing = False
         self.install_confirmed = False
+        self.restart_notice = False
         self.install_token = 0
 
         if self.webhooks is not None:
@@ -133,10 +140,7 @@ class ForgeXUpdateNotification:
         if self.installing:
             return
 
-        self.installed_version = None
-        self.available_version = None
-        self.changes = ()
-        self.change_page = 0
+        self._clear_available_offer()
         if self.dialog_visible:
             self.host._show_page(self.host.page_for_print_state())
 
@@ -253,28 +257,61 @@ class ForgeXUpdateNotification:
         return value
 
     @staticmethod
-    def _bounded_changes(raw_changes, reported_total):
-        if not isinstance(raw_changes, (tuple, list)):
-            raise ValueError("commit subjects are not a list")
-        subjects = []
-        for raw_subject in raw_changes:
-            if not isinstance(raw_subject, str):
+    def _bounded_revision(value):
+        if not isinstance(value, str):
+            return None
+        value = value.strip()
+        if not value or value == "?" or len(value) > MAX_REVISION_LENGTH:
+            return None
+        return value
+
+    def _available_offer(self):
+        if self.available_version is None or self.available_revision is None:
+            return None
+        return self.available_version, self.available_revision
+
+    def _clear_available_offer(self):
+        self.installed_version = None
+        self.available_version = None
+        self.available_revision = None
+        self.changes = ()
+        self.change_page = 0
+        self.recovery_files = ()
+        self.reset_confirmation = False
+
+    @staticmethod
+    def _bounded_text_items(raw_items, reported_total, limit, noun):
+        if not isinstance(raw_items, (tuple, list)):
+            raise ValueError("%s are not a list" % noun.lower())
+        items = []
+        for raw_item in raw_items:
+            if not isinstance(raw_item, str):
                 continue
-            subject = " ".join(raw_subject.split())
-            if not subject:
+            item = " ".join(raw_item.split())
+            if not item:
                 continue
-            subjects.append(subject[:MAX_CHANGE_LENGTH])
+            items.append(item[:MAX_CHANGE_LENGTH])
 
         try:
-            total = max(len(raw_changes), int(reported_total))
+            total = max(len(raw_items), int(reported_total))
         except (TypeError, ValueError):
-            total = len(raw_changes)
-        if total > MAX_CHANGE_ITEMS:
-            visible = subjects[:MAX_CHANGE_ITEMS - 1]
-            visible.append("... %d MORE CHANGES NOT SHOWN" %
-                           max(1, total - len(visible)))
+            total = len(raw_items)
+        if total > limit:
+            visible = items[:limit - 1]
+            visible.append("... %d MORE %s NOT SHOWN" %
+                           (max(1, total - len(visible)), noun))
             return tuple(visible)
-        return tuple(subjects[:MAX_CHANGE_ITEMS])
+        return tuple(items[:limit])
+
+    @classmethod
+    def _bounded_changes(cls, raw_changes, reported_total):
+        return cls._bounded_text_items(
+            raw_changes, reported_total, MAX_CHANGE_ITEMS, "CHANGES")
+
+    @classmethod
+    def _bounded_recovery_files(cls, raw_files, reported_total):
+        return cls._bounded_text_items(
+            raw_files, reported_total, MAX_RECOVERY_FILES, "FILES")
 
     def handle_status_response(self, web_request):
         try:
@@ -325,15 +362,17 @@ class ForgeXUpdateNotification:
         if not update_available:
             self.check_in_flight = False
             self.failure_streak = 0
-            self.installed_version = None
-            self.available_version = None
-            self.changes = ()
+            self._clear_available_offer()
             self._schedule_check(self.check_interval)
             return "ok"
 
         changes = self._bounded_changes(
             web_request.get("changes", ()),
             web_request.get("changes_total", 0))
+        revision = self._bounded_revision(
+            web_request.get("available_revision", None))
+        if revision is None:
+            raise ValueError("incomplete revision information")
         if installed == available:
             raise ValueError("available version matches installed version")
 
@@ -341,11 +380,14 @@ class ForgeXUpdateNotification:
         self.failure_streak = 0
         self.installed_version = installed
         self.available_version = available
+        self.available_revision = revision
         self.changes = changes or ("CHANGELOG UNAVAILABLE",)
         self.change_page = 0
+        self.recovery_files = ()
+        self.reset_confirmation = False
         logging.info("[feather_screen] update available: %s -> %s",
                      installed, available)
-        if available == self.dismissed_version:
+        if (available, revision) == self.dismissed_offer:
             self._schedule_check(self.check_interval)
             return "ok"
         if not self.maybe_present():
@@ -362,7 +404,7 @@ class ForgeXUpdateNotification:
     def maybe_present(self):
         if (self.installing or self.dialog_visible
                 or self.available_version is None
-                or self.available_version == self.dismissed_version
+                or self._available_offer() == self.dismissed_offer
                 or not self._can_present()):
             return False
         self.change_page = 0
@@ -391,10 +433,16 @@ class ForgeXUpdateNotification:
 
     def render(self):
         if self.installing:
+            if self.restart_notice:
+                self._render_restart_notice()
+                return
             self.host.renderer.loader(
                 getattr(self.host, "busy_message", None)
                 or "UPDATING FORGE-X...",
                 getattr(self.host, "busy_phase", 0))
+            return
+        if self.recovery_files:
+            self._render_recovery()
             return
         pagination = Pagination(
             self.changes or ("CHANGELOG UNAVAILABLE",),
@@ -430,6 +478,59 @@ class ForgeXUpdateNotification:
                 ThemeColor.DIM, "JetBrainsMono 8pt", "center", "middle"))
         self.host.renderer.send(commands)
 
+    def _render_restart_notice(self):
+        commands = self.host.renderer.begin_page("Forge-X update")
+        commands += self.host.renderer.dialog(
+            "UPDATE COMPLETE",
+            ("PRINTER WILL RESTART NOW",
+             "IF IT DOES NOT, RESTART IT MANUALLY"),
+            (), x=70, y=105, width=660, height=280, tone="info",
+            preserve_header_action=False)
+        self.host.renderer.send(commands)
+
+    def _render_recovery(self):
+        commands = self.host.renderer.begin_page("Forge-X reset")
+        if self.reset_confirmation:
+            commands += self.host.renderer.dialog(
+                "DELETE LOCAL CHANGES?",
+                ("ALL CHANGES TO SYSTEM MOD FILES WILL BE LOST.",
+                 "TRACKED FILES WILL BE RESTORED; UNTRACKED FILES REMOVED."),
+                (("update.reset.back", "BACK", "enabled"),
+                 ("update.reset.confirm", "RESET", "danger")),
+                x=70, y=105, width=660, height=280, tone="danger")
+            self.host.renderer.send(commands)
+            return
+
+        pagination = Pagination(
+            self.recovery_files, self.change_page, CHANGE_PAGE_SIZE)
+        self.change_page = pagination.page
+        commands += self.host.renderer.dialog(
+            "LOCAL FILES BLOCK UPDATE", (),
+            (("update.later", "LATER", "enabled"),
+             ("update.reset", "RESET", "danger")),
+            x=40, y=72, width=720, height=350, tone="danger")
+        commands.append(self.host.renderer.text(
+            72, 150, "FILES THAT RESET WILL REMOVE OR RESTORE",
+            ThemeColor.DANGER, "JetBrainsMono Bold 8pt",
+            max_width=570, truncate=True))
+        for index, path in enumerate(pagination.visible):
+            commands.append(self.host.renderer.text(
+                78, 184 + index * 30, "- " + path,
+                ThemeColor.TEXT, "JetBrainsMono 8pt",
+                max_width=570, truncate=True))
+        if pagination.page_count > 1:
+            commands += self.host.renderer.arrow_button(
+                "update.prev", 678, 137, 52, 48, "up",
+                active=pagination.has_previous)
+            commands += self.host.renderer.arrow_button(
+                "update.next", 678, 287, 52, 48, "down",
+                active=pagination.has_next)
+            commands.append(self.host.renderer.text(
+                704, 237, "%d / %d" %
+                (pagination.page + 1, pagination.page_count),
+                ThemeColor.DIM, "JetBrainsMono 8pt", "center", "middle"))
+        self.host.renderer.send(commands)
+
     @staticmethod
     def _bounded_progress(value):
         if not isinstance(value, str):
@@ -443,6 +544,7 @@ class ForgeXUpdateNotification:
             if detail:
                 message += "\n" + detail
         self.installing = True
+        self.restart_notice = False
         self.host.busy_message = message
         self.host.busy_phase = 0
         if self.dialog_visible:
@@ -453,7 +555,16 @@ class ForgeXUpdateNotification:
             return
         self.installing = False
         self.install_confirmed = False
+        self.resetting = False
+        self.restart_notice = False
         self.host.busy_message = None
+
+    def _show_restart_notice(self):
+        self.installing = True
+        self.restart_notice = True
+        self.host.busy_message = "Forge-X update complete"
+        if self.dialog_visible:
+            self.render()
 
     def handle_update_progress(self, web_request):
         try:
@@ -471,22 +582,50 @@ class ForgeXUpdateNotification:
         message = self._bounded_progress(
             web_request.get_str("message", ""))
         if state in ("accepted", "progress"):
+            if self.restart_notice:
+                return "ok"
             self.install_confirmed = True
             self._show_install_progress(message)
             return "ok"
         if state in ("complete", "restarting"):
             self.install_confirmed = True
-            self._show_install_progress(
-                "PRINTER WILL RESTART NOW",
-                "IF IT DOES NOT RESTART AUTOMATICALLY, RESTART IT MANUALLY")
+            self._show_restart_notice()
+            return "ok"
+        if state == "reset_complete" and self.resetting:
+            self._clear_install_progress()
+            self._clear_available_offer()
+            self.failure_streak = 0
+            self.host._show_page(ScreenPage.IDLE_HOME)
+            self._replace_scheduled_check(0.0)
             return "ok"
         if state != "failed":
             return "ok"
 
+        reset_failed = self.resetting
+        recovery_required = web_request.get(
+            "recovery_required", False) is True
+        recovery_files = ()
+        if recovery_required:
+            recovery_files = self._bounded_recovery_files(
+                web_request.get("conflicting_files", ()),
+                web_request.get("conflicts_total", 0))
         self._clear_install_progress()
+        if recovery_files:
+            self.recovery_files = recovery_files
+            self.reset_confirmation = False
+            self.change_page = 0
+            logging.info(
+                "[feather_screen] update blocked by local repository changes")
+            if self.dialog_visible:
+                self.render()
+            else:
+                self.host._show_page(ScreenPage.UPDATE_NOTIFICATION)
+            return "ok"
+
         logging.info("[feather_screen] update failed: %s", message)
         self.host._show_message(
-            "Unable to update Forge-X: %s" %
+            ("Unable to reset Forge-X: %s" if reset_failed
+             else "Unable to update Forge-X: %s") %
             (message or "unknown error"),
             ScreenPage.UPDATE_NOTIFICATION)
         self._schedule_check(FAILURE_RETRY_INTERVAL)
@@ -495,7 +634,8 @@ class ForgeXUpdateNotification:
     def handle_action(self, action):
         if action in ("update.prev", "update.next"):
             pagination = Pagination(
-                self.changes, self.change_page, CHANGE_PAGE_SIZE)
+                self.recovery_files or self.changes,
+                self.change_page, CHANGE_PAGE_SIZE)
             delta = -1 if action == "update.prev" else 1
             target = max(
                 0, min(pagination.page + delta, pagination.page_count - 1))
@@ -506,48 +646,81 @@ class ForgeXUpdateNotification:
         if not self.dialog_visible:
             return
         if action == "update.later":
-            self.dismissed_version = self.available_version
+            self.dismissed_offer = self._available_offer()
             logging.info("[feather_screen] update dismissed: %s",
-                         self.dismissed_version)
+                         self.available_version)
+            self.recovery_files = ()
+            self.reset_confirmation = False
             self._schedule_check(self.check_interval)
             self.host._show_page(ScreenPage.IDLE_HOME)
             return
-        if action != "update.install":
+        if action == "update.reset":
+            if self.recovery_files:
+                self.reset_confirmation = True
+                self.render()
+            return
+        if action == "update.reset.back":
+            if self.recovery_files:
+                self.reset_confirmation = False
+                self.render()
+            return
+        reset = action == "update.reset.confirm"
+        if reset:
+            if not self.recovery_files or not self.reset_confirmation:
+                return
+        elif action != "update.install" or self.recovery_files:
             return
         if self._printer_busy():
             logging.info(
-                "[feather_screen] update request rejected: printer busy")
+                "[feather_screen] update operation rejected: printer busy")
             self.host._show_page(self.host.page_for_print_state())
             return
 
         version = self.available_version
+        revision = self.available_revision
         self.install_token += 1
         token = self.install_token
         self.install_confirmed = False
-        self._show_install_progress("PREPARING FORGE-X UPDATE...")
+        self.resetting = reset
+        self.reset_confirmation = False
+        method = ("feather_reset_forge_x_update" if reset
+                  else "feather_start_forge_x_update")
+        preparing = ("RESETTING FORGE-X REPOSITORY..." if reset
+                     else "PREPARING FORGE-X UPDATE...")
+        self._show_install_progress(preparing)
         try:
-            self.webhooks.call_remote_method(
-                "feather_start_forge_x_update", expected_version=version,
-                token=token)
+            if reset:
+                self.webhooks.call_remote_method(method, token=token)
+            else:
+                self.webhooks.call_remote_method(
+                    method, expected_version=version,
+                    expected_revision=revision, token=token)
         except Exception as exc:
             self._clear_install_progress()
             logging.exception(
-                "[feather_screen] update request failed: dispatch")
+                "[feather_screen] update operation failed: dispatch")
             self.host._show_message(
-                "Unable to start update: %s" % exc,
-                ScreenPage.IDLE_HOME)
+                ("Unable to start reset: %s" if reset
+                 else "Unable to start update: %s") % exc,
+                ScreenPage.UPDATE_NOTIFICATION if reset
+                else ScreenPage.IDLE_HOME)
             self._schedule_check(FAILURE_RETRY_INTERVAL)
             return
-        logging.info("[feather_screen] update requested: %s", version)
+        logging.info(
+            "[feather_screen] %s requested: %s",
+            "repository reset" if reset else "update", version)
 
         def start_timeout(_eventtime):
             if (not self.installing or self.install_token != token
                     or self.install_confirmed):
                 return
             self._clear_install_progress()
-            logging.info("[feather_screen] update request failed: timeout")
+            logging.info(
+                "[feather_screen] update operation failed: timeout")
             self.host._show_message(
-                "Unable to start Forge-X update: Moonraker did not respond",
+                ("Unable to start Forge-X reset: Moonraker did not respond"
+                 if reset else
+                 "Unable to start Forge-X update: Moonraker did not respond"),
                 ScreenPage.UPDATE_NOTIFICATION)
             self._schedule_check(FAILURE_RETRY_INTERVAL)
 

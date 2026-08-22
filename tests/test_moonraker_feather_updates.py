@@ -91,6 +91,18 @@ class InternalTransport:
         raise AssertionError("unexpected internal method: " + method)
 
 
+class ShellCommand:
+    def __init__(self):
+        self.calls = []
+        self.error_command = None
+
+    async def exec_cmd(self, command, **kwargs):
+        self.calls.append((command, kwargs))
+        if command == self.error_command:
+            raise RuntimeError("command failed")
+        return ""
+
+
 class KlippyConnection:
     def __init__(self):
         self.ready = True
@@ -119,6 +131,7 @@ class Server:
         self.internal_transport = InternalTransport()
         self.klippy_connection = KlippyConnection()
         self.job_state = JobState()
+        self.shell_command = ShellCommand()
         self.remote_methods = {}
         self.event_handlers = {}
 
@@ -135,6 +148,13 @@ class Server:
         return self.event_handlers[name](value)
 
 
+class UpdateConfig:
+    def getpath(self, option):
+        if option != "path":
+            raise AssertionError("unexpected config option: " + option)
+        return pathlib.Path("/root/printer_data/config/mod")
+
+
 class Config:
     def __init__(self, server, update_key="forge-x"):
         self.server = server
@@ -148,17 +168,57 @@ class Config:
             return self.update_key
         return default
 
+    def getsection(self, name):
+        if name != "update_manager " + self.update_key:
+            raise AssertionError("unexpected config section: " + name)
+        return UpdateConfig()
+
     def error(self, message):
         return ValueError(message)
 
 
 class ForgeXUpdateSnapshotTest(unittest.TestCase):
+    def test_git_conflict_parser_labels_and_deduplicates_paths(self):
+        message = """Updating 49dfc24..b36d9d9
+error: The following untracked working tree files would be overwritten by merge:
+    .shell/commands/ztheme_editor.sh
+Please move or remove them before you merge.
+Aborting
+error: Your local changes to the following files would be overwritten by merge:
+    config/mod.cfg
+Please commit your changes or stash them before you merge.
+Aborting
+error: The following untracked working tree files would be overwritten by merge:
+    .shell/commands/ztheme_editor.sh
+Please move or remove them before you merge.
+Aborting"""
+
+        conflicts, total = FEATHER.git_conflicting_files(message)
+
+        self.assertEqual(conflicts, [
+            "UNTRACKED: .shell/commands/ztheme_editor.sh",
+            "MODIFIED: config/mod.cfg",
+        ])
+        self.assertEqual(total, 2)
+
+    def test_git_conflict_parser_bounds_the_returned_payload(self):
+        paths = ["    generated/path-%d.cfg" % index for index in range(80)]
+        message = "\n".join([
+            "error: The following untracked working tree files would be overwritten by merge:",
+        ] + paths + ["Please move or remove them before you merge."])
+
+        conflicts, total = FEATHER.git_conflicting_files(message)
+
+        self.assertEqual(len(conflicts), FEATHER.MAX_CONFLICT_FILES)
+        self.assertEqual(total, 80)
+
     def test_available_update_uses_cached_versions_and_commit_subjects(self):
         snapshot = FEATHER.forge_x_update_snapshot(update_status())
 
         self.assertTrue(snapshot["available"])
         self.assertEqual(snapshot["installed_version"], "1.4.2")
         self.assertEqual(snapshot["available_version"], "1.4.3")
+        self.assertEqual(snapshot["available_revision"], "b" * 40)
         self.assertEqual(snapshot["changes"], [
             "Fix Wi-Fi", "Improve boot splash"])
         self.assertNotIn("sha", snapshot)
@@ -213,6 +273,7 @@ class FeatherUpdatesComponentTest(unittest.TestCase):
         self.assertEqual(set(self.server.remote_methods), {
             "feather_request_forge_x_update_status",
             "feather_start_forge_x_update",
+            "feather_reset_forge_x_update",
         })
         self.assertIn(
             "update_manager:update_response", self.server.event_handlers)
@@ -226,6 +287,7 @@ class FeatherUpdatesComponentTest(unittest.TestCase):
         self.assertEqual(request.get_endpoint(), "feather/update_status")
         self.assertEqual(request.get_args()["token"], 17)
         self.assertEqual(request.get_args()["available_version"], "1.4.3")
+        self.assertEqual(request.get_args()["available_revision"], "b" * 40)
         self.assertEqual(request.get_args()["error"], "")
 
     def test_status_failure_returns_error_without_raising(self):
@@ -239,7 +301,8 @@ class FeatherUpdatesComponentTest(unittest.TestCase):
         self.assertEqual(response["error"], "status unavailable")
 
     def test_update_delegates_to_canonical_internal_api(self):
-        asyncio.run(self.component._handle_update_request("1.4.3", 31))
+        asyncio.run(self.component._handle_update_request(
+            "1.4.3", "b" * 40, 31))
 
         self.assertEqual(self.server.internal_transport.calls, [
             ("machine.update.status", {"refresh": False}),
@@ -263,7 +326,8 @@ class FeatherUpdatesComponentTest(unittest.TestCase):
 
         self.server.internal_transport.update_event = send_progress
 
-        asyncio.run(self.component._handle_update_request("1.4.3", 32))
+        asyncio.run(self.component._handle_update_request(
+            "1.4.3", "b" * 40, 32))
 
         progress = [
             request.get_args()
@@ -284,7 +348,8 @@ class FeatherUpdatesComponentTest(unittest.TestCase):
 
         self.server.internal_transport.update_event = send_restart
 
-        asyncio.run(self.component._handle_update_request("1.4.3", 39))
+        asyncio.run(self.component._handle_update_request(
+            "1.4.3", "b" * 40, 39))
 
         restarting = [
             request.get_args()
@@ -296,6 +361,21 @@ class FeatherUpdatesComponentTest(unittest.TestCase):
             "message": "RESTARTING PRINTER...",
         }])
 
+    def test_update_manager_completion_is_forwarded_as_completion(self):
+        self.component.update_token = 40
+        self.component.update_operation = "update"
+
+        completion = self.component._handle_update_progress({
+            "application": "forge-x",
+            "message": "Update Finished...",
+            "complete": True,
+        })
+        asyncio.run(completion)
+
+        response = self.server.klippy_connection.requests[-1].get_args()
+        self.assertEqual(response["token"], 40)
+        self.assertEqual(response["state"], "complete")
+
     def test_configured_key_selects_status_and_canonical_update_target(self):
         server = Server()
         server.internal_transport.status = {
@@ -303,7 +383,8 @@ class FeatherUpdatesComponentTest(unittest.TestCase):
         component = FEATHER.FeatherUpdates(Config(
             server, update_key="feather-release"))
 
-        asyncio.run(component._handle_update_request("1.4.3", 33))
+        asyncio.run(component._handle_update_request(
+            "1.4.3", "b" * 40, 33))
 
         self.assertEqual(server.internal_transport.calls, [
             ("machine.update.status", {"refresh": False}),
@@ -323,7 +404,8 @@ class FeatherUpdatesComponentTest(unittest.TestCase):
     def test_update_is_rejected_while_paused(self):
         self.server.job_state.state = "paused"
 
-        asyncio.run(self.component._handle_update_request("1.4.3", 34))
+        asyncio.run(self.component._handle_update_request(
+            "1.4.3", "b" * 40, 34))
 
         self.assertEqual(self.server.internal_transport.calls, [])
         response = self.server.klippy_connection.requests[-1].get_args()
@@ -331,7 +413,8 @@ class FeatherUpdatesComponentTest(unittest.TestCase):
         self.assertIn("idle", response["message"])
 
     def test_update_is_rejected_if_available_version_changed(self):
-        asyncio.run(self.component._handle_update_request("1.4.4", 35))
+        asyncio.run(self.component._handle_update_request(
+            "1.4.4", "b" * 40, 35))
 
         self.assertEqual(self.server.internal_transport.calls, [
             ("machine.update.status", {"refresh": False})])
@@ -339,11 +422,21 @@ class FeatherUpdatesComponentTest(unittest.TestCase):
             self.server.klippy_connection.requests[-1].get_args()["state"],
             "failed")
 
+    def test_update_is_rejected_if_available_revision_changed(self):
+        asyncio.run(self.component._handle_update_request(
+            "1.4.3", "c" * 40, 46))
+
+        self.assertEqual(self.server.internal_transport.calls, [
+            ("machine.update.status", {"refresh": False})])
+        response = self.server.klippy_connection.requests[-1].get_args()
+        self.assertEqual(response["state"], "failed")
+
     def test_update_rechecks_idle_after_reading_status(self):
         self.server.internal_transport.after_status = lambda: setattr(
             self.server.job_state, "state", "printing")
 
-        asyncio.run(self.component._handle_update_request("1.4.3", 36))
+        asyncio.run(self.component._handle_update_request(
+            "1.4.3", "b" * 40, 36))
 
         self.assertEqual(self.server.internal_transport.calls, [
             ("machine.update.status", {"refresh": False})])
@@ -353,7 +446,8 @@ class FeatherUpdatesComponentTest(unittest.TestCase):
             "update unavailable")
 
         with self.assertLogs(level="ERROR"):
-            asyncio.run(self.component._handle_update_request("1.4.3", 37))
+            asyncio.run(self.component._handle_update_request(
+                "1.4.3", "b" * 40, 37))
 
         self.assertEqual(
             self.server.internal_transport.calls[-1][0],
@@ -362,11 +456,109 @@ class FeatherUpdatesComponentTest(unittest.TestCase):
         self.assertEqual(response["state"], "failed")
         self.assertIn("update unavailable", response["message"])
 
+    def test_git_conflict_failure_returns_reset_details(self):
+        self.server.internal_transport.update_error = RuntimeError("""
+error: The following untracked working tree files would be overwritten by merge:
+    .shell/commands/ztheme_editor.sh
+Please move or remove them before you merge.
+Aborting""")
+
+        with self.assertLogs(level="ERROR"):
+            asyncio.run(self.component._handle_update_request(
+                "1.4.3", "b" * 40, 41))
+
+        response = self.server.klippy_connection.requests[-1].get_args()
+        self.assertEqual(response["state"], "failed")
+        self.assertTrue(response["recovery_required"])
+        self.assertEqual(response["conflicting_files"], [
+            "UNTRACKED: .shell/commands/ztheme_editor.sh"])
+        self.assertEqual(response["conflicts_total"], 1)
+
+    def test_generic_pull_failure_recovers_conflicts_from_cached_git_output(self):
+        self.server.internal_transport.status["version_info"]["forge-x"][
+            "git_messages"] = [
+                "error: The following untracked working tree files would be overwritten by merge:",
+                ".py/klipper/plugins/ui/themes/www/index.html",
+                ".py/klipper/plugins/ui/themes/www/theme-editor.css",
+                ".py/klipper/plugins/ui/themes/www/theme-editor.js",
+                ".shell/commands/ztheme_editor.sh",
+                "Please move or remove them before you merge.",
+                "Aborting",
+                "Updating 49dfc24..b36d9d9",
+            ]
+        self.server.internal_transport.update_error = RuntimeError(
+            "Git Command 'pull --progress' failed")
+
+        with self.assertLogs(level="ERROR"):
+            asyncio.run(self.component._handle_update_request(
+                "1.4.3", "b" * 40, 45))
+
+        self.assertEqual(self.server.internal_transport.calls[-1], (
+            "machine.update.status", {"refresh": False}))
+        response = self.server.klippy_connection.requests[-1].get_args()
+        self.assertTrue(response["recovery_required"])
+        self.assertEqual(response["conflicting_files"], [
+            "UNTRACKED: .py/klipper/plugins/ui/themes/www/index.html",
+            "UNTRACKED: .py/klipper/plugins/ui/themes/www/theme-editor.css",
+            "UNTRACKED: .py/klipper/plugins/ui/themes/www/theme-editor.js",
+            "UNTRACKED: .shell/commands/ztheme_editor.sh",
+        ])
+        self.assertEqual(response["conflicts_total"], 4)
+
+    def test_reset_restores_the_existing_checkout_without_clone_recovery(self):
+        asyncio.run(self.component._handle_reset_request(42))
+
+        self.assertEqual(self.server.internal_transport.calls, [
+            ("machine.update.status", {"refresh": False}),
+        ])
+        self.assertEqual(self.server.shell_command.calls, [
+            ("git reset --hard HEAD", {
+                "timeout": 30., "cwd": "/root/printer_data/config/mod"}),
+            ("git clean -fd", {
+                "timeout": 30., "cwd": "/root/printer_data/config/mod"}),
+        ])
+        states = [
+            request.get_args()["state"]
+            for request in self.server.klippy_connection.requests]
+        self.assertEqual(states, ["accepted", "reset_complete"])
+
+    def test_reset_command_failure_is_reported_without_continuing(self):
+        self.server.shell_command.error_command = "git reset --hard HEAD"
+
+        with self.assertLogs(level="ERROR"):
+            asyncio.run(self.component._handle_reset_request(44))
+
+        self.assertEqual(len(self.server.shell_command.calls), 1)
+        states = [
+            request.get_args()["state"]
+            for request in self.server.klippy_connection.requests]
+        self.assertEqual(states, ["accepted", "failed"])
+
+    def test_reset_is_rejected_while_update_manager_is_busy(self):
+        self.server.internal_transport.status["busy"] = True
+
+        asyncio.run(self.component._handle_reset_request(46))
+
+        self.assertEqual(self.server.shell_command.calls, [])
+        response = self.server.klippy_connection.requests[-1].get_args()
+        self.assertEqual(response["state"], "failed")
+
+    def test_reset_is_rejected_while_printer_is_not_idle(self):
+        self.server.job_state.state = "printing"
+
+        asyncio.run(self.component._handle_reset_request(43))
+
+        self.assertEqual(self.server.internal_transport.calls, [])
+        response = self.server.klippy_connection.requests[-1].get_args()
+        self.assertEqual(response["state"], "failed")
+        self.assertIn("idle", response["message"])
+
     def test_update_manager_refusal_is_reported_as_failure(self):
         self.server.internal_transport.update_result = (
             "Object forge-x is currently being updated")
 
-        asyncio.run(self.component._handle_update_request("1.4.3", 38))
+        asyncio.run(self.component._handle_update_request(
+            "1.4.3", "b" * 40, 38))
 
         response = self.server.klippy_connection.requests[-1].get_args()
         self.assertEqual(response["state"], "failed")

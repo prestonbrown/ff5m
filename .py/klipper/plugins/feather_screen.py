@@ -89,7 +89,8 @@ EXACT_ACTIONS = {
     ScreenPage.MESSAGE: ("message.ok",),
     ScreenPage.ERROR: ("error.restart", "error.firmware_restart"),
     ScreenPage.UPDATE_NOTIFICATION: (
-        "update.install", "update.later", "update.prev", "update.next"),
+        "update.install", "update.later", "update.prev", "update.next",
+        "update.reset", "update.reset.back", "update.reset.confirm"),
 }
 
 ACTIVE_PRINT_STATES = frozenset((

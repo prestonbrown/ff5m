@@ -552,7 +552,7 @@ class App:
                 "Unable to save theme on the printer: %s" % exc,
                 HTTPStatus.INTERNAL_SERVER_ERROR) from exc
 
-        command = "_APPLY_TM_EDITOR_THEME THEME=%s" % document["name"]
+        command = "_APPLY_TM_EDITOR_THEME THEME='%s'" % document["name"]
         try:
             self.moonraker_json(
                 "POST", "/printer/gcode/script", {"script": command})

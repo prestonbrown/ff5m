@@ -484,8 +484,12 @@ class FeatherUtilitiesTest(unittest.TestCase):
             FEATHER.ScreenPage.UPDATE_NOTIFICATION, "update.install"))
         self.assertTrue(allowed(
             FEATHER.ScreenPage.UPDATE_NOTIFICATION, "update.later"))
+        self.assertTrue(allowed(
+            FEATHER.ScreenPage.UPDATE_NOTIFICATION, "update.reset.confirm"))
         self.assertFalse(allowed(
             FEATHER.ScreenPage.IDLE_HOME, "update.install"))
+        self.assertFalse(allowed(
+            FEATHER.ScreenPage.IDLE_HOME, "update.reset.confirm"))
 
     def test_network_status_parser_is_bounded_to_public_fields(self):
         # Unknown keys must be silently dropped; only SNAPSHOT_KEYS survive.

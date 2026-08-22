@@ -122,14 +122,18 @@ class Host:
 
 
 def status_response(notification, version="1.4.3", installed="1.4.2",
-                    changes=None, available=True, token=None, error=""):
+                    changes=None, available=True, token=None, error="",
+                    revision=None):
     if token is None:
         token = notification.check_token
+    if revision is None:
+        revision = "b" * 40
     if changes is None:
         changes = ["Fix Wi-Fi", "Improve boot splash"]
     return WebRequest(
         token=token, available=available,
         installed_version=installed, available_version=version,
+        available_revision=revision,
         changes=changes, changes_total=len(changes), error=error)
 
 
@@ -142,6 +146,15 @@ class ForgeXUpdateNotificationTest(unittest.TestCase):
         self.notification.request_check()
         request = status_response(self.notification, **kwargs)
         self.notification.handle_status_response(request)
+
+    def block_update_with_conflicts(self, files):
+        self.request_and_respond()
+        self.notification.handle_action("update.install")
+        self.notification.handle_update_progress(WebRequest(
+            token=self.notification.install_token,
+            state="failed", message="Git merge blocked",
+            recovery_required=True, conflicting_files=files,
+            conflicts_total=len(files)))
 
     def test_startup_check_waits_five_seconds(self):
         self.notification.start()
@@ -235,7 +248,7 @@ class ForgeXUpdateNotificationTest(unittest.TestCase):
     def test_disable_hides_offer_but_preserves_dismissal_and_interval(self):
         self.notification.start()
         self.request_and_respond()
-        self.notification.dismissed_version = "1.4.1"
+        self.notification.dismissed_offer = ("1.4.1", "a" * 40)
         self.host.params.variables["mod_check_update_interval"] = 19
         self.host.params.variables["mod_check_update"] = False
 
@@ -243,9 +256,11 @@ class ForgeXUpdateNotificationTest(unittest.TestCase):
 
         self.assertEqual(self.host.page, ScreenPage.IDLE_HOME)
         self.assertIsNone(self.notification.available_version)
+        self.assertIsNone(self.notification.available_revision)
         self.assertIsNone(self.notification.installed_version)
         self.assertEqual(self.notification.changes, ())
-        self.assertEqual(self.notification.dismissed_version, "1.4.1")
+        self.assertEqual(
+            self.notification.dismissed_offer, ("1.4.1", "a" * 40))
         self.assertEqual(self.notification.check_interval, 19 * 60.0)
         self.assertIsNone(self.notification._scheduled_at)
 
@@ -325,7 +340,7 @@ class ForgeXUpdateNotificationTest(unittest.TestCase):
 
         self.assertEqual(self.host.page, ScreenPage.PRINTING)
         self.assertFalse(self.notification.dialog_visible)
-        self.assertIsNone(self.notification.dismissed_version)
+        self.assertIsNone(self.notification.dismissed_offer)
 
         self.host.print_active = False
         self.host.print_state = PrintState.IDLE
@@ -334,11 +349,12 @@ class ForgeXUpdateNotificationTest(unittest.TestCase):
         self.host._show_page(ScreenPage.IDLE_HOME)
         self.assertEqual(self.host.page, ScreenPage.UPDATE_NOTIFICATION)
 
-    def test_later_suppresses_only_the_displayed_version(self):
+    def test_later_suppresses_only_the_displayed_offer(self):
         self.request_and_respond()
         self.notification.handle_action("update.later")
 
-        self.assertEqual(self.notification.dismissed_version, "1.4.3")
+        self.assertEqual(
+            self.notification.dismissed_offer, ("1.4.3", "b" * 40))
         self.assertEqual(self.host.page, ScreenPage.IDLE_HOME)
         self.notification.maybe_present()
         self.assertEqual(self.host.page, ScreenPage.IDLE_HOME)
@@ -349,12 +365,24 @@ class ForgeXUpdateNotificationTest(unittest.TestCase):
         self.assertEqual(self.host.page, ScreenPage.UPDATE_NOTIFICATION)
         self.assertEqual(self.notification.available_version, "1.4.4")
 
+    def test_later_does_not_suppress_new_revision_with_same_version(self):
+        self.request_and_respond(revision="b" * 40)
+        self.notification.handle_action("update.later")
+
+        self.notification.request_check()
+        self.notification.handle_status_response(status_response(
+            self.notification, revision="c" * 40,
+            changes=["New commit in the same version"]))
+
+        self.assertEqual(self.host.page, ScreenPage.UPDATE_NOTIFICATION)
+        self.assertEqual(self.notification.available_version, "1.4.3")
+
     def test_new_runtime_clears_in_memory_dismissal(self):
         self.request_and_respond()
         self.notification.handle_action("update.later")
 
         restarted = Host().update_notification
-        self.assertIsNone(restarted.dismissed_version)
+        self.assertIsNone(restarted.dismissed_offer)
 
     def test_duplicate_checks_and_responses_do_not_duplicate_dialogs(self):
         self.notification.request_check()
@@ -501,7 +529,7 @@ class ForgeXUpdateNotificationTest(unittest.TestCase):
         methods = [method for method, _params in self.host.webhooks.remote_calls]
         self.assertNotIn("feather_start_forge_x_update", methods)
         self.assertEqual(self.host.page, ScreenPage.PRINTING)
-        self.assertIsNone(self.notification.dismissed_version)
+        self.assertIsNone(self.notification.dismissed_offer)
 
     def test_update_uses_existing_moonraker_ota_path(self):
         self.request_and_respond()
@@ -511,6 +539,7 @@ class ForgeXUpdateNotificationTest(unittest.TestCase):
         method, params = self.host.webhooks.remote_calls[-1]
         self.assertEqual(method, "feather_start_forge_x_update")
         self.assertEqual(params["expected_version"], "1.4.3")
+        self.assertEqual(params["expected_revision"], "b" * 40)
         self.assertEqual(params["token"], self.notification.install_token)
         self.assertEqual(self.host.page, ScreenPage.UPDATE_NOTIFICATION)
         self.assertTrue(self.notification.installing)
@@ -564,6 +593,70 @@ class ForgeXUpdateNotificationTest(unittest.TestCase):
         self.assertEqual(
             self.host.messages[-1][1], ScreenPage.UPDATE_NOTIFICATION)
 
+    def test_git_conflict_paginates_files_and_requires_reset_confirmation(self):
+        files = [
+            ("UNTRACKED: path/to/file-%d.sh" % index)
+            for index in range(30)]
+        self.block_update_with_conflicts(files)
+
+        self.assertFalse(self.notification.installing)
+        self.assertEqual(self.notification.recovery_files, tuple(files))
+        self.assertEqual(self.host.page, ScreenPage.UPDATE_NOTIFICATION)
+        self.assertIn("update.reset", self.host.renderer._buttons)
+        self.assertIn("update.next", self.host.renderer._buttons)
+        first_page = "\n".join(self.host.draw_batches[-1])
+        self.assertIn("file-0.sh", first_page)
+        self.assertNotIn("file-29.sh", first_page)
+
+        for _page in range(4):
+            self.notification.handle_action("update.next")
+        last_page = "\n".join(self.host.draw_batches[-1])
+        self.assertIn("file-29.sh", last_page)
+
+        calls_before_confirmation = list(self.host.webhooks.remote_calls)
+        self.notification.handle_action("update.reset")
+        self.assertTrue(self.notification.reset_confirmation)
+        self.assertEqual(
+            self.host.webhooks.remote_calls, calls_before_confirmation)
+        self.assertIn("update.reset.back", self.host.renderer._buttons)
+        self.assertIn("update.reset.confirm", self.host.renderer._buttons)
+
+        self.notification.handle_action("update.reset.back")
+        self.assertFalse(self.notification.reset_confirmation)
+        self.notification.handle_action("update.reset.confirm")
+        self.assertEqual(
+            self.host.webhooks.remote_calls, calls_before_confirmation)
+
+    def test_confirmed_reset_uses_moonraker_and_rechecks_after_completion(self):
+        self.block_update_with_conflicts([
+            "UNTRACKED: .shell/commands/ztheme_editor.sh",
+            "MODIFIED: config/mod.cfg",
+        ])
+        self.notification.handle_action("update.reset")
+
+        self.notification.handle_action("update.reset.confirm")
+
+        method, params = self.host.webhooks.remote_calls[-1]
+        self.assertEqual(method, "feather_reset_forge_x_update")
+        self.assertEqual(params, {"token": self.notification.install_token})
+        self.assertTrue(self.notification.installing)
+        self.assertTrue(self.notification.resetting)
+
+        self.notification.handle_update_progress(WebRequest(
+            token=self.notification.install_token,
+            state="accepted", message="Resetting repository"))
+        self.notification.handle_update_progress(WebRequest(
+            token=self.notification.install_token,
+            state="reset_complete", message="Reset complete"))
+
+        self.assertFalse(self.notification.installing)
+        self.assertFalse(self.notification.resetting)
+        self.assertEqual(self.notification.recovery_files, ())
+        self.assertIsNone(self.notification.available_version)
+        self.assertEqual(self.host.page, ScreenPage.IDLE_HOME)
+        self.assertEqual(
+            self.notification._scheduled_at, self.host.reactor.monotonic())
+
     def test_disabling_checks_does_not_interrupt_confirmed_installation(self):
         self.request_and_respond()
         self.notification.handle_action("update.install")
@@ -582,21 +675,27 @@ class ForgeXUpdateNotificationTest(unittest.TestCase):
         self.assertEqual(self.host.busy_message, "Installing")
         self.assertEqual(self.host.page, ScreenPage.UPDATE_NOTIFICATION)
 
-    def test_update_completion_shows_automatic_and_manual_restart_instructions(self):
+    def test_update_completion_replaces_loader_with_restart_modal(self):
         self.request_and_respond()
         self.notification.handle_action("update.install")
 
-        self.notification.handle_update_progress(WebRequest(
-            token=self.notification.install_token,
-            state="restarting", message="RESTARTING PRINTER..."))
+        with (mock.patch.object(
+                self.host.renderer, "loader",
+                wraps=self.host.renderer.loader) as loader,
+              mock.patch.object(
+                  self.host.renderer, "dialog",
+                  wraps=self.host.renderer.dialog) as dialog):
+            self.notification.handle_update_progress(WebRequest(
+                token=self.notification.install_token,
+                state="complete", message="Update Finished..."))
+            self.notification.handle_update_progress(WebRequest(
+                token=self.notification.install_token,
+                state="progress", message="Late progress"))
 
         self.assertTrue(self.notification.installing)
-        self.assertEqual(self.host.busy_message, (
-            "PRINTER WILL RESTART NOW\n"
-            "IF IT DOES NOT RESTART AUTOMATICALLY, RESTART IT MANUALLY"))
-        drawing = "\n".join(self.host.draw_batches[-1])
-        self.assertIn("PRINTER WILL RESTART NOW", drawing)
-        self.assertIn("RESTART IT MANUALLY", drawing)
+        self.assertTrue(self.notification.restart_notice)
+        loader.assert_not_called()
+        dialog.assert_called_once()
 
 
 if __name__ == "__main__":
