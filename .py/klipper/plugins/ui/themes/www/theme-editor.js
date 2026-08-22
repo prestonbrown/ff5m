@@ -710,6 +710,7 @@ async function deleteCurrentGeneratedTheme() {
   const id = state.currentGeneratedId;
   const stored = state.generatedThemes.find(theme => theme.id === id);
   if (!stored || !confirm(`Delete saved theme "${stored.doc.name || "UNTITLED"}"?`)) return;
+  const deletedIndex = $("themeSelect").selectedIndex;
 
   state.generatedThemes = state.generatedThemes.filter(theme => theme.id !== id);
   state.currentGeneratedId = null;
@@ -718,13 +719,14 @@ async function deleteCurrentGeneratedTheme() {
   renderThemeOptions();
   syncDeleteThemeButton();
 
-  if (state.config.themes.length) {
-    $("themeSelect").value = state.config.themes[0].file;
-    await loadTheme(state.config.themes[0].file);
-  } else if (state.generatedThemes.length) {
-    const next = state.generatedThemes[0];
-    $("themeSelect").value = generatedOptionValue(next.id);
-    loadGeneratedTheme(next.id);
+  const select = $("themeSelect");
+  if (select.options.length) {
+    select.selectedIndex = Math.min(Math.max(deletedIndex, 0), select.options.length - 1);
+    if (select.value.startsWith("generated:")) {
+      loadGeneratedTheme(select.value.slice("generated:".length));
+    } else {
+      await loadTheme(select.value);
+    }
   } else {
     $("validationStatus").className = "status bad";
     $("validationStatus").textContent = "No themes available.";

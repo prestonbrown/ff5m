@@ -13,6 +13,7 @@ THEMES_DIR="/opt/config/mod/.py/klipper/plugins/ui/themes"
 THEME_PY="/opt/config/mod/.py/klipper/plugins/ui/theme.py"
 PID_FILE="/tmp/feather-theme-editor.pid"
 LOG_FILE="/tmp/feather-theme-editor.log"
+EDITOR_PORT=8765
 
 
 lan_address() {
@@ -53,7 +54,7 @@ start_editor() {
         --quiet-http \
         --host 0.0.0.0 \
         --url-host "$address" \
-        --port 0 \
+        --port "$EDITOR_PORT" \
         --themes-dir "$THEMES_DIR" \
         --theme-py "$THEME_PY" \
         > "$LOG_FILE" 2>&1 < /dev/null &
