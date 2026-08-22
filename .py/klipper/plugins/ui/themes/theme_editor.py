@@ -47,6 +47,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 
 HEX_RE = re.compile(r"^[0-9a-fA-F]{6}$")
+THEME_NAME_RE = re.compile(r"^[A-Z][A-Z0-9_]{0,31}$")
 MAX_THEME_FILE_BYTES = 8 * 1024
 DEFAULT_WWW_DIR = Path(__file__).with_name("www")
 DEFAULT_USER_THEMES_DIR = Path("/opt/config/mod_data/themes")
@@ -284,8 +285,21 @@ def validate_basic(document, contract):
     if not isinstance(document, dict):
         return ["Theme must be a JSON object."]
 
-    if not str(document.get("name") or "").strip():
+    name = document.get("name")
+    if not isinstance(name, str) or not name:
         errors.append("name is required")
+    elif THEME_NAME_RE.fullmatch(name) is None:
+        errors.append(
+            "name must start with A-Z and contain only A-Z, 0-9, or _ "
+            "(32 characters maximum)")
+
+    description = document.get("description")
+    if not isinstance(description, str) or not description:
+        errors.append("description is required")
+    elif len(description) > 80:
+        errors.append("description must be 80 characters or fewer")
+    elif re.search(r"\S", description) is None:
+        errors.append("description must contain non-whitespace text")
 
     colors = document.get("colors")
     if not isinstance(colors, dict):

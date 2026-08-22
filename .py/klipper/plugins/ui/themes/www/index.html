@@ -29,11 +29,13 @@
       </div>
       <div class="field name-field">
         <label>Custom theme name</label>
-        <input id="themeName" type="text" placeholder="MY THEME">
+        <input id="themeName" type="text" maxlength="32" required
+          pattern="[A-Z][A-Z0-9_]{0,31}" placeholder="MY_THEME">
       </div>
       <div class="field desc-field">
         <label>Description</label>
-        <input id="themeDescription" type="text" placeholder="Custom palette">
+        <input id="themeDescription" type="text" minlength="1" maxlength="80" required
+          placeholder="Custom palette">
       </div>
       <details id="saveMenu" class="action-menu">
         <summary class="primary-action">Save <span aria-hidden="true">▾</span></summary>
@@ -162,7 +164,7 @@
     <div>
       <h2 id="generatorTitle">Generate a new theme</h2>
       <div class="sub">
-        Choose one color. The harmony rotates its hue while keeping its saturation and lightness.
+        Choose a base color, a hue relationship, and a palette distribution. The base color is kept exactly.
       </div>
     </div>
     <button id="generatorClose" class="generator-close" aria-label="Close">×</button>
@@ -182,7 +184,22 @@
           <option value="triadic">Triadic</option>
           <option value="complementary">Complementary</option>
           <option value="analogous">Analogous</option>
+          <option value="wide_analogous">Wide analogous</option>
+          <option value="dyadic">Dyadic (−45°)</option>
+          <option value="dyadic_reverse">Dyadic (+45°)</option>
           <option value="split">Split complementary</option>
+          <option value="tetradic">Tetradic</option>
+          <option value="square">Square</option>
+        </select>
+      </div>
+      <div class="field">
+        <label for="generatorDistribution">Palette distribution</label>
+        <select id="generatorDistribution">
+          <option value="balanced">Even saturation</option>
+          <option value="muted_contrast">Muted contrast</option>
+          <option value="neon_contrast">Neon contrast</option>
+          <option value="desktop_ui">Desktop UI</option>
+          <option value="dual_tone_phosphor">Dual-tone phosphor</option>
         </select>
       </div>
     </div>
@@ -197,9 +214,26 @@
       <label>Generated accent palette</label>
       <div id="generatorPalette" class="generator-palette"></div>
     </div>
+    <div class="field generator-preview-field">
+      <label>Quick preview</label>
+      <div id="generatorMiniPreview" class="generator-mini-preview">
+        <div class="generator-preview-header">THEME HEADER</div>
+        <div class="generator-preview-body">
+          <button type="button" class="generator-preview-button">BUTTON</button>
+          <button type="button" class="generator-preview-button selected">SELECTED</button>
+          <div class="generator-preview-toast">TOAST</div>
+          <div class="generator-preview-accent">ACCENT</div>
+          <div class="generator-preview-danger">DANGER</div>
+          <div class="generator-preview-type">
+            <b>Display text</b><span>Body text</span><small>Muted note</small>
+          </div>
+        </div>
+      </div>
+    </div>
     <div class="field">
       <label for="generatorName">Theme name</label>
-      <input id="generatorName" type="text" maxlength="32" placeholder="LIGHT TEAL">
+      <input id="generatorName" type="text" maxlength="32"
+        pattern="[A-Z][A-Z0-9_]{0,31}" placeholder="LIGHT_TEAL">
       <div class="note">You can edit every generated color after creating the theme.</div>
     </div>
   </div>
