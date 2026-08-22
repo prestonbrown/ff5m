@@ -29,9 +29,9 @@ source "/opt/config/mod_data/camera.conf"
 
 _VIDEO_P="/dev/${VIDEO}"
 
-_REDUCE_MEM_PARAMS=""
+_FRAME_CAP_ARGS=()
 if [ -z "$REDUCE_MEMORY" ] || [ "$REDUCE_MEMORY" == "1" ]; then
-    _REDUCE_MEM_PARAMS="-fs $(( WIDTH * HEIGHT * 2 ))"
+    _FRAME_CAP_ARGS=(--frame-cap)
 fi
 
 if [ "$VIDEO" = "auto" ]; then
@@ -55,7 +55,14 @@ start() {
     enabled=$($CFG_SCRIPT "$VAR_PATH" --get "camera" "0")
     if [ "$enabled" -eq 1 ]; then
         v4l2-ctl -d "${_VIDEO_P}" --set-fmt-video=width="${WIDTH}",height="${HEIGHT}"
-        start-stop-daemon -Sbm -p $PID_FILE --exec /opt/bin/mjpg_streamer -- -o "/opt/lib/mjpg-streamer/output_http.so -w /opt/mjpg-streamer/www -p 8080" -i  "/opt/lib/mjpg-streamer/input_uvc.so -d ${_VIDEO_P} -r ${WIDTH}x${HEIGHT} -f $FPS -b 1 ${_REDUCE_MEM_PARAMS}"
+        start-stop-daemon -Sbm -p "$PID_FILE" --exec $BINS/mjpg_streamer -- \
+            --device "${_VIDEO_P}" \
+            --resolution "${WIDTH}x${HEIGHT}" \
+            --fps "$FPS" \
+            --buffers 1 \
+            --listen 0.0.0.0 \
+            --port 8080 \
+            "${_FRAME_CAP_ARGS[@]}"
         
         touch "$CAMERA_F"
         echo "OK"
