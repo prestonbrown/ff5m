@@ -85,9 +85,9 @@
             <div class="preview-title">ROLE-BASED COMPONENT PREVIEW</div>
             <div class="preview-header">HEADER</div>
             <div class="preview-grid">
-              <div class="preview-card">
+              <div class="preview-card preview-card-wide">
                 <h3>BUTTONS</h3>
-                <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+                <div class="preview-button-row">
                   <button class="demo-button">BUTTON</button>
                   <button class="demo-button selected">SELECTED</button>
                 </div>
@@ -100,12 +100,15 @@
                   <b class="temp-fan">FAN 80%</b>
                 </div>
               </div>
-              <div class="preview-card">
-                <h3>STATUS COLORS</h3>
+              <div class="preview-card preview-card-wide">
+                <h3>STATUS COLORS / STATES</h3>
                 <div class="statuses">
-                  <span class="chip warning">WARNING</span>
-                  <span class="chip danger">DANGER</span>
-                  <span class="chip success">SUCCESS</span>
+                  <span class="chip warning"><b>WARNING</b><small>Needs attention</small></span>
+                  <span class="chip danger"><b>DANGER</b><small>Abort / error</small></span>
+                  <span class="chip success"><b>SUCCESS</b><small>Completed</small></span>
+                  <span class="chip info"><b>INFO</b><small>Secondary state</small></span>
+                  <span class="chip active"><b>ACTIVE</b><small>Primary action</small></span>
+                  <span class="chip idle"><b>IDLE</b><small>Muted / disabled</small></span>
                 </div>
               </div>
               <div class="preview-card">
@@ -139,16 +142,6 @@
       </section>
 
       <section class="panel">
-        <h2>Resolved ThemeRole palette</h2>
-        <div class="panel-body"><div id="rolePalette" class="palette-grid"></div></div>
-      </section>
-
-      <section class="panel">
-        <h2>Base ThemeColor palette</h2>
-        <div class="panel-body"><div id="basePalette" class="palette-grid"></div></div>
-      </section>
-
-      <section class="panel">
         <h2>Physical color map</h2>
         <div class="panel-body">
           <div id="physicalMap" class="physical-grid"></div>
@@ -161,16 +154,11 @@
 
 <dialog id="generatorDialog" class="generator-dialog" aria-labelledby="generatorTitle">
   <div class="generator-head">
-    <div>
-      <h2 id="generatorTitle">Generate a new theme</h2>
-      <div class="sub">
-        Choose a base color, a hue relationship, and a palette distribution. The base color is kept exactly.
-      </div>
-    </div>
+    <h2 id="generatorTitle">Generate a new theme</h2>
     <button id="generatorClose" class="generator-close" aria-label="Close">×</button>
   </div>
   <div class="generator-body">
-    <div class="generator-row">
+    <div class="generator-row generator-row-primary">
       <div class="field">
         <label for="generatorHex">Base color</label>
         <div class="generator-color">
@@ -179,40 +167,34 @@
         </div>
       </div>
       <div class="field">
-        <label for="generatorHarmony">Color harmony</label>
-        <select id="generatorHarmony">
-          <option value="triadic">Triadic</option>
-          <option value="complementary">Complementary</option>
-          <option value="analogous">Analogous</option>
-          <option value="wide_analogous">Wide analogous</option>
-          <option value="dyadic">Dyadic (−45°)</option>
-          <option value="dyadic_reverse">Dyadic (+45°)</option>
-          <option value="split">Split complementary</option>
-          <option value="tetradic">Tetradic</option>
-          <option value="square">Square</option>
-        </select>
+        <label for="generatorCharacter">Preset</label>
+        <select id="generatorCharacter"></select>
+      </div>
+    </div>
+    <div class="generator-row generator-row-settings">
+      <div class="field">
+        <label for="generatorPaletteStrategy">Palette</label>
+        <select id="generatorPaletteStrategy"></select>
       </div>
       <div class="field">
-        <label for="generatorDistribution">Palette distribution</label>
-        <select id="generatorDistribution">
-          <option value="balanced">Even saturation</option>
-          <option value="muted_contrast">Muted contrast</option>
-          <option value="neon_contrast">Neon contrast</option>
-          <option value="desktop_ui">Desktop UI</option>
-          <option value="dual_tone_phosphor">Dual-tone phosphor</option>
-        </select>
+        <label for="generatorDistribution">Distribution</label>
+        <select id="generatorDistribution"></select>
+      </div>
+      <div class="field">
+        <label>Appearance</label>
+        <div class="generator-mode">
+          <label><input type="radio" name="generatorMode" value="dark" checked> Dark</label>
+          <label><input type="radio" name="generatorMode" value="light"> Light</label>
+        </div>
       </div>
     </div>
     <div class="field">
-      <label>Appearance</label>
-      <div class="generator-mode">
-        <label><input type="radio" name="generatorMode" value="dark" checked> Dark</label>
-        <label><input type="radio" name="generatorMode" value="light"> Light</label>
-      </div>
-    </div>
-    <div class="field">
-      <label>Generated accent palette</label>
+      <label>Decorative accents</label>
       <div id="generatorPalette" class="generator-palette"></div>
+    </div>
+    <div class="field">
+      <label>Semantic colors</label>
+      <div id="generatorSemanticPalette" class="generator-semantic-palette"></div>
     </div>
     <div class="field generator-preview-field">
       <label>Quick preview</label>
@@ -234,7 +216,6 @@
       <label for="generatorName">Theme name</label>
       <input id="generatorName" type="text" maxlength="32"
         pattern="[A-Z][A-Z0-9_]{0,31}" placeholder="LIGHT_TEAL">
-      <div class="note">You can edit every generated color after creating the theme.</div>
     </div>
   </div>
   <div class="generator-footer">
