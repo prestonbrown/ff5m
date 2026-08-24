@@ -692,8 +692,10 @@ class ForgeXUpdateNotificationTest(unittest.TestCase):
                 token=self.notification.install_token,
                 state="progress", message="Late progress"))
 
-        self.assertTrue(self.notification.installing)
+        self.assertFalse(self.notification.installing)
+        self.assertFalse(self.notification.install_confirmed)
         self.assertTrue(self.notification.restart_notice)
+        self.assertIsNone(self.host.busy_message)
         loader.assert_not_called()
         dialog.assert_called_once()
 
