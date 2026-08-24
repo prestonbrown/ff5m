@@ -10,9 +10,6 @@ Makefile
 cmake_install.cmake
 cmake-build-*
 
-.bin/src/*/bin
-.bin/src/*/Testing
-
 __pycache__
 node_modules/
 playwright-report/

@@ -390,4 +390,9 @@ with a before/after PSS profile demonstrating a net process-total reduction.
 - Preserve padding through the shared hint/dialog primitives. Dynamic hint widths include their horizontal inset, and dialog lines are clipped to the padded content area.
 - For an unresponsive screen, check: active Feather include, `klippy.py`, Typer child, `/dev/input/guppy`, FIFO types (`test -p /tmp/typer`; `test -p /tmp/feather-events`), then `[feather_screen]` messages in the Klipper log.
 
-Primary implementation references: [`feather_screen.py`](../../.py/klipper/plugins/feather_screen.py), [`feather_ui.py`](../../.py/klipper/plugins/feather_ui.py), [`typer/main.cpp`](../../.bin/src/typer/main.cpp), [`typer/interactive.cpp`](../../.bin/src/typer/interactive.cpp), and [`S35tslib`](../../.root/S35tslib).
+Primary implementation references in this repository:
+[`feather_screen.py`](../../.py/klipper/plugins/feather_screen.py),
+[`feather_ui.py`](../../.py/klipper/plugins/feather_ui.py), the published
+[`typer`](../../.bin/exec/typer) runtime, and
+[`S35tslib`](../../.root/S35tslib). Native source development is maintained
+separately from the public runtime repository.
