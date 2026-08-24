@@ -14,6 +14,27 @@ The end artifact is a USB-installable `.tgz` that the stock FlashForge updater a
 producing a printer that runs Klipper, Moonraker, a HelixScreen UI, the Forge-X macro and
 settings layer, and working multi-material printing.
 
+### The overriding constraint: this is built to be given away
+
+We do not want to own an AD5X firmware permanently. The target end state is that AD5X
+support lives in Forge-X proper, maintained by its maintainer, with us contributing rather
+than running a parallel distribution.
+
+That is a design constraint, not a preference, and it decides things throughout:
+
+- **Every increment must be shaped as something DrA1ex could merge**, not as a fork that
+  gets presented finished. A 5-milestone fait accompli is the least likely thing to be
+  adopted.
+- **We minimise novel surface.** Where Forge-X already has a pattern, we parameterise it
+  rather than invent alongside it. "Looks like Forge-X, just not hardcoded to one board"
+  is the goal; a second architecture inside the tree is not.
+- **We cannot depend on ZMOD artifacts.** This retroactively settles the clean-room
+  decision: the MIPS toolchain currently in use came from ghzserg, and Forge-X cannot take
+  a dependency on a competing mod's build output. Clean-room is required, not preferred.
+- **We must reduce, not increase, the maintainer's burden.** We own the AD5X hardware and
+  the testing. That offer is the thing that makes a second platform acceptable to a solo
+  maintainer, and it should be made explicitly and early.
+
 ### Non-goals for this project
 
 - AD5M feature parity. Forge-X features that depend on AD5M hardware are out of scope
@@ -26,7 +47,8 @@ settings layer, and working multi-material printing.
 ### Explicitly in scope, by decision
 
 - **Clean-room platform layer.** We build our own MIPS userland rather than inheriting
-  ZMOD's ~1 GB chroot. See section 4 for why this is the long pole.
+  ZMOD's ~1 GB chroot. Required by the upstreaming constraint above, not merely preferred.
+  See section 4 for why this is the long pole.
 - **IFS in v1.** The AD5X without multi-material is not the AD5X, so the port of the
   filament system is part of the first flashable build rather than a follow-up.
 
@@ -45,7 +67,9 @@ All of the following was verified on our own AD5X at 192.168.1.66 on 2026-08-24.
 | Klipper host | runs on `/`, not chrooted (`/proc/<pid>/root -> /`) |
 | Klipper Python | FlashForge's own **3.8.2** at `/usr/prog/Python-3.8.2` |
 | Klipper tree | `/usr/prog/klipper`, config `/usr/data/config/printer.cfg` |
-| Moonraker | ZMOD runs it **inside** its chroot on Python **3.12.9** |
+| Moonraker (stock) | FlashForge's own, at `/usr/prog/moonraker`, run on **3.8.2** |
+| Moonraker (ZMOD) | modern, **inside** its chroot on Python **3.12.9** |
+| Stock IFS config | `/usr/prog/config/Adventurer5M.json` -> `FFMInfo`, `ffmEnable`, `ffmColor0..4` |
 | IFS transport | `/dev/ttyS4`, 115200 8N1 |
 | eboard | `/dev/ttyS5` (AD5M uses `/dev/ttyS1`) |
 | Install vector | stock updater runs `flashforge_init.sh AD5X 0026` off USB vfat |
@@ -57,9 +81,19 @@ Two of these drive most of the design:
 interpreter for Klipper, and our klippy code must stay 3.8-compatible. Verified: Forge-X's
 `mod_params.py` loads and runs there unmodified.
 
-**Moonraker needs Python 3.10+** (`server.py` guards on `sys.version_info < (3, 10)`).
-Nothing on the stock box satisfies that. This single requirement is the entire reason a
-separate userland exists, in ZMOD's design and in ours.
+**A modern Moonraker needs Python 3.10+** (`server.py` guards on
+`sys.version_info < (3, 10)`). Stock is not empty here: FlashForge ships its own Moonraker
+at `/usr/prog/moonraker` and runs it on 3.8.2 via `moonrakerDaemon`. That older vintage
+works on 3.8; Forge-X's vendored current Moonraker does not.
+
+So the honest framing is a choice, not a hard blocker. We could skip the second Python
+entirely by living on stock's old Moonraker, and the whole project would shrink
+dramatically. We are not doing that, because Forge-X's application layer is built against
+its own vendored Moonraker (it patches `machine.py`, ships `extra_plugins.moonraker.conf`,
+and depends on the modern API that Fluidd, Mainsail, and HelixScreen expect). Adopting
+stock's old Moonraker would mean diverging from Forge-X exactly where we most need to
+match it. **This is the single requirement that creates the platform layer**, and it is
+worth re-testing that assumption if M2 turns out worse than expected.
 
 ## 3. Architecture
 
@@ -99,8 +133,8 @@ We already know the exact target parameters because a working Buildroot toolchai
 this printer exists: `mipsel-buildroot-linux-gnu-` GCC 13.3.0 against glibc 2.40, with
 OpenSSL 3.4.1 and zlib 1.3.1. That toolchain is currently sourced from ghzserg (ZMOD's
 author) and mirrored into HelixScreen's releases. **Replacing it with our own Buildroot
-output is part of what "clean-room" means here** and is the first milestone, because
-until it exists every other layer is still standing on ZMOD.
+output is a hard requirement**: Forge-X cannot take a build dependency on a competing
+mod's output, so until our own exists this work is not upstreamable at all.
 
 Deliberate size target: ZMOD's chroot is ~1 GB. Ours should be a small fraction of that.
 We need Python 3.12, Moonraker's dependencies, a web server, and busybox. We do not need
@@ -124,6 +158,11 @@ path-rewriting pass. This is a compatibility decision, documented as such, not a
 The stock updater is the install vector. A `.tgz` on a vfat USB stick containing
 `flashforge_init.sh`, which the firmware invokes as `flashforge_init.sh AD5X 0026`. It
 verifies `md5sum.list`, paints progress to `/dev/fb0`, and reboots via sysrq.
+
+**We must install over current stock without a factory restore** (decision 1, section 10).
+ZMOD requires a factory restore first, which is why its supported-version list is a set of
+discrete old releases. Being additive to `/usr/data` plus hooks is what buys us that, and
+it is also what makes the install acceptable to users and to upstream.
 
 Recovery has three tiers:
 
@@ -266,37 +305,51 @@ Mostly a port, since Forge-X's application layer is the part we actually want.
 Forge-X hardcodes `Adventurer5M*.json`, `Adventurer5M*.tgz`, and "AD5M" in the motd, and
 has no `uname -m` anywhere. Adding a second platform means introducing that abstraction.
 
-This is worth doing **as its own upstream-shaped change** rather than as a side effect,
-because it is a genuine cleanup for AD5M on its own merits and it is the piece most likely
-to be accepted upstream. It also determines whether this work can ever merge into Forge-X
-proper rather than living in our fork forever.
+This is **M1**, deliberately sequenced first and deliberately containing no AD5X code. It
+is a genuine cleanup for AD5M on its own merits, it is testable without an AD5X, and it is
+the single best predictor of whether the rest of this work can merge upstream rather than
+living in our fork forever. If M1 stalls, we find that out before building a userland.
 
 ## 8. Milestones
 
-Each milestone ends in something we can put on the bench.
+Each milestone is shaped to be independently mergeable upstream wherever possible, and
+each ends in something we can put on the bench.
 
-**M1. Our own userland.** Buildroot config producing a MIPS32r5 glibc toolchain and a
-minimal rootfs with Python 3.12 and Moonraker's dependencies. Success: Moonraker starts
-inside it on the AD5X and answers `/printer/info`. This displaces the ghzserg toolchain
-and is the milestone that makes "clean-room" true.
+**M0. Agreement, before code.** Land PRs #73 and #74 to establish standing, then ask
+DrA1ex directly whether he wants AD5X support in Forge-X and on what terms, with the
+maintenance offer on the table. If the goal is handing this off, this is not optional and
+it is not last. Building first and asking later is how a fork becomes permanent by default.
 
-**M2. Klipper layer.** Extract the factory image for true stock `virtual_sdcard.py` and
+**M1. Platform abstraction, upstream, AD5M-only.** Remove the hardcoded `Adventurer5M*.json`
+and `Adventurer5M*.tgz` paths, the "AD5M" motd string, and the implicit single-board
+assumption. Introduce a platform variable with AD5M as the only value. **Contains no AD5X
+code at all**, is testable entirely on AD5M, and is a genuine cleanup on its own merits.
+This is the wedge, and if it cannot merge we have learned something important cheaply.
+
+**M2. Our own toolchain and userland.** Buildroot config producing a MIPS32r5 glibc
+toolchain and a minimal rootfs with Python 3.12 and Moonraker's dependencies. Success:
+Moonraker starts inside it on the AD5X and answers `/printer/info`. This displaces the
+ghzserg toolchain and is what makes clean-room true. Highest risk, least existing art.
+
+**M3. Klipper layer.** Extract the factory image for true stock `virtual_sdcard.py` and
 `gcode_shell_command.py`. Complete the three-way merges, resolving the shaper API pair
 together. Success: klippy starts with all merged patches and a print completes.
 
-**M3. Boot and recovery.** Our own init hooks, boot-skip flag, and uninstall image, plus
+**M4. Boot, install, recovery.** Our own init hooks, boot-skip flag, uninstall image, and
 the USB `.tgz` the stock updater accepts. Success: a flash from USB that comes up on our
-stack, and a boot-skip that reliably falls back to stock. **This is the first genuinely
-flashable artifact.**
+stack, and a boot-skip that reliably falls back to stock. **First genuinely flashable
+artifact.**
 
-**M4. Application layer.** AD5X macro and config profile, `mod_params` wired, HelixScreen
-as the display. Success: a normal single-colour print start to finish, driven from the panel.
+**M5. Application layer.** AD5X macro and config profile, `mod_params` wired, display modes
+matching Forge-X's existing structure. Success: a normal single-colour print start to
+finish, driven from the panel.
 
-**M5. IFS.** Transport, then state machine, then the load/unload/change sequences. Success:
+**M6. IFS.** Transport, then state machine, then the load/unload/change sequences. Success:
 a four-colour print completes without intervention.
 
-M1 through M3 are sequential. M4 can overlap M3. M5 is the long tail and its real cost is
-print hours, not code.
+M1 can proceed in parallel with M2 since they share no code. M3 depends on M2 only for
+testing convenience, not for correctness. M5 can overlap M4. M6 is the long tail and its
+real cost is print hours, not code.
 
 ## 9. Risks
 
@@ -324,12 +377,28 @@ base and testing new ones deliberately rather than tracking them.
 that touches the boot chain risks making it unavailable. Tier-1 recovery must exist before
 the first boot-chain flash, and we should be honest that a bricked bench blocks everything.
 
-## 10. Open questions
+## 10. Decisions
 
-1. Do we pin a stock base version now? ZMOD supports discrete versions to 3.1.0 and the
-   factory image is 1.1.7. Our rig is on a factory-restored 1.1.7.
-2. Does this ultimately target upstream Forge-X or stay a fork? It changes how much effort
-   goes into the platform abstraction in section 7. Worth asking DrA1ex once PRs #73 and
-   #74 have landed and there is a working relationship to ask across.
-3. Do we want the stock screen to remain usable at all, or is HelixScreen the only
-   supported display from day one?
+1. **Stock base: track current, not the factory image.** We target the most recent stock
+   firmware rather than pinning to the 1.1.7 factory image. The consequence is concrete and
+   load-bearing: **our install must not require a factory restore**, unlike ZMOD, which
+   mandates one. That is more work for us in M4 and materially better for users and for
+   upstream acceptance. Our own rig is currently factory-restored to 1.1.7, so validating
+   an install over current stock needs a deliberate test on a printer we are willing to
+   move off that base.
+
+2. **Upstream is the goal.** See section 1. This is the constraint that shapes the rest,
+   and M0 exists because of it.
+
+3. **Display modes match Forge-X's existing structure.** We keep the `stock` / `feather` /
+   `headless` / `guppy` / `helix` shape rather than reducing it, even where an individual
+   mode is not immediately useful on AD5X. Diverging here would create exactly the kind of
+   parallel structure that makes a platform port unmergeable.
+
+## 11. Still open
+
+- Whether stock's `ffmEnable` / `ffmColor0..4` config in `Adventurer5M.json` is the same
+  data the IFS controller uses, or a separate UI-side cache. Determines whether our IFS
+  layer should read or write it. Answerable on the bench during M6.
+- Whether `virtual_sdcard.py` diverges badly between AD5M and AD5X stock. Blocks nothing
+  until M3 and is task one of that milestone.
