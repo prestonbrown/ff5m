@@ -1944,6 +1944,7 @@ class FeatherControlsMixin:
             return
         if any(line.strip() == "// action:forge_x_redraw"
                for line in str(message).splitlines()):
+            self.renderer.invalidate_footer()
             self._show_page(self.page)
             return
         for line in self._prompt_response_lines(message):

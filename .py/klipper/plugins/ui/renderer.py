@@ -1235,6 +1235,10 @@ class FeatherRenderer:
             self._last_footer = values
             self._footer_drawn = True
 
+    def invalidate_footer(self):
+        """Require the next page frame to restore the persistent footer."""
+        self._footer_drawn = False
+
     def toast(self, message):
         y = 397
         height = 44

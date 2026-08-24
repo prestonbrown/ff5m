@@ -2988,12 +2988,30 @@ class ControllerSafetyTest(unittest.TestCase):
     def test_root_service_redraws_the_current_page(self):
         controller = ScenarioController.__new__(ScenarioController)
         controller.page = FEATHER.ScreenPage.CONTROL_HEAT
-        controller._show_page = mock.Mock()
+        controller.renderer = FEATHER.FeatherRenderer()
+        batches = []
+        controller.renderer.send = batches.append
+        controller.renderer.footer(
+            "NOZZLE 21/220C | BED 24/60C", "192.168.2.4 | IDLE")
+        controller.renderer.begin_page("Control heat")
+        batches.clear()
+
+        def show_page(page):
+            self.assertEqual(page, FEATHER.ScreenPage.CONTROL_HEAT)
+            controller.renderer.send(
+                controller.renderer.begin_page("Control heat"))
+
+        controller._show_page = show_page
 
         controller._handle_gcode_output("// action:forge_x_redraw")
 
-        controller._show_page.assert_called_once_with(
-            FEATHER.ScreenPage.CONTROL_HEAT)
+        drawing = "\n".join(batches[-1])
+        footer_clear = controller.renderer.fill(
+            0, UI.FOOTER_Y - 2, UI.SCREEN_WIDTH,
+            UI.SCREEN_HEIGHT - (UI.FOOTER_Y - 2),
+            UI.ThemeColor.BACKGROUND)
+        self.assertIn(footer_clear, drawing)
+        self.assertIn("192.168.2.4 | IDLE", drawing)
 
     def test_touch_device_protocol_dispatches_availability_transitions(self):
         controller = ScenarioController.__new__(ScenarioController)
