@@ -1,0 +1,38 @@
+name: Tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  shell:
+    name: Shell suite
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install shellcheck
+        run: sudo apt-get update && sudo apt-get install -y shellcheck
+
+      - name: Run shell test suite
+        run: sh test/run.sh
+
+  python:
+    name: Python plugins
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # 3.8 is the contract: klippy on the printer runs FlashForge's Python
+      # 3.8.2. Testing only on a newer interpreter would let match statements
+      # and `int | None` annotations through that the printer cannot parse.
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.8'
+
+      - name: Install pytest
+        run: pip install pytest
+
+      - name: Run plugin tests
+        run: python3 -m pytest test/python/ -v
