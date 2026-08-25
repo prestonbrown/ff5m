@@ -104,6 +104,23 @@ parts:
   `#!/usr/bin/env python` shebang. Buildroot never creates that name.
 - no `/ZMOD` marker file — `zversion.sh` hard-fails on it
 
+### Not in the image yet
+
+The rootfs runs Moonraker, which is what this milestone is for. Three things
+the payload contract asks for are still missing, and each belongs to a later
+milestone rather than to Buildroot:
+
+- **Fluidd and Mainsail bundles** at `/root/fluidd` and `/root/mainsail`.
+  These are release zips, not source Buildroot builds. Moonraker's
+  `update_manager` keeps them current once they exist (`moonraker.conf:61-70`),
+  but the image has to ship an initial copy.
+- **`uinput.ko`** at `/lib/modules/<kver>/`. `.root/S35tslib:38` loads it from
+  *inside* the chroot, so it is the one genuine binary artifact the image must
+  carry, and it has to be built against the printer's exact kernel.
+- **The display stack** — `guppyscreen`, tslib, `/dev/disp` backlight control.
+  On AD5X this is HelixScreen's territory, and `.py/backlight.py` speaks
+  Allwinner sunxi ioctls that have no MIPS equivalent.
+
 ### The venv
 
 `post-build.sh` builds it statically rather than running `python -m venv`,
