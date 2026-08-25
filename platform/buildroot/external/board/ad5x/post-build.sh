@@ -17,7 +17,16 @@ TARGET=$1
 # builds lands in /usr/lib/pythonX.Y/site-packages, and a sealed venv would hide
 # all of them. ZMOD duplicates the whole dependency set into its venv instead;
 # that costs ~25 MB for nothing on an appliance running exactly one Python app.
-PYVER=$(cd "$TARGET/usr/lib" && ls -d python3.* 2>/dev/null | head -1 | sed 's/python//')
+# Glob rather than `ls | head`: with no Python in the rootfs -- which is every
+# toolchain-only build -- `ls` exits non-zero, and under `set -euo pipefail`
+# that takes the whole build down at target-finalize.
+PYVER=
+for _d in "$TARGET"/usr/lib/python3.*; do
+    [ -d "$_d" ] || continue
+    PYVER=${_d##*/python}
+    break
+done
+
 if [ -n "$PYVER" ]; then
     VENV=$TARGET/root/moonraker-env
     mkdir -p "$VENV/bin" "$VENV/lib/python$PYVER/site-packages"

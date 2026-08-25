@@ -51,6 +51,61 @@ BR2_PACKAGE_BUSYBOX_CONFIG_FRAGMENT_FILES="$(BR2_EXTERNAL_FORGEX_PATH)/board/ad5
 
 BR2_ROOTFS_POST_BUILD_SCRIPT="$(BR2_EXTERNAL_FORGEX_PATH)/board/ad5x/post-build.sh"
 
+# ---------------------------------------------------------------------------
+# Runtime: what the Forge-X payload calls inside the chroot
+# ---------------------------------------------------------------------------
+# git      .shell/S00init:106-108, and Moonraker's git_repo updater, over HTTPS
+# sqlite3  .root/restore_ota.sh:20-55 pipes SQL into the CLI
+# curl     .root/start.sh:40 (health poll) and .root/forge-x:53 (GitHub, TLS)
+BR2_PACKAGE_GIT=y
+BR2_PACKAGE_SQLITE=y
+BR2_PACKAGE_LIBCURL=y
+BR2_PACKAGE_LIBCURL_CURL=y
+BR2_PACKAGE_OPENSSL=y
+BR2_PACKAGE_CA_CERTIFICATES=y
+
+# ---------------------------------------------------------------------------
+# Python 3.12 and Moonraker's dependency set
+# ---------------------------------------------------------------------------
+# Pinned to what Forge-X's vendored Moonraker (upstream v0.9.3, .root/moonraker/)
+# actually imports. Note dbus-next, NOT dbus-fast: the switch happened after
+# v0.9.3.
+BR2_PACKAGE_PYTHON3=y
+BR2_PACKAGE_PYTHON3_SSL=y
+BR2_PACKAGE_PYTHON3_SQLITE=y
+BR2_PACKAGE_PYTHON3_PYEXPAT=y
+BR2_PACKAGE_PYTHON3_ZLIB=y
+BR2_PACKAGE_PYTHON3_XZ=y
+BR2_PACKAGE_PYTHON3_DECIMAL=y
+BR2_PACKAGE_PYTHON3_UNICODEDATA=y
+# Ship bytecode only. ZMOD does the same on this platform, so it is proven
+# against this dependency set rather than merely plausible.
+BR2_PACKAGE_PYTHON3_PYC_ONLY=y
+
+BR2_PACKAGE_PYTHON_TORNADO=y
+BR2_PACKAGE_PYTHON_PILLOW=y
+BR2_PACKAGE_PYTHON_DISTRO=y
+BR2_PACKAGE_PYTHON_JINJA2=y
+BR2_PACKAGE_PYTHON_DBUS_NEXT=y
+BR2_PACKAGE_PYTHON_PERIPHERY=y
+BR2_PACKAGE_PYTHON_PAHO_MQTT=y
+BR2_PACKAGE_PYTHON_ZEROCONF=y
+BR2_PACKAGE_PYTHON_SERIAL=y
+
+# Not in upstream Buildroot; recipes live in this external tree.
+BR2_PACKAGE_PYTHON_LIBNACL=y
+BR2_PACKAGE_PYTHON_IMPORTLIB_METADATA=y
+BR2_PACKAGE_PYTHON_ZIPP=y
+BR2_PACKAGE_PYTHON_INOTIFY_SIMPLE=y
+BR2_PACKAGE_PYTHON_SMART_OPEN=y
+BR2_PACKAGE_PYTHON_STREAMING_FORM_DATA=y
+BR2_PACKAGE_PYTHON_PREPROCESS_CANCELLATION=y
+
+# Deliberately NOT enabled: apprise (push notifications, ~10 MB with its
+# transitive set) and ldap3 (LDAP auth). Both are config-gated components that
+# Moonraker only loads when the matching section exists, and neither default
+# Forge-X config has one. Revisit if a user asks.
+
 # We ship a tarball that the installer unpacks into $MOD on the printer.
 # No filesystem image, no kernel, no bootloader -- all three come from stock.
 BR2_TARGET_ROOTFS_TAR=y
