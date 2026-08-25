@@ -317,10 +317,12 @@ is_known_bad() {
     return 1
 }
 
+scanned=0
 for f in $(git ls-files '.shell/*' '.root/*' '.py/*'); do
     [ -f "$f" ] || continue
     head -1 "$f" 2>/dev/null | grep -q '^#!' || continue
     is_known_bad "$f" && continue
+    scanned=$((scanned + 1))
 
     if head -1 "$f" | grep -q bash; then
         if bash -n "$f" 2>/dev/null; then
@@ -336,6 +338,10 @@ for f in $(git ls-files '.shell/*' '.root/*' '.py/*'); do
         fi
     fi
 done
+
+# A wrong cwd, a missing git, or a pathspec typo would make the loop above run
+# zero times and this suite would report "0 assertions, 0 failed" as success.
+assert_ne "scripts were actually scanned" "0" "$scanned"
 
 finish
 ```
@@ -397,7 +403,50 @@ This gate encodes a real bug. Each `.cfg/init.display.<mode>.cfg` selects one di
 - Consumes: `assert.sh` from Task 1.
 - Produces: nothing.
 
-- [ ] **Step 1: Write the gate**
+- [ ] **Step 1: Fix the bug the gate is about to find**
+
+**This gate is red on upstream `main`.** Verified 2026-08-24:
+`.cfg/init.display.headless.cfg` contains no `-[include ./mod/config/guppy.cfg]`
+line, while `stock`, `feather`, and `guppy` each exclude all three of their
+siblings. So switching from GUPPY to HEADLESS leaves `guppy.cfg` included
+alongside `headless.cfg`, and both define `_PRINT_STATUS` and `reset_screen`.
+That is the precise defect this gate exists to catch, sitting in the tree today.
+
+Land the fix as its own commit **before** the gate, so the gate arrives green and
+the PR is mergeable. Add to `.cfg/init.display.headless.cfg`, keeping the file's
+existing ordering:
+
+```
+-[include ./mod/config/guppy.cfg]
+```
+
+Confirm the four files are now symmetric:
+
+```bash
+for m in stock feather guppy headless; do
+    echo "--- $m excludes:"
+    grep -oE '^-\[include \./mod/config/[a-z]+\.cfg\]' ".cfg/init.display.$m.cfg"
+done
+```
+
+Expected: each mode excludes exactly the other three.
+
+Commit it separately:
+
+```bash
+git add .cfg/init.display.headless.cfg
+git commit -m "Exclude guppy.cfg from headless display mode
+
+Every other display mode removes all three siblings; headless was missing
+the guppy exclusion, so switching from GUPPY to HEADLESS left both configs
+included. Both define _PRINT_STATUS and reset_screen."
+```
+
+Keeping this separate from the gate matters for review: it is a one-line
+behavioural fix with a clear rationale, and burying it inside a
+test-infrastructure commit would hide it.
+
+- [ ] **Step 2: Write the gate**
 
 Create `test/display_modes_test.sh`:
 
@@ -452,15 +501,17 @@ done
 finish
 ```
 
-- [ ] **Step 2: Run it against the current tree**
+- [ ] **Step 3: Run it against the fixed tree**
 
 Run: `sh test/display_modes_test.sh; echo "exit=$?"`
 
-Expected on upstream `main`: **green**, because main has four modes (`stock`, `feather`, `guppy`, `headless`) and they are mutually consistent.
+Expected: green, **because of Step 1**. Without that fix this gate is red on
+`main`. If it is red here, Step 1 was skipped or applied to the wrong file.
 
-Note: if run on a branch that has added `helix.cfg` without updating the other four, this gate goes red, which is the point. That is the exact defect it exists to catch.
+Note: on a branch that has added `helix.cfg` without updating the other four,
+this gate also goes red. That is the same defect class and the point of the gate.
 
-- [ ] **Step 3: Prove it catches the real bug**
+- [ ] **Step 4: Prove it catches the real bug**
 
 Reproduce the defect deliberately and confirm the gate fires:
 
@@ -481,7 +532,7 @@ sh test/display_modes_test.sh; echo "exit=$?"
 
 Expected: `exit=0`.
 
-- [ ] **Step 4: Commit**
+- [ ] **Step 5: Commit**
 
 ```bash
 git add test/display_modes_test.sh
@@ -521,8 +572,9 @@ for f in $(git ls-files '.shell/*' '.root/*'); do
     head -1 "$f" 2>/dev/null | grep -q '^#!' || continue
     shellcheck -f gcc "$f" 2>/dev/null
 done | sed -E 's/^([^:]+):[0-9]+:[0-9]+: [a-z]+: .*\[(SC[0-9]+)\]$/\1:\2/' \
-     | sort -u > test/shellcheck_baseline.txt
+     | LC_ALL=C sort -u > test/shellcheck_baseline.txt
 wc -l test/shellcheck_baseline.txt
+shellcheck --version | grep '^version:' >> /dev/null && shellcheck --version | sed -n 's/^version: /# shellcheck /p'
 ```
 
 Expected: a non-empty file. Forge-X has never run shellcheck, so a large baseline is normal and is not a problem to solve in this PR.
@@ -561,9 +613,12 @@ for f in $(git ls-files '.shell/*' '.root/*'); do
     head -1 "$f" 2>/dev/null | grep -q '^#!' || continue
     shellcheck -f gcc "$f" 2>/dev/null
 done | sed -E 's/^([^:]+):[0-9]+:[0-9]+: [a-z]+: .*\[(SC[0-9]+)\]$/\1:\2/' \
-     | sort -u > "$CURRENT"
+     | LC_ALL=C sort -u > "$CURRENT"
 
-NEW=$(comm -13 "$BASELINE" "$CURRENT")
+# comm requires both inputs collated identically. Without LC_ALL=C the baseline
+# generated on a dev box (en_US.UTF-8) and the list generated in CI (C) sort
+# differently, and comm silently reports phantom additions.
+NEW=$(LC_ALL=C comm -13 "$BASELINE" "$CURRENT")
 rm -f "$CURRENT"
 
 if [ -z "$NEW" ]; then
@@ -678,6 +733,11 @@ class StubReactor:
 
 
 class StubPrinter:
+    # mod_params raises via self.printer.command_error(...) on its failure paths.
+    # Without this, the first bad-declaration test dies on AttributeError instead
+    # of exercising the branch it targets.
+    command_error = RuntimeError
+
     def __init__(self):
         self.objects = {"gcode": StubGCode()}
         self.event_handlers = {}
@@ -899,9 +959,12 @@ def test_invalid_value_raises_and_does_not_persist(stub_config, variables_path,
                                                    gcmd, param, value):
     mgr = mod_params.ModParamManagement(stub_config)
 
-    with pytest.raises(Exception):
+    with pytest.raises(Exception) as excinfo:
         mgr.cmd_SET_MOD_PARAM(gcmd(PARAM=param, VALUE=value))
 
+    # Pin the branch. A bare Exception would also be satisfied by an unrelated
+    # TypeError from a broken stub, which would make this test meaningless.
+    assert "Failed to update parameter" in str(excinfo.value)
     assert variables_path.read_text() == ""
 
 
@@ -925,16 +988,29 @@ def test_near_miss_suggests_the_real_parameter(stub_config, gcmd):
     assert any("backlight" in m for m in cmd.info)
 
 
-@pytest.mark.xfail(reason="_find_similar_param uses `min_distance <= 10`, which is "
-                          "far wider than any parameter name, so every input "
-                          "matches something and the no-match branch is dead code")
+@pytest.mark.xfail(strict=True,
+                   reason="_find_similar_param gates on `min_distance <= 10`, which "
+                          "exceeds the length of most parameter names, so any short "
+                          "typo (or plain garbage) always gets a suggestion and the "
+                          "command returns success instead of raising")
 def test_nonsense_input_is_not_given_a_suggestion(stub_config, gcmd):
     """`SET_MOD PARAM=zzzzzzzz` should say the parameter is unknown, not guess.
 
-    Verified 2026-08-24: it currently answers "Did you mean display?", because
-    the Levenshtein distance from 'zzzzzzzz' to 'display' is 8, which passes the
-    <= 10 threshold. Marked xfail rather than deleted so the suite documents the
-    defect and turns green by itself when the threshold is tightened.
+    Verified 2026-08-24: it answers "Did you mean display?", because the
+    Levenshtein distance from 'zzzzzzzz' to 'display' is 8, which passes the
+    <= 10 threshold.
+
+    The no-match branch is not unreachable in general - against the real 41-key
+    declaration, an input of 'z' * 20 does exceed the threshold and correctly
+    raises. But any input in the size range of an actual parameter name always
+    matches something, which is exactly the case a user hits.
+
+    The consequence is worse than a bad hint: when a suggestion is found,
+    cmd_SET_MOD_PARAM *returns* rather than raising, so a typo'd SET_MOD inside
+    a macro silently succeeds and does nothing.
+
+    strict=True deliberately: a non-strict xfail would XPASS silently forever
+    once the threshold is fixed and nobody would remove the marker.
     """
     mgr = mod_params.ModParamManagement(stub_config)
     cmd = gcmd(PARAM="zzzzzzzz", VALUE="1")
@@ -953,7 +1029,7 @@ Run: `python3 -m pytest test/python/ -v`
 
 Expected: 9 passed, 1 xfailed. The xfail is
 `test_nonsense_input_is_not_given_a_suggestion`, which documents a real defect in
-`_find_similar_param` (see Task 5b).
+`_find_similar_param`. Report it upstream as its own issue or pull request; do not fix it inside this milestone (see the note at the end of Task 5).
 
 The stub was validated against the real plugin on 2026-08-24, so a failure here
 means something genuinely diverged. Read it rather than adjusting the assertion.
@@ -1052,9 +1128,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # 3.8 is the contract: klippy on the printer runs FlashForge's Python
+      # 3.8.2. Testing only on a newer interpreter would let match statements
+      # and `int | None` annotations through that the printer cannot parse.
       - uses: actions/setup-python@v5
         with:
-          python-version: '3.11'
+          python-version: '3.8'
 
       - name: Install pytest
         run: pip install pytest
@@ -1124,7 +1203,11 @@ To regenerate after an intentional change:
         head -1 "$f" | grep -q '^#!' || continue
         shellcheck -f gcc "$f" 2>/dev/null
     done | sed -E 's/^([^:]+):[0-9]+:[0-9]+: [a-z]+: .*\[(SC[0-9]+)\]$/\1:\2/' \
-         | sort -u > test/shellcheck_baseline.txt
+         | LC_ALL=C sort -u > test/shellcheck_baseline.txt
+
+`LC_ALL=C` is required. Without it a baseline generated under a UTF-8 locale and
+a list generated under C collate differently, and `comm` silently reports
+phantom findings.
 
 ## Python suite
 

@@ -4,7 +4,9 @@
 
 **Goal:** Replace Forge-X's hardcoded single-board assumptions with a platform descriptor, changing no behaviour on AD5M and adding no AD5X code.
 
-**Architecture:** A platform descriptor block in `.shell/common.sh` defines named variables for every board-specific value (data partition, mount point, log directory, Klipper tree, stock UI process names, display name). All other scripts consume those variables instead of literals. AD5M remains the only platform defined, so every variable resolves to exactly the literal it replaced.
+**Architecture:** A POSIX-clean `.shell/platform.sh` defines named variables for every board-specific value (data partition, mount point, log directory, Klipper tree, stock UI process names, display name). `.shell/common.sh` sources it, so existing bash consumers get the variables for free; scripts declaring `#!/bin/sh` source `platform.sh` directly. All other scripts consume those variables instead of literals. AD5M remains the only platform defined, so every variable resolves to exactly the literal it replaced.
+
+**Why a separate file rather than a block inside `common.sh`:** `common.sh` is irreducibly bash. Line 117 uses bash arrays (`arr_ref=()`, `arr_ref+=(...)`) alongside `declare -n` and `[[`, and both `dash` and `busybox ash` abort sourcing it with `syntax error: unexpected "("`. Several consumers of the descriptor declare `#!/bin/sh` and run under BusyBox ash on the printer (`.root/S35tslib` inside the chroot, `.shell/commands/zstart_klipper.sh`), so telling them to source `common.sh` would break the boot path. A descriptor that every shell dialect in the tree can read is also the more upstreamable shape.
 
 **Tech Stack:** POSIX shell and bash (BusyBox ash on target). No new dependencies, no CI changes, no test framework.
 
@@ -18,8 +20,10 @@
 - **No AD5X code in M1.** No second platform, no `uname -m` branch, no conditionals on board type. M1 creates the seam only. Introducing AD5X values here would make the change unreviewable for a maintainer who owns only AD5M.
 - **Minimise novel surface.** No new dependencies beyond what M0 established. The test added here is a plain shell script using M0's assertion library, runnable with `sh test/run.sh`.
 - **Respect each file's shebang.** Files declaring `#!/bin/sh` must stay POSIX-clean; only files declaring `#!/bin/bash` may use bashisms. Verify with the matching interpreter, not always `bash -n`.
+- **`.shell/platform.sh` must be POSIX-clean.** Plain `NAME=value` assignments only. No arrays, no `declare`, no `[[`, no `local`, no command substitution. It is sourced by `#!/bin/sh` scripts running under BusyBox ash on the printer. Verify with `dash -c '. .shell/platform.sh'` and `busybox ash -c '. .shell/platform.sh'`, not just `bash -n`.
 - **Do not touch `docs/`, `.github/ISSUE_TEMPLATE/`, or `.bin/src/`.** Those contain AD5M references that are correct today (release filenames, issue templates, program descriptions). Changing them is scope creep and dilutes the diff.
-- **`Adventurer5M*.json` is NOT a portability problem.** FlashForge ships that same filename on the AD5X (verified on hardware 2026-08-24, symlinked at `/opt/config/Adventurer5M.json`). Leave those globs alone.
+- **`Adventurer5M*.json` is NOT a portability problem.** FlashForge ships that same filename on the AD5X (verified on hardware 2026-08-24, symlinked at `/opt/config/Adventurer5M.json`). Leave those globs alone: `.shell/boot/boot.sh:33,106` and `.shell/commands/zprint.sh:22-23`.
+- **`Adventurer5M*.tgz` IS a portability problem, and is deferred, not exempt.** The hardware evidence above covers the `.json` only. The single `.tgz` site, `.shell/boot/init_boot_flag.sh:17`, detects a stock firmware image on a USB stick, and AD5X stock packages are named `AD5X-*.tgz` (compare the factory image in the design doc). It is left alone in M1 because a descriptor value for it belongs with the install and recovery work in M4, where its semantics are actually decided. Record it in `docs/PLATFORM.md` as known-deferred so a reviewer does not read the omission as an oversight.
 
 ---
 
@@ -29,7 +33,8 @@
 - `test/platform_vars_test.sh` - value-preservation test. Sources `common.sh` and asserts every platform variable equals the historical AD5M literal. Uses the M0 harness, so `sh test/run.sh` picks it up automatically. This is the guard rail for the whole milestone.
 
 **Modified:**
-- `.shell/common.sh` - gains the platform descriptor block. Single source of truth.
+- `.shell/platform.sh` - **created.** The descriptor. POSIX-clean, plain assignments, sourceable from any shell in the tree. Single source of truth.
+- `.shell/common.sh` - sources `platform.sh` as its first action, so every existing bash consumer keeps working unchanged.
 - `.shell/S00init`, `.shell/S55boot`, `.shell/S98zssh`, `.shell/S99root`, `.shell/boot/boot.sh`, `.shell/boot/wifi_connect.sh`, `.shell/boot/wifi_reconnect.sh`, `.shell/boot/init_swap.sh`, `.shell/commands/zbackup.sh`, `.root/forge-x` - log directory literals.
 - `.shell/common.sh`, `.root/S35tslib`, `.root/forge-x` - partition and mount literals.
 - `.shell/S00init`, `.shell/commands/zstart_klipper.sh`, `.shell/commands/ztune_klipper.sh`, `.shell/fix_config.sh`, `.shell/uninstall.sh` - Klipper tree literals.
@@ -43,13 +48,14 @@
 This task creates the seam and the test that keeps every later task honest. Nothing consumes the variables yet.
 
 **Files:**
-- Modify: `.shell/common.sh:9` (insert descriptor block above `MOD=`)
+- Create: `.shell/platform.sh`
+- Modify: `.shell/common.sh` (source `platform.sh`; rewrite `MOD=` at line 10 in terms of `DATA_MNT`)
 - Create: `test/platform_vars_test.sh`
 - Create: `test/descriptor_usage_test.sh`
 
 **Interfaces:**
 - Consumes: nothing.
-- Produces: shell variables sourced from `.shell/common.sh`, all strings:
+- Produces: shell variables defined in `.shell/platform.sh` (and re-exported to bash consumers by `common.sh` sourcing it), all strings:
   `PLATFORM` (`ad5m`), `PLATFORM_NAME` (`AD5M`), `DATA_PART` (`/dev/mmcblk0p7`),
   `ROOT_PART` (`/dev/mmcblk0p6`), `DATA_MNT` (`/data`), `LOG_DIR` (`/data/logFiles`),
   `KLIPPER_DIR` (`/opt/klipper`), `STOCK_UI_PROCS` (`ffstartup-arm firmwareExe`).
@@ -70,9 +76,10 @@ SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
 REPO_DIR=$(cd "$SCRIPT_DIR/.." && pwd)
 . "$SCRIPT_DIR/lib/assert.sh"
 
-# common.sh mutates PATH and unsets LD_* on source; harmless here.
+# Source the descriptor directly. NOT common.sh: that file is bash-only
+# (arrays at line 117) and this test runs under sh via test/run.sh.
 # shellcheck disable=SC1090,SC1091
-. "$REPO_DIR/.shell/common.sh"
+. "$REPO_DIR/.shell/platform.sh"
 
 assert_eq "PLATFORM"       "ad5m"                      "$PLATFORM"
 assert_eq "PLATFORM_NAME"  "AD5M"                      "$PLATFORM_NAME"
@@ -83,9 +90,6 @@ assert_eq "LOG_DIR"        "/data/logFiles"            "$LOG_DIR"
 assert_eq "KLIPPER_DIR"    "/opt/klipper"              "$KLIPPER_DIR"
 assert_eq "STOCK_UI_PROCS" "ffstartup-arm firmwareExe" "$STOCK_UI_PROCS"
 
-# MOD must still resolve exactly as before the refactor.
-assert_eq "MOD"            "/data/.mod/.forge-x"       "$MOD"
-
 finish
 ```
 
@@ -94,11 +98,12 @@ finish
 Run: `sh test/platform_vars_test.sh`
 Expected: FAIL. Every `check` except `MOD` reports an empty `got`, because the descriptor does not exist yet.
 
-- [ ] **Step 3: Add the descriptor block to common.sh**
+- [ ] **Step 3: Write the descriptor and wire common.sh to it**
 
-In `.shell/common.sh`, insert immediately after the licence header (before the existing `MOD=` line):
+Create `.shell/platform.sh`:
 
-```bash
+```sh
+#!/bin/sh
 ## Platform descriptor
 ##
 ## Every board-specific value used anywhere in the mod is named here. Scripts
@@ -108,6 +113,10 @@ In `.shell/common.sh`, insert immediately after the licence header (before the e
 ##
 ## AD5M is currently the only supported platform, so each value below is the
 ## literal it replaced. test/platform_vars_test.sh enforces that.
+##
+## POSIX-clean by requirement: this file is sourced by #!/bin/sh scripts that
+## run under BusyBox ash on the printer. Plain assignments only - no arrays,
+## no declare, no [[, no local, no command substitution.
 
 PLATFORM=ad5m
 PLATFORM_NAME=AD5M
@@ -124,7 +133,18 @@ KLIPPER_DIR=/opt/klipper
 STOCK_UI_PROCS="ffstartup-arm firmwareExe"
 ```
 
-Then change the existing `MOD` line from:
+Then in `.shell/common.sh`, immediately after the licence header and before the
+existing `MOD=` line, source it:
+
+```bash
+# Board-specific values. Kept in a separate POSIX-clean file so that
+# #!/bin/sh scripts can source the descriptor without pulling in this
+# file, which is bash-only.
+# shellcheck disable=SC1090,SC1091
+. "$(dirname "${BASH_SOURCE[0]}")/platform.sh"
+```
+
+And change the existing `MOD` line from:
 
 ```bash
 MOD=/data/.mod/.forge-x
@@ -135,6 +155,27 @@ to:
 ```bash
 MOD=$DATA_MNT/.mod/.forge-x
 ```
+
+- [ ] **Step 3b: Verify platform.sh really is POSIX-clean**
+
+This is the property the whole design rests on. Check it with the actual shells,
+because `bash -n` will happily accept bashisms:
+
+```bash
+dash -c '. .shell/platform.sh && echo "dash ok: $LOG_DIR"'
+busybox ash -c '. .shell/platform.sh && echo "ash ok: $LOG_DIR"'
+```
+
+Expected: both print `... ok: /data/logFiles`. If either reports a syntax error,
+something non-POSIX crept in and must be removed before continuing.
+
+For contrast, confirm the problem this avoids is real:
+
+```bash
+dash -c '. .shell/common.sh' 2>&1 | head -1
+```
+
+Expected: `syntax error: "(" unexpected`. That is why the descriptor is its own file.
 
 - [ ] **Step 4: Run the test to verify it passes**
 
@@ -153,11 +194,14 @@ Create `test/descriptor_usage_test.sh`:
 
 ```sh
 #!/bin/sh
-# Any script using a platform descriptor variable must source common.sh.
+# Any script using a platform descriptor variable must source the descriptor.
 #
 # An unset shell variable expands to the empty string rather than failing, so a
 # missing source turns "$LOG_DIR/boot.log" into "/boot.log" with no error at all.
 # This gate is the reason the descriptor refactor is safe to do mechanically.
+#
+# Sourcing platform.sh directly OR sourcing common.sh (which sources it) both
+# count. #!/bin/sh scripts must use the former: common.sh is bash-only.
 
 SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
 REPO_DIR=$(cd "$SCRIPT_DIR/.." && pwd)
@@ -165,32 +209,47 @@ REPO_DIR=$(cd "$SCRIPT_DIR/.." && pwd)
 
 cd "$REPO_DIR" || exit 1
 
-DESCRIPTOR_VARS="PLATFORM PLATFORM_NAME ROOT_PART DATA_PART DATA_MNT LOG_DIR KLIPPER_DIR STOCK_UI_PROCS"
+DESCRIPTOR_VARS="PLATFORM_NAME ROOT_PART DATA_PART DATA_MNT LOG_DIR KLIPPER_DIR STOCK_UI_PROCS PLATFORM"
 
+scanned=0
 for f in $(git ls-files '.shell/*' '.root/*'); do
     [ -f "$f" ] || continue
-    # common.sh defines them; it does not need to source itself.
+    # The descriptor defines them; common.sh sources it. Neither needs checking.
+    [ "$f" = ".shell/platform.sh" ] && continue
     [ "$f" = ".shell/common.sh" ] && continue
 
     uses=""
     for v in $DESCRIPTOR_VARS; do
-        if grep -q "\$$v\|\${$v}" "$f" 2>/dev/null; then
+        # -E so the alternation is portable; \b-free because BusyBox grep lacks it.
+        # PLATFORM is checked last and only counts if PLATFORM_NAME did not match,
+        # since "$PLATFORM" is a substring of "$PLATFORM_NAME".
+        if [ "$v" = "PLATFORM" ]; then
+            case "$uses" in *PLATFORM_NAME*) continue ;; esac
+        fi
+        if grep -qE "[$]$v([^A-Za-z0-9_]|$)|[$][{]$v[}]" "$f" 2>/dev/null; then
             uses="$uses $v"
         fi
     done
 
     [ -z "$uses" ] && continue
+    scanned=$((scanned + 1))
 
-    if grep -q 'common\.sh' "$f"; then
-        _t_pass "sources common.sh:$f (uses$uses)"
+    # Must be an actual source line, not a passing mention in a comment.
+    if grep -qE '^[[:space:]]*([.]|source)[[:space:]].*(platform|common)[.]sh' "$f"; then
+        _t_pass "sources descriptor: $f (uses$uses)"
     else
-        _t_fail "sources common.sh: $f" \
-                "uses$uses but never sources common.sh; those expand to empty"
+        _t_fail "sources descriptor: $f" \
+                "uses$uses but never sources platform.sh or common.sh; those expand to empty"
     fi
 done
 
+echo "     ($scanned file(s) reference the descriptor)"
 finish
 ```
+
+Note the gate does **not** assert that `scanned` is non-zero. Unlike the other
+gates it is legitimately vacuous until Task 3 lands, and the probe in the next
+step is what proves it works.
 
 - [ ] **Step 6: Verify the gate is green now and can actually fail**
 
@@ -350,7 +409,24 @@ the descriptor rather than being spelled out at each mount site."
 The largest mechanical sweep. `/data/logFiles` becomes `$LOG_DIR` everywhere.
 
 **Files:**
-- Modify: `.shell/S00init:68-70,159,263`, `.shell/S55boot:71`, `.shell/S98zssh:57,81,169`, `.shell/S99root:108`, `.shell/boot/boot.sh:56`, `.shell/boot/wifi_connect.sh:45`, `.shell/boot/wifi_reconnect.sh:27`, `.shell/commands/zbackup.sh:46-59`, `.root/forge-x:77-79`
+- Modify (13 files, verified by `git grep -l` on 2026-08-24): `.root/forge-x`, `.shell/S00init`, `.shell/S55boot`, `.shell/S98zssh`, `.shell/S99root`, `.shell/boot/boot.sh`, `.shell/boot/wifi_connect.sh`, `.shell/boot/wifi_reconnect.sh`, `.shell/commands/zbackup.sh`, `.shell/commands/zcheck.sh`, `.shell/commands/zclear.sh`, `.shell/fix_config.sh`, `.shell/uninstall.sh`
+
+**The grep in Step 1 is authoritative, not this list.** If they disagree, the grep is right and the list is stale.
+
+**Four of these do not source anything today** and will be flagged by
+`descriptor_usage_test.sh`. Which file they must source depends on their shebang:
+
+| File | Shebang | Add |
+|---|---|---|
+| `.root/forge-x` | bash | `. /opt/config/mod/.shell/common.sh` |
+| `.shell/commands/zclear.sh` | bash | `. /opt/config/mod/.shell/common.sh` |
+| `.shell/fix_config.sh` | bash | `. /opt/config/mod/.shell/common.sh` |
+| `.shell/commands/zstart_klipper.sh` | **sh** | `. /opt/config/mod/.shell/platform.sh` |
+
+`zstart_klipper.sh` is the one that matters. It declares `#!/bin/sh`, so sourcing
+`common.sh` would abort it under BusyBox ash and **Klipper would not start**.
+Upstream duplicates `CFG_SCRIPT` and `VAR_PATH` at lines 19-20 rather than
+sourcing, which is almost certainly why. It sources `platform.sh` instead.
 
 **Interfaces:**
 - Consumes: `LOG_DIR` from Task 1.
@@ -441,8 +517,10 @@ git add .shell .root
 git commit -m "Use platform descriptor for the log directory
 
 /data/logFiles is AD5M's stock log location. Routing it through LOG_DIR
-means a board with a different layout needs one descriptor value rather
-than edits at twenty call sites."
+collapses twenty-odd call sites to one descriptor value.
+
+Other /data references are untouched: this covers the log directory only,
+not the data mount generally."
 ```
 
 ---
@@ -450,7 +528,9 @@ than edits at twenty call sites."
 ### Task 4: Klipper tree abstraction
 
 **Files:**
-- Modify: `.shell/S00init:248,253,302`, `.shell/commands/zstart_klipper.sh:21`, `.shell/commands/ztune_klipper.sh:5-6`, `.shell/fix_config.sh:16-17`, `.shell/uninstall.sh:13`
+- Modify (5 files, verified 2026-08-24): `.shell/S00init`, `.shell/commands/zstart_klipper.sh`, `.shell/commands/ztune_klipper.sh`, `.shell/fix_config.sh`, `.shell/uninstall.sh`
+
+**The grep in Step 1 is authoritative, not this list.**
 
 **Interfaces:**
 - Consumes: `KLIPPER_DIR` from Task 1.
@@ -585,16 +665,49 @@ FF_TEXT=$(centered "\033[1;33m⚡ \033[36m${PLATFORM_NAME} v${FIRMWARE_VERSION}"
 
 The `35` is a field width used for centring. `AD5M` and `${PLATFORM_NAME}` are the same four characters today, so the banner is unchanged.
 
+- [ ] **Step 2b: Give motd.sh the descriptor**
+
+`motd.sh` does **not** source `common.sh`, and `.shell/S00init:156` runs it as a
+child process. `common.sh` exports nothing, so without a source line
+`${PLATFORM_NAME}` expands to empty and the banner silently becomes `⚡  v1.4.1`.
+
+`motd.sh` is bash, so add near the top, after its header:
+
+```bash
+# shellcheck disable=SC1090,SC1091
+. /opt/config/mod/.shell/common.sh
+```
+
+`descriptor_usage_test.sh` will flag this file if you skip it, which is the gate
+doing its job.
+
 - [ ] **Step 3: Verify the motd renders identically**
 
-Run: `FIRMWARE_VERSION=1.4.1 bash .shell/motd.sh`
-Expected: the banner prints and reads `AD5M v1.4.1`, visually identical to before the change. If `motd.sh` requires additional environment or sourcing to run standalone, run it as `bash -n .shell/motd.sh` instead and confirm the substitution by eye with `grep -n 'PLATFORM_NAME' .shell/motd.sh`.
+`FIRMWARE_VERSION` is **not** an environment override. `motd.sh:10` reads
+`FIRMWARE_VERSION=${2-$(cat /root/version)}`, so the version is positional and an
+exported variable is unconditionally overwritten. Pass it as the second argument:
+
+Run: `bash .shell/motd.sh 1.4.1 1.4.1`
+Expected: the banner prints and reads `AD5M v1.4.1`, visually identical to before.
+
+If it cannot run standalone on a dev box (it reads `/root/version` and other
+printer paths), fall back to `bash -n .shell/motd.sh` plus
+`grep -n 'PLATFORM_NAME' .shell/motd.sh` to confirm the substitution, and note
+that the banner is then unverified until it runs on hardware.
 
 - [ ] **Step 4: Confirm the literals are gone from functional code**
 
-Run: `git grep -nE 'ffstartup-arm|firmwareExe' -- .shell .root | grep -v 'zbackup.sh' | grep -v '^\S*:[0-9]*: *#'`
+Run: `git grep -nE 'killall +"?(ffstartup-arm|firmwareExe)' -- .shell .root`
 
-Expected: no output. `zbackup.sh` is excluded deliberately: its `firmwareExe.log` and `ffstartup-arm.log` entries are stock **log filenames**, not process names, and are a separate concern from stopping a UI. Comment lines in `boot.sh` mentioning `firmwareExe` explain stock behaviour and stay as prose.
+Expected: no output.
+
+Scope the grep to `killall` sites deliberately. A bare name grep still hits three
+things that are all correct and must not be touched: the `STOCK_UI_PROCS`
+definition in `.shell/platform.sh`, `zbackup.sh`'s `firmwareExe.log` and
+`ffstartup-arm.log` entries (stock **log filenames**, not process names), and
+`.shell/commands/zmem.sh:13`, where `sed 's/firmwareExe/Firmware/'` is a
+cosmetic display label. Comment lines in `boot.sh` explaining stock behaviour
+also stay as prose.
 
 - [ ] **Step 5: Syntax-check and re-run the guard rail**
 
@@ -708,6 +821,19 @@ The descriptor lives at the top of `.shell/common.sh`:
 - `Adventurer5M*.json` is not board-specific. FlashForge ships that filename on
   other printers in the range too, so those globs are left alone.
 
+## Known deferred
+
+These are board-specific but not yet abstracted. They are listed so their
+absence reads as a decision rather than an oversight.
+
+- **`Adventurer5M*.tgz`** in `.shell/boot/init_boot_flag.sh`, which detects a
+  stock firmware image on USB. Other printers in the range use different package
+  names. Belongs with install and recovery work, where its semantics are decided.
+- **The `/data` mount generally.** `DATA_MNT` currently covers the log directory
+  and the mount call. Roughly fifty other `/data` literals remain, including the
+  bind mount and the gcodes symlink in `S00init`. Separating "board path" from
+  "path the mod creates" needs case-by-case judgement and is its own change.
+
 ## Testing
 
 `test/platform_vars_test.sh` asserts that every descriptor variable expands to the
@@ -748,5 +874,9 @@ literal, and Adventurer5M*.json not being board-specific."
 **Placeholder scan.** No TBD, TODO, or "handle edge cases" steps. Every code step shows the literal before-and-after text. The two sweeps (Tasks 3 and 4) enumerate their sites with a `git grep` in step 1 and give worked examples for each distinct quoting case rather than a single unrepresentative sample.
 
 **Type consistency.** Eight variables are defined in Task 1 and consumed by name in Tasks 2-5: `DATA_PART` and `DATA_MNT` and `ROOT_PART` (Task 2), `LOG_DIR` (Task 3), `KLIPPER_DIR` (Task 4), `STOCK_UI_PROCS` and `PLATFORM_NAME` (Task 5). `PLATFORM` is defined and documented but not consumed by any task in M1, which is intentional: it exists for the M2+ descriptor selection and is asserted by the test so it cannot silently drift. Every name in the test, the tasks, and `docs/PLATFORM.md` matches.
+
+**Scope boundary, stated so a reviewer does not have to find it.** M1 abstracts the log directory, the Klipper tree, the partitions, the stock UI process names, and the display name. It does **not** abstract the `/data` mount generally. Load-bearing literals remain at `.shell/S00init` (`mount --bind /data "$MOD"/data`, and the `ln -fns /data /root/printer_data/gcodes` symlink), in `zbackup.sh`'s path arrays, and in `zclear.sh`'s `find /data/` sweeps, among roughly fifty sites. `DATA_MNT` ends up consumed at only two places.
+
+That residue is the real porting surface, since the AD5X mounts its data partition at `/usr/data`. Deferring it is deliberate: those sites need judgement about what is a board path versus a path the mod creates, and folding fifty more edits into this refactor would make it unreviewable. It belongs in a follow-up, and `docs/PLATFORM.md` says so.
 
 **Risk noted for the executor.** The single most likely way to break this silently is a file that uses `$LOG_DIR` or `$KLIPPER_DIR` without sourcing `common.sh`. An unset variable expands to the empty string, so `"$LOG_DIR/boot.log"` becomes `/boot.log` and logging quietly writes to the wrong place instead of erroring. Tasks 3 and 4 each carry an explicit source-check step for exactly this reason; do not skip them.
