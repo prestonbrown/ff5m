@@ -1,0 +1,106 @@
+# Build the platform rootfs.
+#
+# Not run on every push: a cold build is ~7 GB of disk and the better part of
+# an hour, which is not a sensible price for a payload change. It runs on
+# demand, on a tag, and weekly so that upstream Buildroot breakage surfaces on
+# its own rather than during a release.
+name: Platform rootfs
+
+on:
+  workflow_dispatch:
+    inputs:
+      target:
+        description: Target to build
+        default: ad5x
+        type: choice
+        options: [ad5x]
+  push:
+    tags: ['*']
+  schedule:
+    - cron: '0 4 * * 1'
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+
+      # A cold build needs ~7 GB for output plus ~0.5 GB of downloads, and the
+      # hosted runner ships with a lot of preinstalled toolchains we never use.
+      - name: Reclaim runner disk
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+                      /usr/local/share/boost "$AGENT_TOOLSDIRECTORY"
+          df -h /
+
+      - name: Install Buildroot host dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            bc bison cpio file flex gawk libncurses-dev libssl-dev \
+            rsync unzip wget cpio python3 python3-dev
+
+      # Keyed on the defconfig because that is what decides which tarballs are
+      # needed. The cache is a courtesy: a miss costs download time, not
+      # correctness.
+      - name: Cache Buildroot downloads
+        uses: actions/cache@v4
+        with:
+          path: platform/buildroot/.dl
+          key: br-dl-${{ hashFiles('platform/buildroot/external/configs/*_defconfig', 'platform/buildroot/build.sh') }}
+          restore-keys: br-dl-
+
+      - name: Build
+        working-directory: platform/buildroot
+        run: ./build.sh "${{ inputs.target || 'ad5x' }}" -j"$(nproc)"
+
+      # The whole point of this tree is that the rootfs is reproducible rather
+      # than an opaque binary, so record what went into it next to the output.
+      - name: Record what was built
+        working-directory: platform/buildroot
+        run: |
+          t="${{ inputs.target || 'ad5x' }}"
+          {
+            echo "buildroot: $(git -C .buildroot describe --tags)"
+            echo "target:    $t"
+            echo
+            echo "== toolchain =="
+            grep -E '^BR2_(ARCH|ENDIAN|GCC_TARGET_(ARCH|ABI|NAN|FP32_MODE)|GCC_VERSION|TOOLCHAIN_BUILDROOT_LIBC|DEFAULT_KERNEL_HEADERS)=' "output/$t/.config"
+            echo
+            echo "== size =="
+            du -sh "output/$t/target"
+            ls -l "output/$t/images/"
+          } | tee "output/$t/images/build-info.txt"
+
+      # A soft-float or legacy-NaN toolchain still builds a rootfs; it just
+      # does not run on the printer. Fail here rather than on someone's bench.
+      - name: Assert the ABI is what the printer requires
+        working-directory: platform/buildroot
+        run: |
+          t="${{ inputs.target || 'ad5x' }}"
+          cfg="output/$t/.config"
+          fail=0
+          check() {
+            if grep -qx "$1" "$cfg"; then echo "  ok   $1"
+            else echo "  FAIL expected $1"; fail=1; fi
+          }
+          check 'BR2_GCC_TARGET_NAN="2008"'
+          check 'BR2_GCC_TARGET_FP32_MODE="64"'
+          check 'BR2_GCC_TARGET_ABI="32"'
+          check 'BR2_GCC_TARGET_ARCH="mips32r5"'
+          if [ ! -e "output/$t/target/lib/ld-linux-mipsn8.so.1" ]; then
+            echo "  FAIL missing /lib/ld-linux-mipsn8.so.1 - wrong NaN encoding"
+            fail=1
+          else
+            echo "  ok   /lib/ld-linux-mipsn8.so.1"
+          fi
+          exit $fail
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: rootfs-${{ inputs.target || 'ad5x' }}
+          path: |
+            platform/buildroot/output/*/images/rootfs.tar.xz
+            platform/buildroot/output/*/images/build-info.txt
+          if-no-files-found: error
