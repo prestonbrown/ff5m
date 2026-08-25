@@ -250,7 +250,7 @@ init_buildroot() {
     
     mount --bind /data "$MOD"/data
     mount --bind /opt/config "$MOD"/opt/config
-    mount --bind /opt/klipper "$MOD"/opt/klipper
+    mount --bind "$KLIPPER_DIR" "$MOD"/opt/klipper
     
     mkdir -p /root/printer_data
     mkdir -p /root/printer_data/certs
@@ -299,11 +299,11 @@ init_buildroot() {
 
 apply_klipper_patches() {
     local SRC_DIR="/opt/config/mod/.py/klipper"
-    local TARGET_DIR="/opt/klipper/klippy"
+    local TARGET_DIR="$KLIPPER_DIR/klippy"
 
 
     # Remove old patches/extensions
-    find $TARGET_DIR -type l | while read -r file; do
+    find "$TARGET_DIR" -type l | while read -r file; do
         local rel_path=${file#"$TARGET_DIR/"}
         local file_name=${file##*/}
 

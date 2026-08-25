@@ -16,9 +16,15 @@
 ## A low priority (5) plus the kernel RT throttle (sched_rt_runtime_us, 95% by
 ## default) ensures a misbehaving klippy can never hard-lock a core.
 
+# platform.sh, not common.sh: this script is #!/bin/sh and runs under
+# BusyBox ash, which cannot parse common.sh. Sourcing that here would
+# abort the script and Klipper would never start.
+# shellcheck disable=SC1090,SC1091
+. /opt/config/mod/.shell/platform.sh
+
 CFG_SCRIPT="/opt/config/mod/.shell/commands/zconf.sh"
 VAR_PATH="/opt/config/mod_data/variables.cfg"
-KLIPPER_START="/opt/klipper/start.sh"
+KLIPPER_START="$KLIPPER_DIR/start.sh"
 RT_PRIO=5
 
 rt=$("$CFG_SCRIPT" "$VAR_PATH" --get "klipper_rt" "0")

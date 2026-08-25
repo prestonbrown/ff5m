@@ -2,8 +2,8 @@
 
 source /opt/config/mod/.shell/common.sh
 
-MCU_F="/opt/klipper/klippy/mcu.py"
-TOOLHEAD_F="/opt/klipper/klippy/toolhead.py"
+MCU_F="$KLIPPER_DIR/klippy/mcu.py"
+TOOLHEAD_F="$KLIPPER_DIR/klippy/toolhead.py"
 
 already_done_e11() {
     echo "Communication Timeout (E0011) already in sync!"
@@ -12,10 +12,10 @@ already_done_e11() {
 fix_disable_e11() {
     echo "Reverting TRSYNC_TIMEOUT"
 
-    grep -qe "^TRSYNC_TIMEOUT = 0.025" $MCU_F \
+    grep -qe "^TRSYNC_TIMEOUT = 0.025" "$MCU_F" \
         && already_done_e11 && return
     
-    sed -i 's|^TRSYNC_TIMEOUT = .*|TRSYNC_TIMEOUT = 0.025|' $MCU_F
+    sed -i 's|^TRSYNC_TIMEOUT = .*|TRSYNC_TIMEOUT = 0.025|' "$MCU_F"
 
     sync
     echo "Done"
@@ -24,10 +24,10 @@ fix_disable_e11() {
 fix_enable_e11() {
     echo "Patching TRSYNC_TIMEOUT"
 
-    grep -qe "^TRSYNC_TIMEOUT = 0.05" $MCU_F \
+    grep -qe "^TRSYNC_TIMEOUT = 0.05" "$MCU_F" \
         && already_done_e11 && return
     
-    sed -i 's|^TRSYNC_TIMEOUT = .*|TRSYNC_TIMEOUT = 0.05|' $MCU_F
+    sed -i 's|^TRSYNC_TIMEOUT = .*|TRSYNC_TIMEOUT = 0.05|' "$MCU_F"
 
     sync
     echo "Done"
@@ -40,10 +40,10 @@ already_done_e17() {
 fix_disable_e17() {
     echo "Reverting LOOKAHEAD_FLUSH_TIME"
 
-    grep -qe "^LOOKAHEAD_FLUSH_TIME = 0.5" $TOOLHEAD_F \
+    grep -qe "^LOOKAHEAD_FLUSH_TIME = 0.5" "$TOOLHEAD_F" \
         && already_done_e17 && return
     
-    sed -i 's|^LOOKAHEAD_FLUSH_TIME = .*|LOOKAHEAD_FLUSH_TIME = 0.5|' $TOOLHEAD_F
+    sed -i 's|^LOOKAHEAD_FLUSH_TIME = .*|LOOKAHEAD_FLUSH_TIME = 0.5|' "$TOOLHEAD_F"
 
     sync
     echo "Done"
@@ -52,10 +52,10 @@ fix_disable_e17() {
 fix_enable_e17() {
     echo "Patching LOOKAHEAD_FLUSH_TIME"
 
-    grep -qe "^LOOKAHEAD_FLUSH_TIME = 0.150" $TOOLHEAD_F \
+    grep -qe "^LOOKAHEAD_FLUSH_TIME = 0.150" "$TOOLHEAD_F" \
         && already_done_e17 && return
     
-    sed -i 's|^LOOKAHEAD_FLUSH_TIME = .*|LOOKAHEAD_FLUSH_TIME = 0.150|' $TOOLHEAD_F
+    sed -i 's|^LOOKAHEAD_FLUSH_TIME = .*|LOOKAHEAD_FLUSH_TIME = 0.150|' "$TOOLHEAD_F"
 
     sync
     echo "Done"

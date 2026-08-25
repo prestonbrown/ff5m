@@ -10,7 +10,7 @@ source /opt/config/mod/.shell/common.sh
 
 revert_klipper_patches() {
     local SRC_DIR="/opt/config/mod/.py/klipper"
-    local TARGET_DIR="/opt/klipper/klippy"
+    local TARGET_DIR="$KLIPPER_DIR/klippy"
     
     # Klipper extensions
     echo "Remove klipper plugins: "
@@ -137,7 +137,7 @@ uninstall() {
         rm -rf /etc/init.d/S50sshd /etc/init.d/S55date /bin/dropbearmulti /bin/dropbear /bin/dropbearkey /bin/scp /etc/dropbear /etc/init.d/S60dropbear
         
         echo "// Removing Beep util..."
-        rm -f /usr/bin/audio /usr/lib/python3.7/site-packages/audio.py /usr/bin/audio_midi.sh /opt/klipper/klippy/extras/gcode_shell_command.py
+        rm -f /usr/bin/audio /usr/lib/python3.7/site-packages/audio.py /usr/bin/audio_midi.sh "$KLIPPER_DIR/klippy/extras/gcode_shell_command.py"
         rm -rf /usr/lib/python3.7/site-packages/mido/
     else
         echo "// Preserve root..."
