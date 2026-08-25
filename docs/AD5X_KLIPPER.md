@@ -138,9 +138,43 @@ the backup first and know how to undo it.
     # Back up every file we are about to replace, then copy ours in.
     # Restore is the same list in reverse, followed by a klipper restart.
 
-Then: klippy starts, `SHAPER_CALIBRATE` completes and produces a graph through
-`.root/zshaper`, and a single-colour print runs start to finish. The four-colour
-path needs the filament-system work and is not part of this layer.
+### Restarting klippy on a ZMOD rig, verified
+
+Two things about our test rig are worth writing down, because both wasted time.
+
+**klippy is not managed by the screen app here.** `firmwareExe` is not running
+and `gdb` is not installed, so ZMOD's `restart_klipper.sh` - which drives the QT
+screen through GDB to trigger a restart - cannot work. klippy is launched at boot
+by `/usr/prog/klipper/start.sh`, which is the thing to re-run.
+
+**`klipperDaemon start` needs the environment `start.sh` sets.** klippy runs on
+FlashForge's `/usr/prog/Python-3.8.2`, whose loader path is exported by
+`start.sh` (`LD_LIBRARY_PATH` for Python-3.8.2, openssl-1.0.2d, libffi-3.4.4).
+Call `klipperDaemon start` without it and klippy dies at once, silently:
+`start-stop-daemon -b` sends its stderr to `/dev/null`, so the import failure
+never reaches `printer.log` and the pidfile is left pointing at a dead pid. Run
+`start.sh`, or export that `LD_LIBRARY_PATH` yourself, and it comes up.
+
+When diagnosing a klippy that will not start, run it in the foreground with the
+loader path set and read stderr directly - that is where an early failure lands,
+never in the `-l` log:
+
+    export LD_LIBRARY_PATH=/usr/prog/Python-3.8.2/lib:/usr/prog/openssl-1.0.2d/lib:/usr/prog/libffi-3.4.4/lib
+    /usr/prog/Python-3.8.2/bin/python3 /usr/prog/klipper/klippy/klippy.py \
+        /usr/data/config/printer.cfg -l /tmp/kt.log -a /tmp/uds-test
+
+### Result, on the AD5X, 2026-08-25
+
+The seven-file overlay was deployed over ZMOD 1.7.2 on stock 1.1.7, and klippy
+started on the real hardware: both MCUs identified (`Loaded MCU 'mcu'` and
+`Loaded MCU 'eboard'`, 116 commands each), both configured (`Configured MCU ...
+(4096 moves)`), and the stats loop running - i.e. the Ready state. No config
+error, no traceback, every patched extra loaded. The rig was then restored to
+ZMOD byte-for-byte and its klippy brought back to `Printer is ready`.
+
+`SHAPER_CALIBRATE` producing a graph through `.root/zshaper`, and a single-colour
+print start to finish, are the remaining bench items. The four-colour path needs
+the filament-system work and is not part of this layer.
 
 ### What is borrowed, and what replaces it
 
