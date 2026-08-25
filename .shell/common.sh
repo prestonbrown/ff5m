@@ -13,7 +13,7 @@
 # shellcheck disable=SC1090,SC1091
 . "$(dirname "${BASH_SOURCE[0]}")/platform.sh"
 
-MOD=$DATA_MNT/.mod/.forge-x
+# MOD (chroot rootfs) and MOD_ROOT (mod source tree) come from platform.sh.
 
 KLIPPER_SRC=/opt/config/mod/.py/klipper
 
