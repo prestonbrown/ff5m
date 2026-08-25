@@ -1,0 +1,5 @@
+# Forge-X platform packages.
+#
+# A package belongs here only when upstream Buildroot has none. Anything
+# Buildroot already ships is selected from the defconfig instead, so this tree
+# stays small and tracks upstream rather than forking it.
