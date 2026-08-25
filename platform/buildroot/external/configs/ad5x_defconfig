@@ -63,6 +63,11 @@ BR2_PACKAGE_LIBCURL=y
 BR2_PACKAGE_LIBCURL_CURL=y
 BR2_PACKAGE_OPENSSL=y
 BR2_PACKAGE_CA_CERTIFICATES=y
+# Moonraker enumerates interfaces with `ip -json -det address`
+# (machine.py:674). BusyBox's ip applet has no JSON output, so this needs the
+# real iproute2 -- without it every network update raises ShellCommandError and
+# clients show no network information.
+BR2_PACKAGE_IPROUTE2=y
 
 # ---------------------------------------------------------------------------
 # Python 3.12 and Moonraker's dependency set
