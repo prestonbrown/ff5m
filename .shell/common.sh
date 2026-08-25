@@ -7,7 +7,13 @@
 ## This file may be distributed under the terms of the GNU GPLv3 license
 
 
-MOD=/data/.mod/.forge-x
+# Board-specific values. Kept in a separate POSIX-clean file so that
+# #!/bin/sh scripts can source the descriptor without pulling in this
+# file, which is bash-only.
+# shellcheck disable=SC1090,SC1091
+. "$(dirname "${BASH_SOURCE[0]}")/platform.sh"
+
+MOD=$DATA_MNT/.mod/.forge-x
 SCRIPTS=/opt/config/mod/.shell
 PY=/opt/config/mod/.py
 CMDS=$SCRIPTS/commands
