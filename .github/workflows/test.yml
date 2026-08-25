@@ -20,7 +20,9 @@ jobs:
 
   python:
     name: Python plugins
-    runs-on: ubuntu-latest
+    # Pinned to 22.04 deliberately: ubuntu-latest is 24.04, which cannot
+    # provision Python 3.8 (it reached end of life before 24.04 shipped).
+    runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
 
