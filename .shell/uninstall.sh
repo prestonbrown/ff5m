@@ -94,11 +94,11 @@ uninstall() {
     # In case of accidentally run this script after init
     echo "// Unmount paths..."
     
-    mount | grep "/data/.mod" | awk '{print $3}' | xargs -n1 -I {} umount -lf "{}"
+    mount | grep "$DATA_MNT/.mod" | awk '{print $3}' | xargs -n1 -I {} umount -lf "{}"
     mount | grep " /root/printer_data" | awk '{print $3}' | xargs -n1 -I {} umount -lf "{}"
     umount -lf /root/.oh-my-zsh &> /dev/null
 
-    if mount | grep -q /data/.mod || lsof | grep -q /data/.mod; then
+    if mount | grep -q "$DATA_MNT/.mod" || lsof | grep -q "$DATA_MNT/.mod"; then
         echo "@@ Found running mod services."
         fail
     fi
@@ -152,7 +152,7 @@ uninstall() {
     
     rm -rf /opt/config/mod/
     rm -rf /root/printer_data
-    rm -rf /data/.mod
+    rm -rf "$DATA_MNT/.mod"
     
     echo "// Done!"
     

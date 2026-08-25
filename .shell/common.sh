@@ -15,7 +15,7 @@
 
 # MOD (chroot rootfs) and MOD_ROOT (mod source tree) come from platform.sh.
 
-KLIPPER_SRC=/opt/config/mod/.py/klipper
+KLIPPER_SRC=$MOD_ROOT/.py/klipper
 
 # Klipper patch directories, in the order they are applied. Every platform gets
 # the shared set; a platform whose stock Klipper differs from the one Forge-X's
@@ -29,10 +29,10 @@ klipper_patch_dirs() {
     fi
 }
 
-SCRIPTS=/opt/config/mod/.shell
-PY=/opt/config/mod/.py
+SCRIPTS=$MOD_ROOT/.shell
+PY=$MOD_ROOT/.py
 CMDS=$SCRIPTS/commands
-BINS=/opt/config/mod/.bin/exec
+BINS=$MOD_ROOT/.bin/exec
 MOD_DATA=/opt/config/mod_data
 
 INIT_FLAG="/tmp/init_finished_f"
@@ -43,8 +43,8 @@ ETHERNET_CONNECTED_F="/tmp/ethernet_connected_f"
 CAMERA_F="/tmp/camera_f"
 NET_IP_F="/tmp/net_ip"
 
-BOOT_FAILURE_F="/opt/config/mod/BOOT_FLAG_FAILURE"
-BOOT_SKIP_F="/opt/config/mod/BOOT_FLAG_SKIP"
+BOOT_FAILURE_F="$MOD_ROOT/BOOT_FLAG_FAILURE"
+BOOT_SKIP_F="$MOD_ROOT/BOOT_FLAG_SKIP"
 
 SCREEN_FOLLOW_UP_LOG="/tmp/logged_message_queue"
 
@@ -52,12 +52,12 @@ CFG_SCRIPT="$CMDS/zconf.sh"
 VAR_PATH="$MOD_DATA/variables.cfg"
 
 FLASHED_VERSION_F="$MOD"/version.txt
-VERSION_F=/opt/config/mod/version.txt
+VERSION_F=$MOD_ROOT/version.txt
 
-LOAD_IMG_XZ="/opt/config/mod/load.img.xz"
+LOAD_IMG_XZ="$MOD_ROOT/load.img.xz"
 [ -f /opt/config/mod_data/load.img.xz ] && LOAD_IMG_XZ="/opt/config/mod_data/load.img.xz"
 
-SPLASH_IMG_XZ="/opt/config/mod/splash.img.xz"
+SPLASH_IMG_XZ="$MOD_ROOT/splash.img.xz"
 [ -f /opt/config/mod_data/splash.img.xz ] && SPLASH_IMG_XZ="/opt/config/mod_data/splash.img.xz"
 
 PATH="$BINS:$PATH"

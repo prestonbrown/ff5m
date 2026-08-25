@@ -7,8 +7,12 @@
 ## This file may be distributed under the terms of the GNU GPLv3 license
 
 
-MOD=/data/.mod/.forge-x
-CFG_SCRIPT="/opt/config/mod/.shell/commands/zconf.sh"
+# Board-specific values. platform.sh rather than common.sh: this file needs
+# only the descriptor, not common.sh's bash helpers.
+# shellcheck disable=SC1091
+. /opt/config/mod/.shell/platform.sh
+
+CFG_SCRIPT="$MOD_ROOT/.shell/commands/zconf.sh"
 CFG_PATH="/opt/config/mod_data/variables.cfg"
 
 

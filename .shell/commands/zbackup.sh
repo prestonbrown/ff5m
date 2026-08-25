@@ -11,7 +11,7 @@ source /opt/config/mod/.shell/common.sh
 CFG_PATH="/opt/config/mod_data/backup.params.cfg"
 
 if [ ! -f $CFG_PATH ]; then
-    cp "/opt/config/mod/.cfg/default/backup.params.cfg" "$CFG_PATH"
+    cp "$MOD_ROOT/.cfg/default/backup.params.cfg" "$CFG_PATH"
 fi
 
 
@@ -59,8 +59,8 @@ TAR_DEBUG_PARAMS=(
     "$LOG_DIR/ffstartup-arm.log"
     "$LOG_DIR/dmesg.complete.log"
     /root/version
-    /data/.mod/.forge-x/etc/os-release
-    /data/.mod/.forge-x/version.txt
+    "$MOD/etc/os-release"
+    "$MOD/version.txt"
 )
 
 tar_backup() {
