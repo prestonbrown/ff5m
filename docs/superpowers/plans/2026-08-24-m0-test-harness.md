@@ -58,30 +58,54 @@
 
 The harness is the one thing nothing else can verify, so it gets a self-test that exercises both outcomes.
 
-Create `test/harness_test.sh`:
+Create `test/harness_test.sh`.
+
+The only property that matters for an assertion library is that **it can fail**.
+A harness whose assertions always pass silently turns every other test in the
+suite into decoration. So each assertion is exercised in both directions.
 
 ```sh
 #!/bin/sh
 # Self-test for the assertion harness.
-# Verifies that passing assertions pass and that failing ones are counted.
+#
+# The thing that actually matters here is the negative case: an assertion that
+# cannot fail makes every test that uses it worthless. Each assertion is checked
+# for both outcomes.
 
 SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
 . "$SCRIPT_DIR/lib/assert.sh"
 
-assert_eq       "eq matches"        "abc"       "abc"
-assert_ne       "ne differs"        "abc"       "xyz"
-assert_empty    "empty is empty"    ""
-assert_contains "contains finds"    "hay needle hay" "needle"
-assert_file     "this file exists"  "$SCRIPT_DIR/harness_test.sh"
+# Run an assertion in a nested shell and echo how many failures it recorded.
+# Nested so the deliberate failures land in that shell's counter, not ours.
+failures_from() {
+    (
+        . "$SCRIPT_DIR/lib/assert.sh"
+        "$@" >/dev/null 2>&1
+        echo "$_T_FAILED"
+    )
+}
 
-# Verify failures are actually counted, without failing this suite.
-# Run a nested shell so the failure lands in its counter, not ours.
-_nested=$(
+# Each assertion must PASS on its true case...
+assert_eq "eq passes when equal"     "0" "$(failures_from assert_eq       x "abc" "abc")"
+assert_eq "ne passes when different" "0" "$(failures_from assert_ne       x "abc" "xyz")"
+assert_eq "empty passes when empty"  "0" "$(failures_from assert_empty    x "")"
+assert_eq "contains passes on match" "0" "$(failures_from assert_contains x "hay needle" "needle")"
+assert_eq "file passes when present" "0" "$(failures_from assert_file     x "$SCRIPT_DIR/harness_test.sh")"
+
+# ...and FAIL on its false case. This half is the point of the file.
+assert_eq "eq fails when different"  "1" "$(failures_from assert_eq       x "abc" "xyz")"
+assert_eq "ne fails when equal"      "1" "$(failures_from assert_ne       x "abc" "abc")"
+assert_eq "empty fails when set"     "1" "$(failures_from assert_empty    x "nonempty")"
+assert_eq "contains fails on miss"   "1" "$(failures_from assert_contains x "hay" "needle")"
+assert_eq "file fails when absent"   "1" "$(failures_from assert_file     x "/nonexistent/path")"
+
+# finish must exit non-zero when anything failed, or CI reports green on red.
+(
     . "$SCRIPT_DIR/lib/assert.sh"
-    assert_eq "deliberate mismatch" "a" "b" >/dev/null 2>&1
-    echo "$_T_FAILED"
+    assert_eq "deliberate" "a" "b" >/dev/null 2>&1
+    finish >/dev/null 2>&1
 )
-assert_eq "failures are counted" "1" "$_nested"
+assert_eq "finish exits non-zero after a failure" "1" "$?"
 
 finish
 ```
@@ -173,7 +197,7 @@ finish() {
 - [ ] **Step 4: Run the self-test to verify it passes**
 
 Run: `sh test/harness_test.sh`
-Expected: six `ok` lines, then `--- 6 assertions, 0 failed`, exit 0.
+Expected: eleven `ok` lines, then `--- 11 assertions, 0 failed`, exit 0.
 
 Verify the exit code explicitly: `sh test/harness_test.sh; echo "exit=$?"` must print `exit=0`.
 
@@ -734,87 +758,242 @@ def declaration_file(tmp_path):
     return path
 
 
+class StubGCommand:
+    """Mimics Klipper's GCodeCommand for the four methods mod_params uses."""
+
+    def __init__(self, **params):
+        self._params = params
+        self.raw = []
+        self.info = []
+
+    def get(self, key, default=None):
+        if key in self._params:
+            return self._params[key]
+        if default is None and key in ("PARAM", "VALUE"):
+            raise RuntimeError("missing required gcode parameter: %s" % key)
+        return default
+
+    def respond_info(self, msg):
+        self.info.append(msg)
+
+    def respond_raw(self, msg):
+        self.raw.append(msg)
+
+    def error(self, msg):
+        return RuntimeError(msg)
+
+
 @pytest.fixture
-def stub_config(tmp_path, declaration_file):
-    variables = tmp_path / "variables.cfg"
-    variables.write_text("")
+def variables_path(tmp_path):
+    """The INI file mod_params persists to. Starts empty, as on a fresh install."""
+    path = tmp_path / "variables.cfg"
+    path.write_text("")
+    return path
+
+
+@pytest.fixture
+def stub_config(declaration_file, variables_path):
     return StubConfig(
         {
             "declaration": str(declaration_file),
-            "filename": str(variables),
+            "filename": str(variables_path),
         }
     )
+
+
+@pytest.fixture
+def readonly_config(tmp_path, variables_path):
+    """A declaration containing a readonly parameter, for the refusal test."""
+    decl = {
+        "enums": {},
+        "parameters": [
+            {
+                "key": "ro",
+                "type": "int",
+                "default": 1,
+                "label": "Readonly",
+                "readonly": True,
+            }
+        ],
+    }
+    path = tmp_path / "readonly_params.json"
+    path.write_text(json.dumps(decl))
+    return StubConfig(
+        {"declaration": str(path), "filename": str(variables_path)}
+    )
+
+
+@pytest.fixture
+def gcmd():
+    """Factory for stub gcode commands: gcmd(PARAM="x", VALUE="1")."""
+    return StubGCommand
 ```
 
 - [ ] **Step 2: Write the failing tests**
 
-Create `test/python/test_mod_params.py`:
+Create `test/python/test_mod_params.py`.
+
+**Every assertion below was verified by actually running `mod_params.py` against
+this stub on 2026-08-24.** None of it is inferred from reading the source. Where
+behaviour looked surprising it was re-run and confirmed. If one of these fails,
+the stub or the plugin changed - do not "fix" the test by rewriting the expected
+value to whatever the code now returns.
 
 ```python
 """Unit tests for the mod_params klippy plugin.
 
 mod_params is the settings authority the rest of the mod reads through, so its
-defaults, typing, and persistence are worth pinning down.
+typing, persistence, and refusal behaviour are what matter. Each test here
+targets a branch that can actually break.
 """
+
+import pytest
 
 import mod_params
 
 
-def test_defaults_are_applied_when_storage_is_empty(stub_config):
+def test_defaults_apply_without_touching_storage(stub_config, variables_path):
+    """A fresh install resolves defaults in memory and writes nothing."""
     mgr = mod_params.ModParamManagement(stub_config)
-    status = mgr.get_status(None)
-    assert status["variables"]["backlight"] == 50
+
+    assert mgr.get_status(None)["variables"]["backlight"] == 50
+    assert variables_path.read_text() == ""
 
 
-def test_enum_default_resolves_to_its_name(stub_config):
+def test_enum_default_resolves_to_its_int_value(stub_config):
+    """DisplayEnum STOCK is declared as 0, and status exposes the int."""
     mgr = mod_params.ModParamManagement(stub_config)
-    status = mgr.get_status(None)
-    assert status["variables"]["display"] == 0
+
+    assert mgr.get_status(None)["variables"]["display"] == 0
 
 
-def test_registers_its_gcode_commands(stub_config):
-    mod_params.ModParamManagement(stub_config)
-    commands = stub_config.get_printer().lookup_object("gcode").commands
-    for name in ("LIST_MOD_PARAMS", "GET_MOD_PARAM", "SET_MOD_PARAM", "SET_MOD"):
-        assert name in commands
+def test_setting_a_value_persists_it(stub_config, variables_path, gcmd):
+    mgr = mod_params.ModParamManagement(stub_config)
+
+    mgr.cmd_SET_MOD_PARAM(gcmd(PARAM="backlight", VALUE="42"))
+
+    assert mgr.get_status(None)["variables"]["backlight"] == 42
+    assert "backlight = 42" in variables_path.read_text()
 
 
-def test_load_config_returns_a_manager(stub_config):
-    assert isinstance(mod_params.load_config(stub_config),
-                      mod_params.ModParamManagement)
+def test_enum_persists_as_its_name_not_its_int(stub_config, variables_path, gcmd):
+    """Storage keeps the symbolic name, so a renumbered enum does not corrupt state."""
+    mgr = mod_params.ModParamManagement(stub_config)
+
+    mgr.cmd_SET_MOD_PARAM(gcmd(PARAM="display", VALUE="GUPPY"))
+
+    assert "display = 'GUPPY'" in variables_path.read_text()
+
+
+def test_setting_the_current_value_writes_nothing(stub_config, variables_path, gcmd):
+    """Save-on-change only. Rewriting flash on every no-op set would be wasteful."""
+    mgr = mod_params.ModParamManagement(stub_config)
+
+    mgr.cmd_SET_MOD_PARAM(gcmd(PARAM="backlight", VALUE="50"))  # 50 is the default
+
+    assert variables_path.read_text() == ""
+
+
+@pytest.mark.parametrize("param,value", [("display", "NOPE"), ("backlight", "abc")])
+def test_invalid_value_raises_and_does_not_persist(stub_config, variables_path,
+                                                   gcmd, param, value):
+    mgr = mod_params.ModParamManagement(stub_config)
+
+    with pytest.raises(Exception):
+        mgr.cmd_SET_MOD_PARAM(gcmd(PARAM=param, VALUE=value))
+
+    assert variables_path.read_text() == ""
+
+
+def test_readonly_parameter_is_refused(readonly_config, gcmd):
+    mgr = mod_params.ModParamManagement(readonly_config)
+
+    with pytest.raises(Exception) as excinfo:
+        mgr.cmd_SET_MOD_PARAM(gcmd(PARAM="ro", VALUE="9"))
+
+    assert "readonly" in str(excinfo.value)
+
+
+def test_near_miss_suggests_the_real_parameter(stub_config, gcmd):
+    """A genuine typo gets a useful suggestion and does not raise."""
+    mgr = mod_params.ModParamManagement(stub_config)
+    cmd = gcmd(PARAM="backlite", VALUE="1")
+
+    mgr.cmd_SET_MOD_PARAM(cmd)
+
+    assert any("Unknown parameter" in m for m in cmd.raw)
+    assert any("backlight" in m for m in cmd.info)
+
+
+@pytest.mark.xfail(reason="_find_similar_param uses `min_distance <= 10`, which is "
+                          "far wider than any parameter name, so every input "
+                          "matches something and the no-match branch is dead code")
+def test_nonsense_input_is_not_given_a_suggestion(stub_config, gcmd):
+    """`SET_MOD PARAM=zzzzzzzz` should say the parameter is unknown, not guess.
+
+    Verified 2026-08-24: it currently answers "Did you mean display?", because
+    the Levenshtein distance from 'zzzzzzzz' to 'display' is 8, which passes the
+    <= 10 threshold. Marked xfail rather than deleted so the suite documents the
+    defect and turns green by itself when the threshold is tightened.
+    """
+    mgr = mod_params.ModParamManagement(stub_config)
+    cmd = gcmd(PARAM="zzzzzzzz", VALUE="1")
+
+    try:
+        mgr.cmd_SET_MOD_PARAM(cmd)
+    except Exception:
+        return  # raising "Unknown parameter" is the correct behaviour
+
+    assert not any("Did you mean" in m for m in cmd.info)
 ```
 
-- [ ] **Step 3: Run them to see where the stub is wrong**
+- [ ] **Step 3: Run the suite**
 
 Run: `python3 -m pytest test/python/ -v`
 
-Expected on the first run: some tests fail, because the stub almost certainly does not match Klipper's contract exactly on the first attempt. Read each failure and fix `conftest.py`, not the assertions. The assertions describe what `mod_params` genuinely does; the stub is what is approximate.
+Expected: 9 passed, 1 xfailed. The xfail is
+`test_nonsense_input_is_not_given_a_suggestion`, which documents a real defect in
+`_find_similar_param` (see Task 5b).
 
-If a test reveals that `mod_params` needs a config option the stub does not provide, add it to the `stub_config` fixture's dict. If it needs a printer object the stub lacks, add it to `StubPrinter.objects`.
+The stub was validated against the real plugin on 2026-08-24, so a failure here
+means something genuinely diverged. Read it rather than adjusting the assertion.
 
-- [ ] **Step 4: Iterate until green**
+- [ ] **Step 4: Confirm the xfail is xfail and not xpass**
 
-Run: `python3 -m pytest test/python/ -v`
-Expected: 4 passed.
+Run: `python3 -m pytest test/python/ -v -rxX`
 
-- [ ] **Step 5: Verify the tests can actually fail**
+Expected: the report lists it as `XFAIL`, not `XPASS`. An `XPASS` would mean the
+suggestion threshold was already fixed, in which case remove the `xfail` marker
+so the test guards the fix going forward.
 
-A passing test that cannot fail proves nothing. Mutate the declaration and confirm a test catches it:
+- [ ] **Step 5: Verify the tests catch a real regression**
 
-```bash
-python3 - <<'EOF'
-import json, pathlib
-# Temporarily change the default so test_defaults_are_applied should fail.
-print("Run pytest after editing conftest's declaration default from 50 to 51")
-EOF
+Mutating the fixture only proves the fixture is wired up. Mutate the **plugin**,
+which is what these tests exist to protect.
+
+Break save-on-change in `.py/klipper/plugins/mod_params.py` by making
+`cmd_SET_MOD_PARAM` always save. Change:
+
+```python
+        if new_value != self.variables[key]:
+            self.variables[key] = new_value
+            self._save_all()
 ```
 
-Edit `test/python/conftest.py`, change the `backlight` default from `50` to `51`, then run:
+to:
 
-Run: `python3 -m pytest test/python/test_mod_params.py::test_defaults_are_applied_when_storage_is_empty -v`
-Expected: FAIL, asserting 51 != 50.
+```python
+        if True:
+            self.variables[key] = new_value
+            self._save_all()
+```
 
-Change it back to `50` and confirm green again.
+Run: `python3 -m pytest test/python/ -v`
+Expected: `test_setting_the_current_value_writes_nothing` FAILS.
+
+Restore the file with `git checkout -- .py/klipper/plugins/mod_params.py` and
+confirm the suite is green again. If that test passed while the mutation was in
+place, it is not testing what it claims and must be fixed before committing.
 
 - [ ] **Step 6: Commit**
 

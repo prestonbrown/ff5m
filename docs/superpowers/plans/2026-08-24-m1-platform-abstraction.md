@@ -45,6 +45,7 @@ This task creates the seam and the test that keeps every later task honest. Noth
 **Files:**
 - Modify: `.shell/common.sh:9` (insert descriptor block above `MOD=`)
 - Create: `test/platform_vars_test.sh`
+- Create: `test/descriptor_usage_test.sh`
 
 **Interfaces:**
 - Consumes: nothing.
@@ -140,15 +141,91 @@ MOD=$DATA_MNT/.mod/.forge-x
 Run: `sh test/platform_vars_test.sh`
 Expected: PASS, with every line reporting `ok`. In particular `MOD = /data/.mod/.forge-x`, proving the rewrite preserved the value.
 
-- [ ] **Step 5: Syntax-check the modified file with its own interpreter**
+- [ ] **Step 5: Write the gate that catches the real failure mode**
+
+`platform_vars_test.sh` pins the values, but it cannot catch what will actually
+go wrong during the sweeps in Tasks 3 and 4: a file that uses `$LOG_DIR` or
+`$KLIPPER_DIR` **without sourcing `common.sh`**. An unset variable expands to the
+empty string, so `"$LOG_DIR/boot.log"` silently becomes `/boot.log`. Nothing
+errors; logs just go to the wrong place, and on a read-only root they vanish.
+
+Create `test/descriptor_usage_test.sh`:
+
+```sh
+#!/bin/sh
+# Any script using a platform descriptor variable must source common.sh.
+#
+# An unset shell variable expands to the empty string rather than failing, so a
+# missing source turns "$LOG_DIR/boot.log" into "/boot.log" with no error at all.
+# This gate is the reason the descriptor refactor is safe to do mechanically.
+
+SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
+REPO_DIR=$(cd "$SCRIPT_DIR/.." && pwd)
+. "$SCRIPT_DIR/lib/assert.sh"
+
+cd "$REPO_DIR" || exit 1
+
+DESCRIPTOR_VARS="PLATFORM PLATFORM_NAME ROOT_PART DATA_PART DATA_MNT LOG_DIR KLIPPER_DIR STOCK_UI_PROCS"
+
+for f in $(git ls-files '.shell/*' '.root/*'); do
+    [ -f "$f" ] || continue
+    # common.sh defines them; it does not need to source itself.
+    [ "$f" = ".shell/common.sh" ] && continue
+
+    uses=""
+    for v in $DESCRIPTOR_VARS; do
+        if grep -q "\$$v\|\${$v}" "$f" 2>/dev/null; then
+            uses="$uses $v"
+        fi
+    done
+
+    [ -z "$uses" ] && continue
+
+    if grep -q 'common\.sh' "$f"; then
+        _t_pass "sources common.sh:$f (uses$uses)"
+    else
+        _t_fail "sources common.sh: $f" \
+                "uses$uses but never sources common.sh; those expand to empty"
+    fi
+done
+
+finish
+```
+
+- [ ] **Step 6: Verify the gate is green now and can actually fail**
+
+Run: `sh test/descriptor_usage_test.sh; echo "exit=$?"`
+
+Expected: `exit=0`. At this point only `common.sh` defines the variables and
+nothing consumes them yet, so the loop finds no files and the suite is trivially
+green. That is correct for now and it becomes load-bearing in Tasks 3 and 4.
+
+Prove it fires before relying on it:
+
+```bash
+printf '#!/bin/sh\necho "$LOG_DIR/x"\n' > .shell/zz_unsourced.sh
+git add -N .shell/zz_unsourced.sh
+sh test/descriptor_usage_test.sh; echo "exit=$?"
+```
+
+Expected: `NOT OK sources common.sh: .shell/zz_unsourced.sh` and `exit=1`.
+
+Clean up and confirm green:
+
+```bash
+git rm -f --cached .shell/zz_unsourced.sh && rm -f .shell/zz_unsourced.sh
+sh test/descriptor_usage_test.sh; echo "exit=$?"
+```
+
+- [ ] **Step 7: Syntax-check the modified file with its own interpreter**
 
 Run: `head -1 .shell/common.sh` to confirm the shebang, then `bash -n .shell/common.sh`
 Expected: no output, exit 0.
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 8: Commit**
 
 ```bash
-git add test/platform_vars_test.sh .shell/common.sh
+git add test/platform_vars_test.sh test/descriptor_usage_test.sh .shell/common.sh
 git commit -m "Add platform descriptor to common.sh
 
 Names every board-specific value in one place so that scripts consume
@@ -321,13 +398,9 @@ Worked example, `.shell/commands/zbackup.sh:46-48` (glob suffix):
 
 Run:
 
-```bash
-for f in $(git grep -l 'LOG_DIR' -- .shell .root); do
-    grep -q 'common.sh' "$f" || echo "MISSING SOURCE: $f"
-done
-```
+Run: `sh test/descriptor_usage_test.sh`
 
-Expected: no output. Any file listed must get a `common.sh` source line matching how its siblings do it, or it will expand `$LOG_DIR` to the empty string and write logs to `/boot.log`.
+Expected: `PASS`. Any file reported must get a `common.sh` source line matching how its siblings do it, or it will expand `$LOG_DIR` to the empty string and write logs to `/boot.log`. This is the gate written in Task 1 step 5, now doing the job it exists for.
 
 - [ ] **Step 4: Confirm no literals remain**
 
@@ -430,13 +503,9 @@ Only the **source** of the bind mount is a host path and becomes `$KLIPPER_DIR`.
 
 Run:
 
-```bash
-for f in $(git grep -l 'KLIPPER_DIR' -- .shell .root); do
-    grep -q 'common.sh' "$f" || echo "MISSING SOURCE: $f"
-done
-```
+Run: `sh test/descriptor_usage_test.sh`
 
-Expected: no output.
+Expected: `PASS`.
 
 - [ ] **Step 4: Confirm only the intended literals remain**
 
