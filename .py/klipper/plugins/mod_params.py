@@ -363,17 +363,18 @@ class ModParamManagement:
         # Compute distances from misspelled name to each parameter
         distances = [(param, ModParamManagement._levenshtein_distance(misspelled, param)) for param in param_list]
 
-        # Find the minimum distance
-        min_distance = min(distances, key=lambda x: x[1])[1]
+        # Find the closest parameter (first one wins if several tie)
+        closest_param, min_distance = min(distances, key=lambda x: x[1])
 
-        if min_distance <= 10:
-            closest_params = [param for param, dist in distances if dist == min_distance]
+        # Scale the tolerance to the parameter's length. A fixed allowance wide
+        # enough for "bed_mesh_validation_tolerance" also matches anything at
+        # all against a short name like "zssh", which turns every unknown
+        # parameter into a confident wrong guess.
+        if min_distance <= max(2, len(closest_param) // 3):
+            return closest_param
 
-            # Return the first one (arbitrary choice if multiple matches)
-            return closest_params[0]
-        else:
-            # If the smallest distance is too large, return None
-            return None
+        # Nothing close enough to be worth suggesting.
+        return None
 
 
 def load_config(config):
