@@ -1,0 +1,97 @@
+# Pre-existing shellcheck findings, recorded as file:code pairs.
+#
+# Line numbers are deliberately excluded so unrelated edits that shift lines
+# do not invalidate the baseline.
+#
+# Generated with shellcheck 0.9.0. The finding set changes between shellcheck
+# versions, so a different version may report findings absent here; see
+# docs/TESTING.md for how to regenerate.
+#
+# Sorted with LC_ALL=C. The gate compares with comm, which requires both sides
+# collated identically.
+.root/S35tslib:SC2181
+.root/S45ntpd:SC2181
+.root/S65moonraker:SC2181
+.root/S70httpd:SC2181
+.root/S80guppyscreen:SC2181
+.root/fake-hwclock:SC2086
+.root/forge-x:SC2317
+.root/guppyscreen:SC2320
+.root/moonraker/components/file_manager/metadata.py:SC1071
+.root/moonraker/moonraker.py:SC1071
+.root/moonraker/server.py:SC1071
+.root/stop.sh:SC3001
+.root/zshaper.sh:SC2012
+.root/zshaper/calibrate_shaper.py:SC1071
+.shell/S00init:SC1091
+.shell/S00init:SC2153
+.shell/S00init:SC2155
+.shell/S00init:SC2181
+.shell/S55boot:SC1091
+.shell/S60dropbear:SC1091
+.shell/S60dropbear:SC2086
+.shell/S60dropbear:SC2181
+.shell/S98camera:SC1091
+.shell/S98camera:SC2086
+.shell/S98camera:SC2155
+.shell/S98camera:SC2181
+.shell/S98zssh:SC1091
+.shell/S98zssh:SC2009
+.shell/S98zssh:SC2046
+.shell/S99root:SC1091
+.shell/S99root:SC2009
+.shell/boot/boot.sh:SC1091
+.shell/boot/boot.sh:SC2012
+.shell/boot/boot_mcu.sh:SC2181
+.shell/boot/init_boot_flag.sh:SC1090
+.shell/boot/init_boot_flag.sh:SC1091
+.shell/boot/init_boot_flag.sh:SC2317
+.shell/boot/init_swap.sh:SC1091
+.shell/boot/init_swap.sh:SC2012
+.shell/boot/init_swap.sh:SC2086
+.shell/boot/init_swap.sh:SC2155
+.shell/boot/init_swap.sh:SC2181
+.shell/boot/init_swap.sh:SC2317
+.shell/boot/usb_storage.sh:SC2015
+.shell/boot/usb_storage.sh:SC2034
+.shell/close_dialogs.sh:SC2009
+.shell/commands/zbackup.sh:SC1091
+.shell/commands/zbackup.sh:SC2034
+.shell/commands/zbackup.sh:SC2086
+.shell/commands/zbackup.sh:SC2155
+.shell/commands/zchanges.sh:SC1091
+.shell/commands/zcheck.sh:SC1091
+.shell/commands/zcheck.sh:SC2317
+.shell/commands/zconf.sh:SC2155
+.shell/commands/zdisplay.sh:SC1091
+.shell/commands/zdisplay.sh:SC2155
+.shell/commands/zinit.sh:SC1091
+.shell/commands/zmoon.sh:SC2181
+.shell/commands/zprint.sh:SC2086
+.shell/commands/zsend.sh:SC2181
+.shell/commands/zshaper.sh:SC1091
+.shell/commands/ztheme_editor.sh:SC1091
+.shell/commands/ztune_klipper.sh:SC1091
+.shell/commands/ztune_klipper.sh:SC2155
+.shell/commands/zupdate.sh:SC1091
+.shell/commands/zupdate.sh:SC2015
+.shell/commands/zusb.sh:SC1091
+.shell/commands/zusb.sh:SC2002
+.shell/commands/zusb_mount.sh:SC1091
+.shell/commands/zusb_mount.sh:SC2034
+.shell/commands/zversion.sh:SC1091
+.shell/common.sh:SC2034
+.shell/migrate_db.sh:SC2012
+.shell/migrate_db.sh:SC2207
+.shell/motd.sh:SC2004
+.shell/motd.sh:SC2155
+.shell/restart_klipper.sh:SC2009
+.shell/restart_klipper.sh:SC2086
+.shell/restart_klipper.sh:SC2181
+.shell/restart_klipper.sh:SC2236
+.shell/screen.sh:SC1091
+.shell/screen.sh:SC2009
+.shell/screen.sh:SC2086
+.shell/screen.sh:SC2155
+.shell/screen.sh:SC2206
+.shell/uninstall.sh:SC1091
