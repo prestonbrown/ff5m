@@ -132,11 +132,34 @@ Buildroot, producing both a cross toolchain and a minimal rootfs for MIPS32r5 gl
 We already know the exact target parameters because a working Buildroot toolchain for
 this printer exists: `mipsel-buildroot-linux-gnu-` GCC 13.3.0 against glibc 2.40, with
 OpenSSL 3.4.1 and zlib 1.3.1. That toolchain is currently sourced from ghzserg (ZMOD's
-author) and mirrored into HelixScreen's releases. **Replacing it with our own Buildroot
-output is a hard requirement**: Forge-X cannot take a build dependency on a competing
-mod's output, so until our own exists this work is not upstreamable at all.
+author) and mirrored into HelixScreen's releases.
 
-Deliberate size target: ZMOD's chroot is ~1 GB. Ours should be a small fraction of that.
+> **Correction, 2026-08-25.** This section originally argued that replacing that
+> toolchain was a hard requirement because "Forge-X cannot take a build dependency on a
+> competing mod's output." That is factually wrong, and the mistake is worth recording
+> because it changes the sequencing.
+>
+> Unpacking `Adventurer5M-ForgeX-1.4.1.tgz` shows the shipped rootfs is
+> `xz/buildroot.tar.xz`, and its `etc/os-release` reads `NAME=Buildroot_zmod` /
+> `PRETTY_NAME="zmod 1.0.5"`. **Forge-X already ships ZMOD's Buildroot image.** That is
+> why `ff5m` contains no defconfig, no br2-external tree, and no CI that builds one:
+> DrA1ex does not have one to publish.
+>
+> Two consequences. First, the argument for doing this work is *stronger* than the one
+> written here, not weaker: a published, reproducible Buildroot tree frees Forge-X from
+> an opaque inherited blob on **both** architectures, which is a far more attractive
+> thing to hand over than a MIPS port alone. Second, M2 is **not** on the critical path
+> to a bootable artifact. ZMOD already publishes a MIPS image for the AD5X, so a
+> bring-up that borrows Layer 1 could reach the bench well before our own userland
+> exists. Ours remains the right end state; it is not the required first step, and
+> treating it as one is a scheduling choice that should be made deliberately.
+
+Deliberate size target. The ~1 GB figure often quoted for ZMOD's chroot is a `du`
+artifact: it counts bind-mounted host content (`usr/prog` = Klipper, `usr/data` =
+config/gcodes/logs) plus our own 171 MB HelixScreen install. ZMOD's actual userland is
+**~355 MB**, and Forge-X's ARM image is **~196 MB** once `usr/libexec/git-core` is
+deduplicated (137 of its files are identical copies of the same 3.6 MB `git` binary).
+Ours should be a small fraction of the honest numbers, not the inflated ones.
 We need Python 3.12, Moonraker's dependencies, a web server, and busybox. We do not need
 mido, a MIDI stack, audio libraries, a shaper toolchain, or twelve locales. On a box with
 485 MB of RAM and a 973 MB partition, that difference is a real feature and not vanity.
@@ -353,9 +376,18 @@ real cost is print hours, not code.
 
 ## 9. Risks
 
-**The userland is the schedule.** M1 is the piece with the least existing art and the most
-ways to go wrong: a Buildroot config that produces a working glibc 2.40 MIPS32r5 rootfs
-small enough to be worth the effort. Everything else has a reference implementation to read.
+**The userland is the schedule.** M2 (not M1 - that was a typo here) is the piece with
+the most ways to go wrong: a Buildroot config that produces a working MIPS32r5 rootfs
+small enough to be worth the effort.
+
+Revised down, 2026-08-25. This is no longer the highest-risk milestone. We now have the
+exact reference image to diff against, and its toolchain turns out to be stock Buildroot
+2024.11 defaults (Python 3.12.9 and GCC 13.3.0 are that release's pins), so reproducing
+it needs no reverse-engineering. Every ABI parameter has been measured on the printer
+rather than inferred - o32, hard-float FP64, nan2008, MIPS32r5 - and a defconfig
+producing exactly those is committed. What remains genuinely unproven is whether the
+compiled Python dependencies cross-build clean for MIPS; no upstream CI covers that
+target, so Pillow and zeroconf are the ones to smoke-test first.
 
 **TTC on host load.** This platform shuts down the MCU when the host is busy during motion.
 Forge-X's own regression harness had to stop taking screenshots during toolhead movement for
