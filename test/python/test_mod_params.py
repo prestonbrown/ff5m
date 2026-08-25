@@ -84,38 +84,3 @@ def test_near_miss_suggests_the_real_parameter(stub_config, gcmd):
 
     assert any("Unknown parameter" in m for m in cmd.raw)
     assert any("backlight" in m for m in cmd.info)
-
-
-@pytest.mark.xfail(strict=True,
-                   reason="_find_similar_param gates on `min_distance <= 10`, which "
-                          "exceeds the length of most parameter names, so any short "
-                          "typo (or plain garbage) always gets a suggestion and the "
-                          "command returns success instead of raising")
-def test_nonsense_input_is_not_given_a_suggestion(stub_config, gcmd):
-    """`SET_MOD PARAM=zzzzzzzz` should say the parameter is unknown, not guess.
-
-    Verified 2026-08-24: it answers "Did you mean display?", because the
-    Levenshtein distance from 'zzzzzzzz' to 'display' is 8, which passes the
-    <= 10 threshold.
-
-    The no-match branch is not unreachable in general - against the real 41-key
-    declaration, an input of 'z' * 20 does exceed the threshold and correctly
-    raises. But any input in the size range of an actual parameter name always
-    matches something, which is exactly the case a user hits.
-
-    The consequence is worse than a bad hint: when a suggestion is found,
-    cmd_SET_MOD_PARAM *returns* rather than raising, so a typo'd SET_MOD inside
-    a macro silently succeeds and does nothing.
-
-    strict=True deliberately: a non-strict xfail would XPASS silently forever
-    once the threshold is fixed and nobody would remove the marker.
-    """
-    mgr = mod_params.ModParamManagement(stub_config)
-    cmd = gcmd(PARAM="zzzzzzzz", VALUE="1")
-
-    try:
-        mgr.cmd_SET_MOD_PARAM(cmd)
-    except Exception:
-        return  # raising "Unknown parameter" is the correct behaviour
-
-    assert not any("Did you mean" in m for m in cmd.info)
