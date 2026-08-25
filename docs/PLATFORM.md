@@ -114,6 +114,7 @@ Two gates cover the descriptor, and `sh test/run.sh` discovers both.
 |---|---|
 | `test/platform_vars_test.sh` | Every variable still expands to the literal it replaced |
 | `test/descriptor_usage_test.sh` | Every file using a variable actually sources the descriptor |
+| `test/klipper_patch_dirs_test.sh` | The Klipper patch overlay resolves per platform, in the right order |
 
 Run them after any change to `platform.sh` or its consumers:
 
@@ -121,3 +122,11 @@ Run them after any change to `platform.sh` or its consumers:
     sh test/descriptor_usage_test.sh
 
 Neither needs a printer or any dependency beyond a POSIX shell.
+
+## First consumer beyond a path
+
+`PLATFORM` is not only a string substituted into paths. `klipper_patch_dirs` in
+`.shell/common.sh` uses it to decide whether a platform gets a
+`.py/klipper/patches.$PLATFORM` overlay applied over the shared Klipper patch
+set, because FlashForge's Klipper is not the same code on every board. AD5M has
+no overlay and is unaffected. See [AD5X_KLIPPER.md](/docs/AD5X_KLIPPER.md).
