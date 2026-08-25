@@ -6,6 +6,9 @@
 ##
 ## This file may be distributed under the terms of the GNU GPLv3 license
 
+# shellcheck disable=SC1091
+source /opt/config/mod/.shell/common.sh
+
 
 set -x
 
@@ -29,7 +32,7 @@ restart() {
     
     # Mount rootfs
     mkdir -p /_root
-    mount /dev/mmcblk0p6 /_root
+    mount "$ROOT_PART" /_root
     
     # Make sure boot scripts at it's place
     rm -f /_root/etc/init.d/S00fix

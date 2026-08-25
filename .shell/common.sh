@@ -52,10 +52,10 @@ unset LD_LIBRARY_PATH
 
 mount_data_partition() {
     # mount data - this would otherwise be mounted later by Flashforge's firmware
-    if ! mount | grep -q /dev/mmcblk0p7; then
-        echo "// Mounting /data partition..."
-        fsck -y /dev/mmcblk0p7 || true
-        mount /dev/mmcblk0p7 /data;
+    if ! mount | grep -qF -- "$DATA_PART"; then
+        echo "// Mounting $DATA_MNT partition..."
+        fsck -y "$DATA_PART" || true
+        mount "$DATA_PART" "$DATA_MNT";
     fi
     
     # local timeout=60
@@ -64,8 +64,8 @@ mount_data_partition() {
     #     timeout=$(( timeout - 1 ))
     # done
     
-    if ! mount | grep -q /dev/mmcblk0p7; then
-        echo "@@ Mounting /data failed."
+    if ! mount | grep -qF -- "$DATA_PART"; then
+        echo "@@ Mounting $DATA_MNT failed."
         exit 1
     fi
 }

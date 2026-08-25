@@ -3,6 +3,12 @@
 # Starts uinput
 #
 
+# Board-specific values. platform.sh rather than common.sh: this script
+# declares #!/bin/sh and runs under BusyBox ash, which cannot parse
+# common.sh.
+# shellcheck disable=SC1091
+. /opt/config/mod/.shell/platform.sh
+
 mkdir -p /var/run/
 
 BIN=/usr/bin/ts_uinput
@@ -38,7 +44,7 @@ start() {
         insmod /lib/modules/5.4.61/uinput.ko
         
         mkdir -p /tmp/parent_root
-        mount /dev/mmcblk0p6 /tmp/parent_root
+        mount "$ROOT_PART" /tmp/parent_root
         
         ln -fns /tmp/parent_root/opt/tslib-1.12/etc/ts.conf /etc/
         ln -fns /tmp/parent_root/opt/tslib-1.12/etc/pointercal /etc/
