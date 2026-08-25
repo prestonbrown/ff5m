@@ -297,9 +297,23 @@ init_buildroot() {
     sync
 }
 
+# True when $1 is a relative path supplied by any patch directory. Used to tell
+# a live patch from one left behind by an older release.
+klipper_patch_exists() {
+    local rel_path="$1"
+    local dir
+
+    for dir in $(klipper_patch_dirs); do
+        if [ -f "$dir/$rel_path" ]; then return 0; fi
+    done
+
+    return 1
+}
+
 apply_klipper_patches() {
     local SRC_DIR="/opt/config/mod/.py/klipper"
     local TARGET_DIR="$KLIPPER_DIR/klippy"
+    local src
 
 
     # Remove old patches/extensions
@@ -308,7 +322,7 @@ apply_klipper_patches() {
         local file_name=${file##*/}
 
         if [ -f "$file.bak" ]; then # Patch
-            if [ ! -f "$SRC_DIR/patches/$rel_path" ]; then
+            if ! klipper_patch_exists "$rel_path"; then
                 echo "// Remove old patch: $file"
                 mv "$file.bak" "$file"
             fi
@@ -329,28 +343,30 @@ apply_klipper_patches() {
     sync
     echo "Apply patches..."
     
-    # Apply klipper patches
-    find $SRC_DIR/patches -type f | while read -r file; do
-        local rel_file=${file#"$SRC_DIR/patches/"}
-        local rel_path=$(dirname "$rel_file")
-        local target="$TARGET_DIR/$rel_file"
-        
-        mkdir -p "$TARGET_DIR/$rel_path"
-        
-        if [ ! -L "$target" ]; then
-            if [ ! -f "$target.bak" ]; then
-                echo "// Create klipper file backup: $target"
-                mv "$target" "$target.bak"
+    # Apply klipper patches. The overlay is applied last so that its files win.
+    for src in $(klipper_patch_dirs); do
+        find "$src" -type f | while read -r file; do
+            local rel_file=${file#"$src/"}
+            local rel_path=$(dirname "$rel_file")
+            local target="$TARGET_DIR/$rel_file"
+
+            mkdir -p "$TARGET_DIR/$rel_path"
+
+            if [ ! -L "$target" ]; then
+                if [ ! -f "$target.bak" ]; then
+                    echo "// Create klipper file backup: $target"
+                    mv "$target" "$target.bak"
+                else
+                    echo "// Remove overwritten klipper file: $target"
+                    rm -f "$target"
+                fi
+
+                echo "// Link patched klipper file: $file"
+                ln -fs "$file" "$target"
             else
-                echo "// Remove overwritten klipper file: $target"
-                rm -f "$target"
+                ln -fs "$file" "$target"
             fi
-            
-            echo "// Link patched klipper file: $file"
-            ln -fs "$file" "$target"
-        else
-            ln -fs "$file" "$target"
-        fi
+        done
     done
 
     sync

@@ -14,6 +14,21 @@
 . "$(dirname "${BASH_SOURCE[0]}")/platform.sh"
 
 MOD=$DATA_MNT/.mod/.forge-x
+
+KLIPPER_SRC=/opt/config/mod/.py/klipper
+
+# Klipper patch directories, in the order they are applied. Every platform gets
+# the shared set; a platform whose stock Klipper differs from the one Forge-X's
+# patches were written against also gets an overlay applied on top, so its files
+# win. patches.ad5m does not exist, so AD5M is unaffected.
+klipper_patch_dirs() {
+    echo "$KLIPPER_SRC/patches"
+
+    if [ -d "$KLIPPER_SRC/patches.$PLATFORM" ]; then
+        echo "$KLIPPER_SRC/patches.$PLATFORM"
+    fi
+}
+
 SCRIPTS=/opt/config/mod/.shell
 PY=/opt/config/mod/.py
 CMDS=$SCRIPTS/commands

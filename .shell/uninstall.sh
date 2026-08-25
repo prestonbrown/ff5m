@@ -11,6 +11,7 @@ source /opt/config/mod/.shell/common.sh
 revert_klipper_patches() {
     local SRC_DIR="/opt/config/mod/.py/klipper"
     local TARGET_DIR="$KLIPPER_DIR/klippy"
+    local src
     
     # Klipper extensions
     echo "Remove klipper plugins: "
@@ -25,15 +26,18 @@ revert_klipper_patches() {
         echo "?? Removed \"$rel_file\""
     done
     
-    # Klipper patches
-    find $SRC_DIR/patches -type f | while read -r file; do
-        local rel_file=${file#"$SRC_DIR/patches/"}
-        local target="$TARGET_DIR/$rel_file"
-        
-        if [ -f "$target.bak" ]; then
-            mv -f "$target.bak" "$target"
-            echo "?? Restored \"$target\""
-        fi
+    # Klipper patches. Walk every directory the install applied from, so that a
+    # patch supplied only by a platform overlay is reverted too.
+    for src in $(klipper_patch_dirs); do
+        find "$src" -type f | while read -r file; do
+            local rel_file=${file#"$src/"}
+            local target="$TARGET_DIR/$rel_file"
+
+            if [ -f "$target.bak" ]; then
+                mv -f "$target.bak" "$target"
+                echo "?? Restored \"$target\""
+            fi
+        done
     done
 
     # Klipper tunning
