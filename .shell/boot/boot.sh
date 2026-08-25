@@ -53,7 +53,7 @@ wifi_init() {
             echo "// Try to connect..."
             
             for _ in $(seq 5); do
-                "$SCRIPTS/boot/wifi_connect.sh" 2>&1 | logged /data/logFiles/wifi.log --no-print --send-to-screen
+                "$SCRIPTS/boot/wifi_connect.sh" 2>&1 | logged "$LOG_DIR/wifi.log" --no-print --send-to-screen
                 ret="${PIPESTATUS[0]}"
                 
                 if [ "$ret" -eq 0 ]; then

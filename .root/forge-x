@@ -77,9 +77,9 @@ case "$1" in
         fi
     ;;
     restart)
-        mv /data/logFiles/service.log.1 /data/logFiles/service.log.2 &> /dev/null
-        mv /data/logFiles/service.log /data/logFiles/service.log.1 &> /dev/null
-        restart 2>&1 | tee /data/logFiles/service.log
+        mv "$LOG_DIR/service.log.1" "$LOG_DIR/service.log.2" &> /dev/null
+        mv "$LOG_DIR/service.log" "$LOG_DIR/service.log.1" &> /dev/null
+        restart 2>&1 | tee "$LOG_DIR/service.log"
     ;;
     *)
         echo "Usage: $0 (restart)}"

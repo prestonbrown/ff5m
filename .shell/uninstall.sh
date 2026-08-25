@@ -164,7 +164,7 @@ uninstall() {
 
 xzcat /opt/config/mod/uninstall.img.xz > /dev/fb0
 
-mv /data/logFiles/uninstall.1.log /data/logFiles/uninstall.log.2 &> /dev/null
-mv /data/logFiles/uninstall.log /data/logFiles/uninstall.log.1   &> /dev/null
+mv "$LOG_DIR/uninstall.1.log" "$LOG_DIR/uninstall.log.2" &> /dev/null
+mv "$LOG_DIR/uninstall.log" "$LOG_DIR/uninstall.log.1"   &> /dev/null
 
-uninstall "$1" 2>&1 | logged "/data/logFiles/uninstall.log" --send-to-screen --screen-no-followup --screen-queue 10
+uninstall "$1" 2>&1 | logged "$LOG_DIR/uninstall.log" --send-to-screen --screen-no-followup --screen-queue 10

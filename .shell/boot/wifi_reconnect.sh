@@ -24,4 +24,4 @@ handle() {
     esac
 }
 
-handle "$@" 2>&1 | logged "/data/logFiles/wifi.log"
+handle "$@" 2>&1 | logged "$LOG_DIR/wifi.log"

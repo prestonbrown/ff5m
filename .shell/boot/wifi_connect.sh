@@ -42,7 +42,7 @@ for _ in $(seq 30); do
         echo "// Successfully connected!"
         echo "// Requesting DHCP in background...."
         
-        (set -m; udhcpc -i $INTERFACE 2>&1 | logged /data/logFiles/wifi.log --no-print) &> /dev/null &
+        (set -m; udhcpc -i $INTERFACE 2>&1 | logged "$LOG_DIR/wifi.log" --no-print) &> /dev/null &
         disown
         
         exit 0

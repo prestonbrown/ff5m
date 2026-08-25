@@ -6,6 +6,9 @@
 ##
 ## This file may be distributed under the terms of the GNU GPLv3 license
 
+# shellcheck disable=SC1091
+source /opt/config/mod/.shell/common.sh
+
 set -x
 
 restore() {
@@ -38,4 +41,4 @@ restore() {
     reboot
 }
 
-restore &> /data/logFiles/fix.log
+restore &> "$LOG_DIR/fix.log"
