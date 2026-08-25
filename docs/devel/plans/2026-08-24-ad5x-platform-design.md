@@ -157,9 +157,10 @@ author) and mirrored into HelixScreen's releases.
 Deliberate size target. The ~1 GB figure often quoted for ZMOD's chroot is a `du`
 artifact: it counts bind-mounted host content (`usr/prog` = Klipper, `usr/data` =
 config/gcodes/logs) plus our own 171 MB HelixScreen install. ZMOD's actual userland is
-**~355 MB**, and Forge-X's ARM image is **~196 MB** once `usr/libexec/git-core` is
-deduplicated (137 of its files are identical copies of the same 3.6 MB `git` binary).
-Ours should be a small fraction of the honest numbers, not the inflated ones.
+**~355 MB**. Forge-X's ARM image is **~699 MB**, and unlike ZMOD's that figure is
+not inflated by bind mounts: its tarball carries no hardlink entries, so ~140 copies of
+the same `git` binary land on real flash. Ours preserves the links and comes in at
+**~82 MB installed, 18 MB compressed**.
 We need Python 3.12, Moonraker's dependencies, a web server, and busybox. We do not need
 mido, a MIDI stack, audio libraries, a shaper toolchain, or twelve locales. On a box with
 485 MB of RAM and a 973 MB partition, that difference is a real feature and not vanity.
