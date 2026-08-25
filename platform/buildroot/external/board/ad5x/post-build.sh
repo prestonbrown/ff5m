@@ -57,7 +57,19 @@ rm -f "$TARGET"/ZMOD
 
 # .shell/common.sh:33 reads $MOD/version.txt as the "flashed core version" and
 # .shell/commands/zversion.sh:17-26 compares it against the payload's own
-# version; when it is missing the boot path stalls 30s (.shell/S00init:127-138).
-if [ -n "${BR2_EXTERNAL_FORGEX_PATH:-}" ] && [ -f "$BR2_EXTERNAL_FORGEX_PATH/../../../version.txt" ]; then
-    cp "$BR2_EXTERNAL_FORGEX_PATH/../../../version.txt" "$TARGET/version.txt"
+# version. When it is missing the boot path stalls 30s
+# (.shell/S00init:127-138), so this must never be silently skipped -- walk up
+# looking for the payload's version.txt, and fall back to a marked development
+# stamp rather than leaving the file absent.
+version=${FORGEX_VERSION:-}
+if [ -z "$version" ] && [ -n "${BR2_EXTERNAL_FORGEX_PATH:-}" ]; then
+    _d=$BR2_EXTERNAL_FORGEX_PATH
+    while [ "$_d" != "/" ]; do
+        if [ -f "$_d/version.txt" ]; then
+            version=$(cat "$_d/version.txt")
+            break
+        fi
+        _d=$(dirname "$_d")
+    done
 fi
+printf '%s\n' "${version:-0.0.0-dev}" > "$TARGET/version.txt"
