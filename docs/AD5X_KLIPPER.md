@@ -131,6 +131,14 @@ klippy.
 depend on it will not work until the files are put back. On a shared rig, take
 the backup first and know how to undo it.
 
+**ZMOD actively reverts an overlay dropped onto its tree.** `start.sh` runs
+`fix_config.sh start`, which restores several klippy files to ZMOD's own copies
+(for example it `cp`s `virtual_sdcard.py.orig` back whenever the live file
+contains the string `zmod`). So copying our files in and then running `start.sh`
+does not test our files - it tests ZMOD's. The way to run our overlay on a ZMOD
+rig is to launch klippy directly against the deployed files, below, which is also
+where an early failure's stderr is visible.
+
     # Find the tree and confirm what is actually in it before touching anything.
     ls -l "$KLIPPER_DIR"/klippy/extras/virtual_sdcard.py
     md5sum "$KLIPPER_DIR"/klippy/extras/*.py > /usr/data/klippy-before.md5
