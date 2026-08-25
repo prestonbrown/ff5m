@@ -64,6 +64,19 @@ CI runs this suite on Python 3.8, because that is what klippy runs on the
 printer. Code that only parses on a newer interpreter would pass locally and
 fail on the machine that matters.
 
+`test_ad5x_klipper_patches.py` covers the patched Klipper files rather than a
+plugin, and loads them by path because the same filenames exist in both patch
+directories. It exists because the AD5X patch set is a merge, and a merge can
+lose a behaviour without losing a line: see `docs/AD5X_KLIPPER.md`.
+
+## Klipper patch derivation
+
+    tools/klipper-merge/merge.sh
+
+Checks that the AD5X Klipper patch set is still the merge it was derived as, and
+fires if Forge-X's patches or FlashForge's stock have moved under a resolution a
+human made. `tools/klipper-merge/README.md` explains what it checks and why.
+
 ## Adding a test
 
 Shell: create `test/<name>_test.sh`, source `lib/assert.sh`, call assertions,

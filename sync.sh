@@ -245,6 +245,7 @@ declare -a EXCLUDES=(
     "./sync*.tar.gz"
     "./sync.sh"
     "./sync_remote.sh"
+    "./tools"
     "./.bin/src/**/bin"
     "./.bin/src/**/CMakeFiles"
     "./.bin/src/**/Makefile"
