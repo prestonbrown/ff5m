@@ -102,11 +102,11 @@ tar_archive() {
 }
 
 if [ "$1" == "verify" ]; then
-    mv /data/logFiles/verification.log.2 /data/logFiles/verification.log.3  2> /dev/null
-    mv /data/logFiles/verification.log.1 /data/logFiles/verification.log.2  2> /dev/null
-    mv /data/logFiles/verification.log /data/logFiles/verification.log.1    2> /dev/null
-    
-    verify "$2" | logged /data/logFiles/verification.log --send-to-screen --screen-level 0 --screen-no-followup
+    mv "$LOG_DIR/verification.log.2" "$LOG_DIR/verification.log.3"  2> /dev/null
+    mv "$LOG_DIR/verification.log.1" "$LOG_DIR/verification.log.2"  2> /dev/null
+    mv "$LOG_DIR/verification.log" "$LOG_DIR/verification.log.1"    2> /dev/null
+
+    verify "$2" | logged "$LOG_DIR/verification.log" --send-to-screen --screen-level 0 --screen-no-followup
 elif [ "$1" == "tar" ]; then
     tar_archive | logged --no-log --send-to-screen --screen-level 0 --screen-no-followup
 else

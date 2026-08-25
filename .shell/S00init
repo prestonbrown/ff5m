@@ -68,10 +68,10 @@ initialize() {
     echo "// Mounting partition..."
     mount_data_partition
 
-    rotate_logs "/data/logFiles/boot.log"
-    rotate_logs "/data/logFiles/ssh.log"
-    rotate_logs "/data/logFiles/wifi.log"
-    rotate_logs "/data/logFiles/netd.log"
+    rotate_logs "$LOG_DIR/boot.log"
+    rotate_logs "$LOG_DIR/ssh.log"
+    rotate_logs "$LOG_DIR/wifi.log"
+    rotate_logs "$LOG_DIR/netd.log"
 
     sync
     
@@ -156,7 +156,7 @@ initialize() {
     /opt/config/mod/.shell/motd.sh > /etc/motd
     /opt/config/mod/.shell/commands/zshaper.sh --clear
 
-    ln -fns /opt/config/mod_data/log /data/logFiles/mod
+    ln -fns /opt/config/mod_data/log "$LOG_DIR/mod"
     
     # (?) Restrict public unauthorized access to printer's camera (only SerialNnumber is needed)
     grep -q qvs.qiniuapi.com /etc/hosts || sed -i '2 i\127.0.0.1 qvs.qiniuapi.com' /etc/hosts
@@ -250,7 +250,7 @@ init_buildroot() {
     
     mount --bind /data "$MOD"/data
     mount --bind /opt/config "$MOD"/opt/config
-    mount --bind /opt/klipper "$MOD"/opt/klipper
+    mount --bind "$KLIPPER_DIR" "$MOD"/opt/klipper
     
     mkdir -p /root/printer_data
     mkdir -p /root/printer_data/certs
@@ -260,7 +260,7 @@ init_buildroot() {
     
     # Init /root/printer_data
     ln -fns /data /root/printer_data/gcodes
-    ln -fns /data/logFiles /root/printer_data/logs
+    ln -fns "$LOG_DIR" /root/printer_data/logs
     ln -fns /opt/config/ /root/printer_data/config
     ln -fns /opt/config/mod_data/database /root/printer_data/database
     ln -fns /opt/config/mod/.bin/exec /root/printer_data/bin

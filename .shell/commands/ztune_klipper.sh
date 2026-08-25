@@ -2,7 +2,7 @@
 
 source /opt/config/mod/.shell/common.sh
 
-TOOLHEAD_F="/opt/klipper/klippy/toolhead.py"
+TOOLHEAD_F="$KLIPPER_DIR/klippy/toolhead.py"
 
 already_done_e17() {
     echo "Move Queue Overflow (E0017) already in sync!"
@@ -11,10 +11,10 @@ already_done_e17() {
 fix_disable_e17() {
     echo "Reverting LOOKAHEAD_FLUSH_TIME"
 
-    grep -qe "^LOOKAHEAD_FLUSH_TIME = 0.5" $TOOLHEAD_F \
+    grep -qe "^LOOKAHEAD_FLUSH_TIME = 0.5" "$TOOLHEAD_F" \
         && already_done_e17 && return
     
-    sed -i 's|^LOOKAHEAD_FLUSH_TIME = .*|LOOKAHEAD_FLUSH_TIME = 0.5|' $TOOLHEAD_F
+    sed -i 's|^LOOKAHEAD_FLUSH_TIME = .*|LOOKAHEAD_FLUSH_TIME = 0.5|' "$TOOLHEAD_F"
 
     sync
     echo "Done"
@@ -23,10 +23,10 @@ fix_disable_e17() {
 fix_enable_e17() {
     echo "Patching LOOKAHEAD_FLUSH_TIME"
 
-    grep -qe "^LOOKAHEAD_FLUSH_TIME = 0.150" $TOOLHEAD_F \
+    grep -qe "^LOOKAHEAD_FLUSH_TIME = 0.150" "$TOOLHEAD_F" \
         && already_done_e17 && return
     
-    sed -i 's|^LOOKAHEAD_FLUSH_TIME = .*|LOOKAHEAD_FLUSH_TIME = 0.150|' $TOOLHEAD_F
+    sed -i 's|^LOOKAHEAD_FLUSH_TIME = .*|LOOKAHEAD_FLUSH_TIME = 0.150|' "$TOOLHEAD_F"
 
     sync
     echo "Done"

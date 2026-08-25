@@ -58,8 +58,11 @@ apply_display_off() {
     display_mode="$(test)"
     pidof firmwareExe >/dev/null 2>&1 && stock_owner=1
 
-    killall "ffstartup-arm" &> /dev/null
-    killall "firmwareExe" &> /dev/null
+    # $STOCK_UI_PROCS is deliberately unquoted: word splitting is what turns
+    # the space-separated list into one iteration per process name.
+    for _ui_proc in $STOCK_UI_PROCS; do
+        killall "$_ui_proc" &> /dev/null
+    done
     
     # Stop Guppy services if they are running
     chroot "$MOD" /opt/config/mod/.root/guppyscreen stop

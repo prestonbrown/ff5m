@@ -7,10 +7,17 @@
 ## This file may be distributed under the terms of the GNU GPLv3 license
 
 
-MOD="${MOD:-/data/.mod/.forge-x}"
-CFG_SCRIPT="${CFG_SCRIPT:-/opt/config/mod/.shell/commands/zconf.sh}"
-CFG_PATH="${CFG_PATH:-/opt/config/mod_data/variables.cfg}"
 SWAP_SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+
+# Board-specific values. platform.sh rather than common.sh: this file needs
+# only the descriptor. Sourced relative to this script so it resolves both
+# on-device and when a test sources this file from the checkout. MOD (chroot
+# rootfs) comes from the descriptor.
+# shellcheck disable=SC1090,SC1091
+source "$SWAP_SCRIPT_DIR/../platform.sh"
+
+CFG_SCRIPT="${CFG_SCRIPT:-$MOD_ROOT/.shell/commands/zconf.sh}"
+CFG_PATH="${CFG_PATH:-/opt/config/mod_data/variables.cfg}"
 
 source "$SWAP_SCRIPT_DIR/usb_storage.sh"
 

@@ -6,6 +6,11 @@
 ##
 ## This file may be distributed under the terms of the GNU GPLv3 license
 
+# Board-specific values. Sourced by a path relative to this file so it resolves
+# both on-device and when a test sources this script from the checkout.
+# shellcheck disable=SC1090,SC1091
+. "$(dirname "${BASH_SOURCE[0]}")/platform.sh"
+
 klipper_overlay_ignored() {
     local rel_path="$1"
 
@@ -193,7 +198,7 @@ klipper_overlay_link_patches() {
 
 apply_klipper_patches() {
     local src_dir="${KLIPPER_SRC_DIR:-/opt/config/mod/.py/klipper}"
-    local target_dir="${KLIPPER_TARGET_DIR:-/opt/klipper/klippy}"
+    local target_dir="${KLIPPER_TARGET_DIR:-$KLIPPER_DIR/klippy}"
     local tune_cmd="${KLIPPER_TUNE_CMD:-$CMDS/ztune_klipper.sh}"
 
     klipper_overlay_clean_links "$src_dir" "$target_dir" || return 1

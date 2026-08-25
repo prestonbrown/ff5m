@@ -54,7 +54,7 @@ start() {
             -R "${MOON_PORT}:127.0.0.1:7125"            \
             -o ExitOnForwardFailure=yes                 \
             "${SSH_USER}@${SSH_SERVER}"                 \
-        &>> "/data/logFiles/ssh.log"
+        &>> "$LOG_DIR/ssh.log"
         
         ret=$?
         sync
@@ -78,7 +78,7 @@ start() {
                 -p "${SSH_PORT}"                        \
                 "${SSH_USER}@${SSH_SERVER}"             \
                 "${REMOTE_RUN}"                         \
-            &>> "/data/logFiles/ssh.log"
+            &>> "$LOG_DIR/ssh.log"
             
             ret=$?
             sync
@@ -166,5 +166,5 @@ switch() {
 
 [ "$SILENT" -eq 1 ] && LOGGED_ARGS=("--no-print")
 
-switch "$@" 2>&1 | logged "/data/logFiles/ssh.log" "${LOGGED_ARGS[@]}"
+switch "$@" 2>&1 | logged "$LOG_DIR/ssh.log" "${LOGGED_ARGS[@]}"
 exit $?

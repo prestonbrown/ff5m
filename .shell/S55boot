@@ -64,7 +64,7 @@ case "$1" in
             exit 0
         fi
         
-        start 2>&1 | logged "/data/logFiles/boot.log" --send-to-screen
+        start 2>&1 | logged "$LOG_DIR/boot.log" --send-to-screen
         # wait_for_internet &
     ;;
     *)
