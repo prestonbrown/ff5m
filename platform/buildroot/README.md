@@ -117,12 +117,24 @@ about 25 MB to no purpose on an appliance running exactly one Python program.
 
 ## Size
 
-The reference ARM image is ~196 MB installed. (`du` reports 699 MB, but 137 of
-those megabytes' worth of files are identical copies of the same 3.6 MB `git`
-binary — `libexec/git-core` is a hardlink farm that survives the tar as
-separate files.) ZMOD's own MIPS chroot is ~355 MB once its bind mounts are
-subtracted from the naive 1 GB figure.
+|  | compressed | installed |
+|---|---|---|
+| Forge-X 1.4.1 (ARM) | 51 MB | ~699 MB |
+| this tree (AD5X) | 18 MB | ~82 MB |
 
-Most of both numbers is optional: a native GCC and binutils, 90 MB of locales,
-Midnight Commander, and a matplotlib/numpy stack that only the input-shaper
-graphs use. A rootfs that skips those has no business being over ~80 MB.
+Two separate things account for the gap.
+
+The larger one is a packaging accident. `usr/libexec/git-core` is normally a
+hardlink farm — about 140 names pointing at one `git` binary — but the shipped
+tarball contains **no hardlink entries at all**, so every one of those names
+extracts as a separate 3.6 MB file. That is roughly 500 MB of duplicate flash,
+and it is very likely why `docs/INSTALL.md` asks for 512 MB free on `/data`.
+Buildroot's own tar output preserves the links (148 entries here), so the
+problem disappears by construction rather than needing a fix.
+
+The rest is content. The reference image carries a native GCC and binutils,
+about 90 MB of locales, Midnight Commander, and a matplotlib/numpy stack used
+only by the input-shaper graphs. None of that is needed to run Moonraker.
+
+(ZMOD's own MIPS chroot is ~355 MB, not the ~1 GB a naive `du` reports — that
+figure counts bind-mounted Klipper, config, and gcode directories.)
