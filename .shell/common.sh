@@ -7,11 +7,18 @@
 ## This file may be distributed under the terms of the GNU GPLv3 license
 
 
-MOD=/data/.mod/.forge-x
-SCRIPTS=/opt/config/mod/.shell
-PY=/opt/config/mod/.py
+# Board-specific values. Kept in a separate POSIX-clean file so that
+# #!/bin/sh scripts can source the descriptor without pulling in this
+# file, which is bash-only.
+# shellcheck disable=SC1090,SC1091
+. "$(dirname "${BASH_SOURCE[0]}")/platform.sh"
+
+# MOD (chroot rootfs) and MOD_ROOT (mod source tree) come from platform.sh.
+
+SCRIPTS=$MOD_ROOT/.shell
+PY=$MOD_ROOT/.py
 CMDS=$SCRIPTS/commands
-BINS=/opt/config/mod/.bin/exec
+BINS=$MOD_ROOT/.bin/exec
 MOD_DATA=/opt/config/mod_data
 
 INIT_FLAG="/tmp/init_finished_f"
@@ -21,8 +28,8 @@ WIFI_CONNECTED_F="/tmp/wifi_connected_f"
 CAMERA_F="/tmp/camera_f"
 NET_IP_F="/tmp/net_ip"
 
-BOOT_FAILURE_F="/opt/config/mod/BOOT_FLAG_FAILURE"
-BOOT_SKIP_F="/opt/config/mod/BOOT_FLAG_SKIP"
+BOOT_FAILURE_F="$MOD_ROOT/BOOT_FLAG_FAILURE"
+BOOT_SKIP_F="$MOD_ROOT/BOOT_FLAG_SKIP"
 
 SCREEN_FOLLOW_UP_LOG="/tmp/logged_message_queue"
 
@@ -30,11 +37,11 @@ CFG_SCRIPT="$CMDS/zconf.sh"
 VAR_PATH="$MOD_DATA/variables.cfg"
 
 FLASHED_VERSION_F="$MOD"/version.txt
-VERSION_F=/opt/config/mod/version.txt
+VERSION_F=$MOD_ROOT/version.txt
 FIRMWARE_VERSION_F=/root/version
 VERSION_PATCH_F=/tmp/version_patch
 
-SCREEN_THEME_BUILTIN_DIR="/opt/config/mod/.bin/themes"
+SCREEN_THEME_BUILTIN_DIR="$MOD_ROOT/.bin/themes"
 SCREEN_THEME_USER_DIR="/opt/config/mod_data/themes/splash"
 SPLASH_CONTROL_FIFO="/tmp/forge_x_splash_control"
 
@@ -81,10 +88,10 @@ unset LD_LIBRARY_PATH
 
 mount_data_partition() {
     # mount data - this would otherwise be mounted later by Flashforge's firmware
-    if ! mount | grep -q /dev/mmcblk0p7; then
-        echo "// Mounting /data partition..."
-        fsck -y /dev/mmcblk0p7 || true
-        mount /dev/mmcblk0p7 /data;
+    if ! mount | grep -qF -- "$DATA_PART"; then
+        echo "// Mounting $DATA_MNT partition..."
+        fsck -y "$DATA_PART" || true
+        mount "$DATA_PART" "$DATA_MNT";
     fi
     
     # local timeout=60
@@ -93,8 +100,8 @@ mount_data_partition() {
     #     timeout=$(( timeout - 1 ))
     # done
     
-    if ! mount | grep -q /dev/mmcblk0p7; then
-        echo "@@ Mounting /data failed."
+    if ! mount | grep -qF -- "$DATA_PART"; then
+        echo "@@ Mounting $DATA_MNT failed."
         exit 1
     fi
 }
