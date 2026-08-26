@@ -281,7 +281,7 @@ The system has two stages:
 To customize the warning limit, you can modify the `user.cfg` file by adding the following:
 
 ```cfg
-[temperature_sensor weight_value]
+[temperature_sensor weightValue]
 trigger_value: 700
 ```
 
