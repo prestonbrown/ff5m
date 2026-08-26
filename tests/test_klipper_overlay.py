@@ -39,16 +39,22 @@ class OverlayTree:
         self.tune.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
         self.tune.chmod(0o755)
 
-    def run(self):
+    def run(self, uname_m=None):
         env = dict(os.environ)
         env.update({
             "KLIPPER_SRC_DIR": str(self.source),
             "KLIPPER_TARGET_DIR": str(self.target),
             "KLIPPER_TUNE_CMD": str(self.tune),
         })
+        prelude = ""
+        if uname_m is not None:
+            # platform.sh selects its block from `uname -m`; shadow it so the
+            # overlay picks the AD5X block off-printer, the same way
+            # test/platform_vars_test.sh forces each architecture.
+            prelude = "uname() { echo %s; }; " % uname_m
         return subprocess.run(
             ["bash", "-c",
-             'source "$1"; sync() { :; }; apply_klipper_patches',
+             prelude + 'source "$1"; sync() { :; }; apply_klipper_patches',
              "overlay-test", str(OVERLAY)],
             env=env, text=True, stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT, check=False)
@@ -83,6 +89,68 @@ class KlipperOverlayTest(unittest.TestCase):
         subprocess.run(
             ["bash", "-n", str(OVERLAY), str(INIT), str(TUNING)],
             check=True)
+
+    def test_platform_patches_override_base_and_leave_base_only_files(self):
+        with tempfile.TemporaryDirectory() as directory:
+            tree = OverlayTree(directory)
+            (tree.patches / "gcode.py").write_text(
+                "BASE_GCODE = True\n", encoding="utf-8")
+            (tree.patches / "extras").mkdir()
+            (tree.patches / "extras" / "led.py").write_text(
+                "BASE_LED = True\n", encoding="utf-8")
+
+            arch = tree.source / "patches.ad5x"
+            (arch / "extras").mkdir(parents=True)
+            (arch / "gcode.py").write_text(
+                "ARCH_GCODE = True\n", encoding="utf-8")
+
+            (tree.target / "gcode.py").write_text(
+                "STOCK_GCODE = True\n", encoding="utf-8")
+            (tree.extras / "led.py").write_text(
+                "STOCK_LED = True\n", encoding="utf-8")
+
+            result = tree.run(uname_m="mips")
+            self.assertEqual(result.returncode, 0, result.stdout)
+
+            gcode = tree.target / "gcode.py"
+            led = tree.extras / "led.py"
+            # The AD5X override wins for gcode.py.
+            self.assertTrue(gcode.is_symlink())
+            self.assertEqual(os.readlink(gcode), str(arch / "gcode.py"))
+            # A file with no AD5X override still comes from the base tree.
+            self.assertTrue(led.is_symlink())
+            self.assertEqual(
+                os.readlink(led), str(tree.patches / "extras" / "led.py"))
+            # The stock file was backed up exactly once.
+            self.assertEqual(
+                (tree.target / "gcode.py.bak").read_text(encoding="utf-8"),
+                "STOCK_GCODE = True\n")
+
+            mtime = os.lstat(gcode).st_mtime_ns
+            again = tree.run(uname_m="mips")
+            self.assertEqual(again.returncode, 0, again.stdout)
+            self.assertTrue(gcode.is_symlink())
+            self.assertEqual(os.readlink(gcode), str(arch / "gcode.py"))
+            self.assertEqual(os.lstat(gcode).st_mtime_ns, mtime)
+
+    def test_foreign_platform_override_is_ignored(self):
+        with tempfile.TemporaryDirectory() as directory:
+            tree = OverlayTree(directory)
+            (tree.patches / "gcode.py").write_text(
+                "BASE_GCODE = True\n", encoding="utf-8")
+            arch = tree.source / "patches.ad5x"
+            arch.mkdir(parents=True)
+            (arch / "gcode.py").write_text(
+                "ARCH_GCODE = True\n", encoding="utf-8")
+            (tree.target / "gcode.py").write_text(
+                "STOCK_GCODE = True\n", encoding="utf-8")
+
+            # armv7l selects AD5M, so a patches.ad5x subtree must be ignored.
+            result = tree.run(uname_m="armv7l")
+            self.assertEqual(result.returncode, 0, result.stdout)
+            gcode = tree.target / "gcode.py"
+            self.assertTrue(gcode.is_symlink())
+            self.assertEqual(os.readlink(gcode), str(tree.patches / "gcode.py"))
 
     def test_files_are_linked_recursively_and_repeat_is_idempotent(self):
         with tempfile.TemporaryDirectory() as directory:

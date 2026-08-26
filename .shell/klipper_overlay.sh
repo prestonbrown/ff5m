@@ -68,6 +68,33 @@ klipper_overlay_plugin_link_is_current() {
     return 0
 }
 
+# Patches may come from the common `patches/` tree or, when a per-board override
+# exists, from `patches.$PLATFORM/` (which wins). Given a symlink source, echo
+# its path relative to whichever patch tree owns it (checking the override first)
+# and return 0; return 1 if the source is not under any patch tree for this board.
+klipper_overlay_patch_relpath() {
+    local source="$1"
+    local src_dir="$2"
+
+    if [ -n "${PLATFORM:-}" ] && [ -d "$src_dir/patches.$PLATFORM" ]; then
+        case "$source" in
+            "$src_dir/patches.$PLATFORM/"*)
+                printf '%s\n' "${source#"$src_dir/patches.$PLATFORM/"}"
+                return 0
+            ;;
+        esac
+    fi
+
+    case "$source" in
+        "$src_dir/patches/"*)
+            printf '%s\n' "${source#"$src_dir/patches/"}"
+            return 0
+        ;;
+    esac
+
+    return 1
+}
+
 klipper_overlay_patch_link_is_current() {
     local link="$1"
     local source="$2"
@@ -75,12 +102,7 @@ klipper_overlay_patch_link_is_current() {
     local target_dir="$4"
     local rel_file expected
 
-    case "$source" in
-        "$src_dir/patches/"*) ;;
-        *) return 1 ;;
-    esac
-
-    rel_file=${source#"$src_dir/patches/"}
+    rel_file=$(klipper_overlay_patch_relpath "$source" "$src_dir") || return 1
     expected="$target_dir/$rel_file"
 
     [ "$link" = "$expected" ] || return 1
@@ -114,11 +136,17 @@ klipper_overlay_clean_links() {
                     || klipper_overlay_restore_or_remove "$link" \
                     || return 1
             ;;
-            "$src_dir/patches/"*)
-                klipper_overlay_patch_link_is_current \
-                    "$link" "$source" "$src_dir" "$target_dir" \
-                    || klipper_overlay_restore_or_remove "$link" \
-                    || return 1
+            "$src_dir/"*)
+                # Any patch tree for this board (patches/ or patches.$PLATFORM/).
+                # A link into one that is no longer current is restored/removed;
+                # links outside our trees (external) are left untouched.
+                if klipper_overlay_patch_relpath "$source" "$src_dir" \
+                        >/dev/null; then
+                    klipper_overlay_patch_link_is_current \
+                        "$link" "$source" "$src_dir" "$target_dir" \
+                        || klipper_overlay_restore_or_remove "$link" \
+                        || return 1
+                fi
             ;;
         esac
     done < <(find "$target_dir" -type l)
@@ -155,10 +183,18 @@ klipper_overlay_link_plugins() {
 klipper_overlay_link_patches() {
     local src_dir="$1"
     local target_dir="$2"
-    local file rel_file target parent current
+    local rel_file target parent current winner arch_dir
 
-    while IFS= read -r file; do
-        rel_file=${file#"$src_dir/patches/"}
+    # The common tree, plus a per-board override tree when one exists. A file
+    # present in both is taken from the override; a file present only in the
+    # common tree comes from there. AD5M has no override tree, so this reduces
+    # to the single `patches/` walk it has always done.
+    arch_dir=""
+    if [ -n "${PLATFORM:-}" ] && [ -d "$src_dir/patches.$PLATFORM" ]; then
+        arch_dir="$src_dir/patches.$PLATFORM"
+    fi
+
+    while IFS= read -r rel_file; do
         klipper_overlay_ignored "$rel_file" && continue
 
         case "$rel_file" in
@@ -166,19 +202,31 @@ klipper_overlay_link_patches() {
             *) continue ;;
         esac
 
+        if [ -n "$arch_dir" ] && [ -f "$arch_dir/$rel_file" ]; then
+            winner="$arch_dir/$rel_file"
+        else
+            winner="$src_dir/patches/$rel_file"
+        fi
+
         target="$target_dir/$rel_file"
         parent=$(dirname "$target")
         mkdir -p "$parent" || return 1
 
         if [ -L "$target" ]; then
             current=$(readlink "$target") || return 1
-            [ "$current" = "$file" ] && continue
+            [ "$current" = "$winner" ] && continue
 
-            echo "@@ Refusing to overwrite unmanaged klipper symlink: $target"
-            return 1
-        fi
-
-        if [ -e "$target" ]; then
+            # A link already pointing into one of our patch trees (e.g. a base
+            # link now shadowed by an override) is ours to re-point; only a link
+            # to something outside our trees is treated as unmanaged.
+            if klipper_overlay_patch_relpath "$current" "$src_dir" \
+                    >/dev/null; then
+                rm -f "$target" || return 1
+            else
+                echo "@@ Refusing to overwrite unmanaged klipper symlink: $target"
+                return 1
+            fi
+        elif [ -e "$target" ]; then
             if [ ! -e "$target.bak" ] && [ ! -L "$target.bak" ]; then
                 echo "// Create klipper file backup: $target"
                 mv "$target" "$target.bak" || return 1
@@ -191,9 +239,22 @@ klipper_overlay_link_patches() {
             return 1
         fi
 
-        echo "// Link patched klipper file: $file"
-        ln -s "$file" "$target" || return 1
-    done < <(find "$src_dir/patches" -type f)
+        echo "// Link patched klipper file: $winner"
+        ln -s "$winner" "$target" || return 1
+    done < <(
+        {
+            find "$src_dir/patches" -type f 2>/dev/null \
+                | while IFS= read -r file; do
+                    printf '%s\n' "${file#"$src_dir/patches/"}"
+                done
+            if [ -n "$arch_dir" ]; then
+                find "$arch_dir" -type f 2>/dev/null \
+                    | while IFS= read -r file; do
+                        printf '%s\n' "${file#"$arch_dir/"}"
+                    done
+            fi
+        } | sort -u
+    )
 }
 
 apply_klipper_patches() {
