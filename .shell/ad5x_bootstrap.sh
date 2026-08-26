@@ -189,15 +189,16 @@ run_bootstrap() {
 
     if [ "$dry_run" -eq 1 ]; then
         echo "[dry-run] AD5X headless bootstrap plan (PLATFORM=$PLATFORM):"
-        echo "[dry-run] failsafe: stand down this boot if BOOT_FLAG_FAILURE/SKIP is set; otherwise arm BOOT_FLAG_FAILURE before step 2 and clear it after step 7"
+        echo "[dry-run] failsafe: stand down this boot if BOOT_FLAG_FAILURE/SKIP is set; otherwise arm BOOT_FLAG_FAILURE before step 2 and clear it after step 8"
         echo "[dry-run] 1. source platform.sh, common.sh, klipper_overlay.sh, init_lib.sh"
-        echo "[dry-run] 2. preconditions: bind /opt->$DATA_MNT and /data->$DATA_MNT; move aside \$MOD/ZMOD marker; ensure variables.cfg display=HEADLESS, use_swap=OFF"
+        echo "[dry-run] 2. preconditions: bind /opt->$DATA_MNT and /data->$DATA_MNT; move aside \$MOD/ZMOD marker; ensure variables.cfg display=HEADLESS, use_swap=OFF; stop stock UI ($STOCK_UI_PROCS)"
         echo "[dry-run] 3. mount_data_partition"
         echo "[dry-run] 4. init_buildroot"
         echo "[dry-run] 5. apply_klipper_patches"
         echo "[dry-run] 6. fix_config"
-        echo "[dry-run] 7. first-run database (migrate_db + restore_ota) then chroot start.sh (ntpd, Moonraker :7125, httpd :80)"
-        echo "[dry-run] 8. return; stock klipper/start.sh then launches klippy"
+        echo "[dry-run] 7. launch klipper (zstart_klipper.sh against the patched /usr/prog/klipper)"
+        echo "[dry-run] 8. first-run database (migrate_db + restore_ota) then chroot start.sh (ntpd, Moonraker :7125, httpd :80)"
+        echo "[dry-run] 9. done; stock app_startup.sh continues (it does not launch klippy)"
         return 0
     fi
 
@@ -237,6 +238,14 @@ run_bootstrap() {
     _ensure_var display HEADLESS
     _ensure_var use_swap OFF
 
+    # Stock app_startup.sh launches the Qt UI (firmwareExe) before our hook runs.
+    # Stop it: headless owns the framebuffer, and a live firmwareExe also owns the
+    # MCU/klippy we are about to take over. STOCK_UI_PROCS is from platform.sh.
+    echo "// [ad5x] Stopping stock UI ($STOCK_UI_PROCS)..."
+    for _proc in $STOCK_UI_PROCS; do
+        killall "$_proc" >/dev/null 2>&1 || true
+    done
+
     # Step 3. No-op on AD5X (/usr/data is already mounted); parity with S00init.
     echo "// [ad5x] Mounting data partition..."
     mount_data_partition
@@ -256,7 +265,15 @@ run_bootstrap() {
     echo "// [ad5x] Restoring config..."
     fix_config
 
-    # Step 7. First-run DB seed, then bring up the chroot services. The chroot
+    # Step 7. Launch klippy. Stock app_startup.sh never launches it (unlike the
+    # AD5M, where S55boot/boot.sh runs zstart_klipper), so the mod owns the launch
+    # - the same MIPS-safe launcher, run against the just-patched /usr/prog/klipper
+    # through the host Python env in its start.sh. klipperDaemon backgrounds, so
+    # this returns and moonraker (Step 8) connects to it.
+    echo "// [ad5x] Launching klipper..."
+    "$CMDS"/zstart_klipper.sh > /dev/null 2>&1
+
+    # Step 8. First-run DB seed, then bring up the chroot services. The chroot
     # target paths are resolved INSIDE $MOD, where init_buildroot bind-mounts
     # /opt/config; they are the exact paths S99root uses, not host literals.
     if [ ! -f "$MOD/root/printer_data/database/moonraker-sql.db" ]; then
@@ -270,8 +287,9 @@ run_bootstrap() {
     # Bring-up completed: clear the failure flag so the next boot re-arms the mod.
     failsafe_disarm
 
-    # Step 8. Return WITHOUT launching klippy; stock's klipper/start.sh does that.
-    echo "// [ad5x] Bootstrap complete; stock klipper/start.sh will launch klippy."
+    # Step 9. Done: klippy (Step 7) and the chroot services (Step 8) are up. Stock
+    # app_startup.sh continues; it does not launch klippy itself.
+    echo "// [ad5x] Bootstrap complete."
     return 0
 }
 

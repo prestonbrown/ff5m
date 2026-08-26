@@ -128,14 +128,26 @@ out=$(run_forced mips --dry-run)
 steps=$(printf '%s\n' "$out" \
     | sed -n -E 's/^\[dry-run\] ([0-9])\. .*/\1/p' \
     | tr '\n' ' ' | sed 's/ *$//')
-assert_eq "dry-run emits steps 1..8 in order" "1 2 3 4 5 6 7 8" "$steps"
+assert_eq "dry-run emits steps 1..9 in order" "1 2 3 4 5 6 7 8 9" "$steps"
 
-for bad in S55boot boot_mcu zstart_klipper netd tone.py init_swap; do
+# ARM-only stages that stay skipped. zstart_klipper is NOT here: stock
+# app_startup.sh never launches klippy, so the mod must, and it is a real step.
+for bad in S55boot boot_mcu netd tone.py init_swap; do
     case "$out" in
         *"$bad"*) _t_fail "dry-run omits skipped stage: $bad" "present in dry-run output" ;;
         *)        _t_pass "dry-run omits skipped stage: $bad" ;;
     esac
 done
+
+# The klippy launch and the stock-UI stop are real steps now.
+case "$out" in
+    *zstart_klipper*) _t_pass "dry-run launches klipper (zstart_klipper)" ;;
+    *)                _t_fail "dry-run launches klipper (zstart_klipper)" "absent" ;;
+esac
+case "$out" in
+    *"stop stock UI"*) _t_pass "dry-run stops the stock UI (firmwareExe)" ;;
+    *)                 _t_fail "dry-run stops the stock UI (firmwareExe)" "absent" ;;
+esac
 
 # --- failsafe: arm / disarm / one-shot skip gate ----------------------------
 # The failsafe functions read the two flag paths that common.sh derives from
