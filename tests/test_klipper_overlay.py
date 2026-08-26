@@ -133,6 +133,25 @@ class KlipperOverlayTest(unittest.TestCase):
             self.assertEqual(os.readlink(gcode), str(arch / "gcode.py"))
             self.assertEqual(os.lstat(gcode).st_mtime_ns, mtime)
 
+    def test_patch_with_no_stock_target_is_added(self):
+        with tempfile.TemporaryDirectory() as directory:
+            tree = OverlayTree(directory)
+            # A patch for a module the board's stock Klipper does not ship at all
+            # (e.g. gcode_shell_command on the AD5X): no target file exists.
+            (tree.patches / "extras").mkdir()
+            (tree.patches / "extras" / "shell_command.py").write_text(
+                "ADDED = True\n", encoding="utf-8")
+
+            result = tree.run()
+            self.assertEqual(result.returncode, 0, result.stdout)
+            added = tree.extras / "shell_command.py"
+            # It is added as a new module, symlinked, with no spurious backup.
+            self.assertTrue(added.is_symlink())
+            self.assertEqual(
+                os.readlink(added),
+                str(tree.patches / "extras" / "shell_command.py"))
+            self.assertFalse((tree.extras / "shell_command.py.bak").exists())
+
     def test_foreign_platform_override_is_ignored(self):
         with tempfile.TemporaryDirectory() as directory:
             tree = OverlayTree(directory)

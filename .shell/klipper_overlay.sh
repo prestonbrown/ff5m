@@ -264,8 +264,12 @@ klipper_overlay_link_patches() {
                 rm -f "$target" || return 1
             fi
         elif [ ! -e "$target.bak" ] && [ ! -L "$target.bak" ]; then
-            echo "@@ Missing klipper patch target and backup: $target"
-            return 1
+            # No stock module to replace and no prior backup: this patch is a
+            # Forge-X module the board's stock Klipper does not ship (e.g.
+            # gcode_shell_command on the AD5X, whose newer stock omits it). Add
+            # it as a new module; uninstall just removes the link, since there is
+            # no backup to restore.
+            echo "// Add new klipper module (no stock target): $target"
         fi
 
         echo "// Link patched klipper file: $winner"
