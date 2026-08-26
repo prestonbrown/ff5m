@@ -66,6 +66,12 @@ POST_PROCESSING=1
 You can adjust these parameters to suit your needs. For example, you might want set better resolution or FPS.
 But be careful since, check actual camera ram usage after that, using `MEM` macros in Fluidd's console.
 
+After changing an image post-processing setting, run `CAMERA_RELOAD` in the
+printer console. The streamer rereads the settings without restarting the HTTP
+service. It also reapplies them automatically if the camera disconnects and
+returns under a different `video<N>` name. Changes to resolution, FPS, or video
+device still require `CAMERA_RESTART`.
+
 #### Step 2: Disable Stock Camera
 To ensure the mod's camera is used, you need to disable the stock camera functionality. Here’s how:
 

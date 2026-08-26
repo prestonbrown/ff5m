@@ -27,8 +27,7 @@ VIDEO="video0"
 PID_FILE=/run/camera.pid
 source "/opt/config/mod_data/camera.conf"
 
-_VIDEO_P="/dev/${VIDEO}"
-_STREAMER_DEVICE="${_VIDEO_P}"
+_STREAMER_DEVICE="/dev/${VIDEO}"
 
 _FRAME_CAP_ARGS=()
 if [ -z "$REDUCE_MEMORY" ] || [ "$REDUCE_MEMORY" == "1" ]; then
@@ -36,17 +35,7 @@ if [ -z "$REDUCE_MEMORY" ] || [ "$REDUCE_MEMORY" == "1" ]; then
 fi
 
 if [ "$VIDEO" = "auto" ]; then
-    # The streamer owns capture selection and recovery; this path is only for
-    # the existing pre-start format and visual-control calls.
     _STREAMER_DEVICE="auto"
-    _VIDEO_P="/dev/video0"
-
-    for device in /dev/video*; do
-        if v4l2-ctl -d "$device" -V &> /dev/null; then
-            _VIDEO_P=$device
-            break;
-        fi
-    done
 fi
 
 [[ " $* " =~ " --silent " ]] && SILENT=1 || SILENT=0
@@ -56,9 +45,9 @@ start() {
 
     enabled=$($CFG_SCRIPT "$VAR_PATH" --get "camera" "0")
     if [ "$enabled" -eq 1 ]; then
-        v4l2-ctl -d "${_VIDEO_P}" --set-fmt-video=width="${WIDTH}",height="${HEIGHT}"
         start-stop-daemon -Sbm -p "$PID_FILE" --exec $BINS/mjpg_streamer -- \
             --device "${_STREAMER_DEVICE}" \
+            --controls-file "$CFG_PATH" \
             --resolution "${WIDTH}x${HEIGHT}" \
             --fps "$FPS" \
             --buffers 1 \
@@ -69,7 +58,6 @@ start() {
         touch "$CAMERA_F"
         echo "OK"
 
-        apply_effects
     else
         [ "$SILENT" -eq 0 ] && echo "Camera disabled in configuration"
     fi
@@ -109,45 +97,12 @@ reload() {
         exit 0
     fi
 
-    if apply_effects; then
-        [ "$SILENT" -eq 0 ] && echo "Effects applied"
-    fi
-}
-
-set_effect() {
-    local control="$1"
-    local var_name="$2"
-    local var="$(eval echo '$'"$var_name")"
-
-    if [ -n "$var" ]; then
-        v4l2-ctl -d "${_VIDEO_P}" --set-ctrl "$control=$var" &> /dev/null
-
-        if [ $? -ne 0 ]; then
-            echo "Camera effect '$control' not supported"
-        fi
-    fi
-}
-
-apply_effects() {
-    local effects_on="$($CFG_SCRIPT "$CFG_PATH" --get "POST_PROCESSING" "1")"
-    if [ "$effects_on" -eq 0 ]; then
+    if ! kill -HUP "$(cat "$PID_FILE")"; then
+        echo "Failed to request camera effects reload" >&2
         return 1
     fi
 
-    set_effect brightness                   E_BRIGHTNESS
-    set_effect contrast                     E_CONTRAST
-    set_effect gain                         E_GAIN
-    set_effect gamma                        E_GAMMA
-    set_effect hue                          E_HUE
-    set_effect saturation                   E_SATURATION
-    set_effect sharpness                    E_SHARPNESS
-    set_effect power_line_frequency         E_POWER_LINE_FREQUENCY
-    set_effect white_balance_temperature    E_WHITE_BALANCE_TEMPERATURE
-    set_effect backlight_compensation       E_BACKLIGHT_COMPENSATION
-    set_effect exposure_auto                E_EXPOSURE_AUTO
-    set_effect exposure_absolute            E_EXPOSURE_ABSOLUTE
-
-    return 0
+    [ "$SILENT" -eq 0 ] && echo "Effects applied"
 }
 
 

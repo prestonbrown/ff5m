@@ -15,7 +15,7 @@ Fluidd and Mainsail are available through the printer HTTP service; the README d
 
 ## Camera
 
-[`.shell/S98camera`](../.shell/S98camera) controls optional `mjpg_streamer` on port 8080. It creates a default persistent camera configuration when needed, supports explicit or auto-selected V4L2 devices, applies configured resolution/FPS, and can reduce internal frame-buffer memory. It also attempts configured V4L2 visual controls after start/reload.
+[`.shell/S98camera`](../.shell/S98camera) controls optional `mjpg_streamer` on port 8080. It creates a default persistent camera configuration when needed, passes explicit V4L2 devices directly, and delegates `auto` selection and recovery to the streamer. Resolution/FPS and the optional frame cap are startup settings. The streamer owns visual controls: it reads them from the same configuration, reapplies them after every camera open, and rereads them when the service sends `SIGHUP` for `CAMERA_RELOAD`.
 
 Camera is enabled through the persistent `camera` parameter; source comments and [`docs/CAMERA.md`](../docs/CAMERA.md) make two constraints clear:
 
