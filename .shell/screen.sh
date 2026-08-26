@@ -15,6 +15,16 @@ splash_running() {
     pidof splash > /dev/null 2>&1
 }
 
+splash_seed() {
+    local uptime
+
+    if read -r uptime _ < /proc/uptime; then
+        printf '%s\n' "${uptime%%.*}"
+    else
+        printf '%s\n' "1"
+    fi
+}
+
 splash_command() {
     local command="$1"
     shift
@@ -50,6 +60,7 @@ splash_start() {
     "$BINS/splash" \
         "${SCREEN_THEME_ARGS[@]}" \
         --subtitle "$(splash_subtitle)" \
+        --seed "$(splash_seed)" \
         --control-fifo "$SPLASH_CONTROL_FIFO" \
         </dev/null >/dev/null 2>&1 &
 
@@ -147,6 +158,7 @@ draw_splash() {
     "$BINS/splash" \
         "${SCREEN_THEME_ARGS[@]}" \
         --subtitle "$(splash_subtitle)" \
+        --seed "$(splash_seed)" \
         --static
 
     local display_mode
