@@ -29,7 +29,11 @@ for f in $(git ls-files '.shell/*' '.root/*' '.py/*'); do
     is_known_bad "$f" && continue
     scanned=$((scanned + 1))
 
-    if head -1 "$f" | grep -q bash; then
+    # A bash-trampoline file is #!/bin/sh (so a bash-less host can run its
+    # prelude) but its body is bash, marked with `# shellcheck shell=bash`.
+    # Parse those as bash - `sh -n` would reject the bash body. The prelude's
+    # own POSIX-sh safety is exercised at runtime by bash_trampoline_test.sh.
+    if head -1 "$f" | grep -q bash || grep -q '# shellcheck shell=bash' "$f"; then
         if bash -n "$f" 2>/dev/null; then
             _t_pass "parses (bash): $f"
         else

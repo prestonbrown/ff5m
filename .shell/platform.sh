@@ -40,6 +40,12 @@ case "$(uname -m)" in
         ## Stock FlashForge UI processes that must be stopped for an alternative
         ## screen to own the framebuffer. Space-separated, iterated with `for`.
         STOCK_UI_PROCS="firmwareExe"
+
+        ## Dynamic loader inside $MOD, used to run the rootfs bash on a host
+        ## that ships none: AD5X stock is BusyBox with a read-only squashfs
+        ## /bin, so #!/bin/bash scripts cannot start directly. Consumed by the
+        ## bash-trampoline preludes (see .shell/ad5x_bootstrap.sh).
+        ROOTFS_LD=ld-linux-mipsn8.so.1
         ;;
     *)
         ## armv7l, and the default for anything unrecognised: AD5M. Keeping AD5M
@@ -61,6 +67,11 @@ case "$(uname -m)" in
         ## Stock FlashForge UI processes that must be stopped for an alternative
         ## screen to own the framebuffer. Space-separated, iterated with `for`.
         STOCK_UI_PROCS="ffstartup-arm firmwareExe"
+
+        ## Dynamic loader inside $MOD (see the AD5X block). Unused on the AD5M,
+        ## whose stock host already provides /bin/bash, but defined for symmetry
+        ## so every descriptor consumer resolves on both boards.
+        ROOTFS_LD=ld-linux-armhf.so.3
         ;;
 esac
 
@@ -70,3 +81,12 @@ esac
 ## so that every descriptor consumer - including #!/bin/sh scripts that cannot
 ## source the bash-only common.sh - can read it.
 MOD=$DATA_MNT/.mod/.forge-x
+
+## The mod's own bash and its dynamic loader, assembled once from MOD and
+## ROOTFS_LD. The bash-trampoline preludes exec through these rather than
+## naming MOD themselves, so a #!/bin/bash mod script can run on a host with no
+## /bin/bash (AD5X stock) by re-execing under the rootfs bash. On the AD5M these
+## resolve to an arm rootfs bash that is never invoked - that host has bash.
+FORGEX_BASH_LD=$MOD/lib/$ROOTFS_LD
+FORGEX_BASH_LIBPATH=$MOD/lib:$MOD/usr/lib
+FORGEX_BASH_BIN=$MOD/bin/bash
