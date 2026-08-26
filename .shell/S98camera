@@ -2,7 +2,7 @@
 
 ## Service for forge-x camera
 ##
-## Copyright (C) 2025, Alexander K <https://github.com/drA1ex>
+## Copyright (C) 2025-2026, Alexander K <https://github.com/drA1ex>
 ## Copyright (C) 2025, Sergei Rozhkov <https://github.com/ghzserg>
 ##
 ## This file may be distributed under the terms of the GNU GPLv3 license
@@ -28,6 +28,7 @@ PID_FILE=/run/camera.pid
 source "/opt/config/mod_data/camera.conf"
 
 _VIDEO_P="/dev/${VIDEO}"
+_STREAMER_DEVICE="${_VIDEO_P}"
 
 _FRAME_CAP_ARGS=()
 if [ -z "$REDUCE_MEMORY" ] || [ "$REDUCE_MEMORY" == "1" ]; then
@@ -35,12 +36,13 @@ if [ -z "$REDUCE_MEMORY" ] || [ "$REDUCE_MEMORY" == "1" ]; then
 fi
 
 if [ "$VIDEO" = "auto" ]; then
+    # The streamer owns capture selection and recovery; this path is only for
+    # the existing pre-start format and visual-control calls.
+    _STREAMER_DEVICE="auto"
     _VIDEO_P="/dev/video0"
-    
+
     for device in /dev/video*; do
-        v4l2-ctl -d $device -V &> /dev/null
-        
-        if [ "$?" -eq 0 ]; then
+        if v4l2-ctl -d "$device" -V &> /dev/null; then
             _VIDEO_P=$device
             break;
         fi
@@ -56,7 +58,7 @@ start() {
     if [ "$enabled" -eq 1 ]; then
         v4l2-ctl -d "${_VIDEO_P}" --set-fmt-video=width="${WIDTH}",height="${HEIGHT}"
         start-stop-daemon -Sbm -p "$PID_FILE" --exec $BINS/mjpg_streamer -- \
-            --device "${_VIDEO_P}" \
+            --device "${_STREAMER_DEVICE}" \
             --resolution "${WIDTH}x${HEIGHT}" \
             --fps "$FPS" \
             --buffers 1 \
