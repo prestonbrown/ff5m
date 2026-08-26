@@ -85,6 +85,25 @@ for f in $MERGED; do
     fi
 done
 
+# Files AD5X excludes: base patches that are NOT overlaid on AD5X because its
+# stock Klipper is newer than the AD5M base they were written against, so the
+# overlay would regress it. The overlay reads patches.ad5x/.exclude; here we
+# only confirm that list stays coherent - every entry is a real base patch and
+# is not also given an override (the two are mutually exclusive).
+EXCLUDE_FILE="$DEST/.exclude"
+if [ -f "$EXCLUDE_FILE" ]; then
+    while IFS= read -r line; do
+        case "$line" in ''|\#*) continue ;; esac
+        if [ ! -e "$THEIRS/$line" ]; then
+            fail "excluded $line: no such base patch in .py/klipper/patches"
+        elif [ -e "$DEST/$line" ]; then
+            fail "excluded $line: also has an override - exclude and override are mutually exclusive"
+        else
+            note "excluded  $line"
+        fi
+    done < "$EXCLUDE_FILE"
+fi
+
 if [ "$mode" = update ] && [ -f "$WORK/conflicts.new" ]; then
     sort "$WORK/conflicts.new" > "$TOOL/conflicts.sha256"
     note "wrote $TOOL/conflicts.sha256"

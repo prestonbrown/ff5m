@@ -152,6 +152,79 @@ class KlipperOverlayTest(unittest.TestCase):
             self.assertTrue(gcode.is_symlink())
             self.assertEqual(os.readlink(gcode), str(tree.patches / "gcode.py"))
 
+    def test_platform_exclude_list_skips_base_patch(self):
+        with tempfile.TemporaryDirectory() as directory:
+            tree = OverlayTree(directory)
+            (tree.patches / "keep.py").write_text(
+                "KEEP = True\n", encoding="utf-8")
+            (tree.patches / "drop.py").write_text(
+                "FORGEX_OLD = True\n", encoding="utf-8")
+            arch = tree.source / "patches.ad5x"
+            arch.mkdir(parents=True)
+            (arch / ".exclude").write_text(
+                "# AD5X ships newer stock for these\ndrop.py\n",
+                encoding="utf-8")
+            (tree.target / "keep.py").write_text(
+                "STOCK_KEEP = True\n", encoding="utf-8")
+            (tree.target / "drop.py").write_text(
+                "AD5X_STOCK_DROP = True\n", encoding="utf-8")
+
+            result = tree.run(uname_m="mips")
+            self.assertEqual(result.returncode, 0, result.stdout)
+
+            keep = tree.target / "keep.py"
+            drop = tree.target / "drop.py"
+            # A base patch not in the exclude list is applied as usual.
+            self.assertTrue(keep.is_symlink())
+            self.assertEqual(os.readlink(keep), str(tree.patches / "keep.py"))
+            # An excluded base patch is skipped: AD5X's own stock is left in
+            # place, untouched, with no symlink and no backup.
+            self.assertFalse(drop.is_symlink())
+            self.assertTrue(drop.is_file())
+            self.assertEqual(
+                drop.read_text(encoding="utf-8"), "AD5X_STOCK_DROP = True\n")
+            self.assertFalse((tree.target / "drop.py.bak").exists())
+
+    def test_exclude_list_is_ignored_on_other_platform(self):
+        with tempfile.TemporaryDirectory() as directory:
+            tree = OverlayTree(directory)
+            (tree.patches / "drop.py").write_text(
+                "FORGEX = True\n", encoding="utf-8")
+            arch = tree.source / "patches.ad5x"
+            arch.mkdir(parents=True)
+            (arch / ".exclude").write_text("drop.py\n", encoding="utf-8")
+            (tree.target / "drop.py").write_text(
+                "STOCK = True\n", encoding="utf-8")
+
+            # armv7l selects AD5M, so an ad5x exclude list must not apply.
+            result = tree.run(uname_m="armv7l")
+            self.assertEqual(result.returncode, 0, result.stdout)
+            drop = tree.target / "drop.py"
+            self.assertTrue(drop.is_symlink())
+            self.assertEqual(os.readlink(drop), str(tree.patches / "drop.py"))
+
+    def test_excluded_link_is_restored_by_cleanup(self):
+        with tempfile.TemporaryDirectory() as directory:
+            tree = OverlayTree(directory)
+            (tree.patches / "drop.py").write_text(
+                "FORGEX = True\n", encoding="utf-8")
+            arch = tree.source / "patches.ad5x"
+            arch.mkdir(parents=True)
+            # A prior apply: stock backed up, target links to the base patch.
+            (tree.target / "drop.py.bak").write_text(
+                "AD5X_STOCK = True\n", encoding="utf-8")
+            (tree.target / "drop.py").symlink_to(tree.patches / "drop.py")
+            # drop.py then becomes excluded on AD5X.
+            (arch / ".exclude").write_text("drop.py\n", encoding="utf-8")
+
+            result = tree.run(uname_m="mips")
+            self.assertEqual(result.returncode, 0, result.stdout)
+            drop = tree.target / "drop.py"
+            # cleanup restores AD5X's stock from the backup.
+            self.assertFalse(drop.is_symlink())
+            self.assertEqual(drop.read_text(encoding="utf-8"), "AD5X_STOCK = True\n")
+            self.assertFalse((tree.target / "drop.py.bak").exists())
+
     def test_files_are_linked_recursively_and_repeat_is_idempotent(self):
         with tempfile.TemporaryDirectory() as directory:
             tree = OverlayTree(directory)

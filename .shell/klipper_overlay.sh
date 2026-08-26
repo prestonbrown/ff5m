@@ -95,6 +95,24 @@ klipper_overlay_patch_relpath() {
     return 1
 }
 
+# A board may ship newer stock than a given base patch was written against, in
+# which case overlaying the (older) base patch would regress it. Such files are
+# listed, one relative path per line, in `patches.$PLATFORM/.exclude`, and the
+# base patch is skipped on that board (the board keeps its own stock module).
+# Returns 0 if $rel_file is excluded for this platform. Comment lines (#...) and
+# blank lines never match, so they are effectively ignored.
+klipper_overlay_excluded() {
+    local rel_file="$1"
+    local src_dir="$2"
+    local exclude_file
+
+    [ -n "${PLATFORM:-}" ] || return 1
+    exclude_file="$src_dir/patches.$PLATFORM/.exclude"
+    [ -f "$exclude_file" ] || return 1
+
+    grep -qxF "$rel_file" "$exclude_file"
+}
+
 klipper_overlay_patch_link_is_current() {
     local link="$1"
     local source="$2"
@@ -112,6 +130,14 @@ klipper_overlay_patch_link_is_current() {
         *) return 1 ;;
     esac
     klipper_overlay_ignored "$rel_file" && return 1
+
+    # A base patch that has since been excluded on this board is no longer
+    # current: its link should be restored to the board's own stock module.
+    case "$source" in
+        "$src_dir/patches/"*)
+            klipper_overlay_excluded "$rel_file" "$src_dir" && return 1
+        ;;
+    esac
 
     return 0
 }
@@ -204,6 +230,9 @@ klipper_overlay_link_patches() {
 
         if [ -n "$arch_dir" ] && [ -f "$arch_dir/$rel_file" ]; then
             winner="$arch_dir/$rel_file"
+        elif klipper_overlay_excluded "$rel_file" "$src_dir"; then
+            # Excluded on this board: leave its own stock module untouched.
+            continue
         else
             winner="$src_dir/patches/$rel_file"
         fi

@@ -40,6 +40,17 @@ Because patch files are linked rather than copied, a later boot points the insta
 
 A replacement must retain the exact stock module path expected by the target firmware. Additions should normally be plugins; do not use a replacement patch merely to introduce a new Forge-X module.
 
+### Per-platform overrides and exclusions
+
+`patches/` is written against one board's stock Klipper. A second board can ship a different stock, so the overlay reads two optional per-board inputs alongside it, selected by `$PLATFORM` from [`platform.sh`](../../.shell/platform.sh):
+
+| Input | Effect |
+|---|---|
+| [`patches.$PLATFORM/`](../../.py/klipper/patches.ad5x/) | Board-specific replacements that **win** over the same file in `patches/`. Used when the board's stock diverges where a patch touches, so the base patch will not apply cleanly. Derived and gated by [`tools/klipper-merge`](../../tools/klipper-merge/README.md), which re-expresses each base patch onto that board's stock. |
+| `patches.$PLATFORM/.exclude` | Base patches that are **not** applied on this board, one relative path per line. The board keeps its own stock module. Used when the board's stock is newer than the base patch was written against, so overlaying the older whole-file patch would regress it. |
+
+The AD5X is the current example: it shipped a near-mainline Klipper about four years newer than the AD5M base, so it overrides the files whose stock diverges and excludes the six 1.4.2 backports it would otherwise be regressed by. `merge.sh verify` checks both: an override must re-derive cleanly from the board's stock, and an exclusion must name a real base patch that has no override.
+
 ### Patch intent is source-local
 
 The replacement files carry short `Changes:` headers where applicable. Examples include:

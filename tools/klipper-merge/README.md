@@ -85,3 +85,26 @@ the same spot and both stay. Each feature is fully defined on its own side and
 neither touches the other: `_build_status_commands` plus the `get_status` commands
 key for AD5X, `default_immediate_commands` plus the M-code dispatch for Forge-X.
 This file merged mechanically before 1.4.2 added the immediate-command feature.
+
+## AD5X exclusions (`patches.ad5x/.exclude`)
+
+1.4.2 added six more base patches - `mcu.py` and `extras/{gcode_button, heaters,
+probe, servo, tmc}.py` - that the four categories above do not cover. They are
+small upstream backports written against the AD5M's 2021-era Klipper. The AD5X
+shipped (Sep 2025) a **near-mainline Klipper about four years newer**, so
+overlaying Forge-X's whole-file version would not add the fix, it would replace
+AD5X's newer module with older code: `mcu.py` would lose `TriggerDispatch` and
+the extracted `error_mcu`, `probe.py` would lose `ProbeSessionHelper`,
+`heaters.py` would lose `is_shutdown`, and `tmc.py` would re-enable a periodic
+TMC error check FlashForge deliberately commented out (a nuisance-shutdown risk).
+
+So on AD5X these six are **excluded**: the overlay does not link them, and AD5X
+keeps its own stock module. They are listed one per line in
+`.py/klipper/patches.ad5x/.exclude`, which `.shell/klipper_overlay.sh` reads (the
+board keeps its stock) and `merge.sh` validates (each entry is a real base patch
+and has no override - exclude and override are mutually exclusive). The two
+genuine correctness fixes among them (`mcu` 8e6e467 trsync timing, `tmc` 8dd798e
+`set_dir_inverted`) reach AD5X on its next stock update; `mcu`'s `tune_klipper`
+knob is moot because AD5X stock already sits at the tuned `TRSYNC_TIMEOUT` of
+0.05, and `heaters`' `set_extrusion_override` is only used by the Feather UI,
+which is disabled in the headless AD5X configuration.
