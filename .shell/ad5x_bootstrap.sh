@@ -134,6 +134,42 @@ _ensure_var() {
     fi
 }
 
+# ---------------------------------------------------------------------------
+# failsafe - one-shot boot-failure recovery (the AD5X has no screen)
+# ---------------------------------------------------------------------------
+#
+# The mod arms BOOT_FLAG_FAILURE before doing any work and clears it only once
+# the bring-up finishes. A boot that hangs or crashes in between leaves the flag
+# set, so the NEXT boot stands the mod down once and lets stock app_startup.sh
+# come up clean - self-recovery with no screen and no key press. BOOT_FLAG_SKIP
+# is the explicit one-shot skip (set over USB, a macro, or by hand). Both flags
+# live in $MOD_ROOT on the writable data partition (paths from common.sh), so
+# they survive the power cycle that recovers from a bad boot.
+
+# Return 0 (and clear the offending flag) when the mod should be skipped.
+failsafe_should_skip() {
+    if [ -f "$BOOT_FAILURE_F" ]; then
+        echo "// [ad5x] previous boot did not complete - skipping the mod once"
+        rm -f "$BOOT_FAILURE_F"
+        return 0
+    fi
+    if [ -f "$BOOT_SKIP_F" ]; then
+        echo "// [ad5x] skip requested - skipping the mod once"
+        rm -f "$BOOT_SKIP_F"
+        return 0
+    fi
+    return 1
+}
+
+failsafe_arm() {
+    mkdir -p "$(dirname "$BOOT_FAILURE_F")" 2>/dev/null
+    : > "$BOOT_FAILURE_F"
+}
+
+failsafe_disarm() {
+    rm -f "$BOOT_FAILURE_F"
+}
+
 run_bootstrap() {
     local dry_run=0
     case "${1:-}" in
@@ -153,6 +189,7 @@ run_bootstrap() {
 
     if [ "$dry_run" -eq 1 ]; then
         echo "[dry-run] AD5X headless bootstrap plan (PLATFORM=$PLATFORM):"
+        echo "[dry-run] failsafe: stand down this boot if BOOT_FLAG_FAILURE/SKIP is set; otherwise arm BOOT_FLAG_FAILURE before step 2 and clear it after step 7"
         echo "[dry-run] 1. source platform.sh, common.sh, klipper_overlay.sh, init_lib.sh"
         echo "[dry-run] 2. preconditions: bind /opt->$DATA_MNT and /data->$DATA_MNT; move aside \$MOD/ZMOD marker; ensure variables.cfg display=HEADLESS, use_swap=OFF"
         echo "[dry-run] 3. mount_data_partition"
@@ -171,6 +208,14 @@ run_bootstrap() {
     . "$SELF_DIR/klipper_overlay.sh"
     # shellcheck disable=SC1090,SC1091
     . "$SELF_DIR/init_lib.sh"
+
+    # Failsafe gate: a prior boot that never finished, or an explicit skip
+    # request, means stand down this boot and let stock come up clean. Otherwise
+    # arm the failure flag - only a completed bring-up (below) clears it.
+    if failsafe_should_skip; then
+        return 0
+    fi
+    failsafe_arm
 
     # Step 2. Preconditions no installer set up on the AD5X.
     echo "// [ad5x] Establishing preconditions..."
@@ -221,6 +266,9 @@ run_bootstrap() {
     fi
     echo "// [ad5x] Starting Buildroot services..."
     chroot "$MOD" /opt/config/mod/.root/start.sh
+
+    # Bring-up completed: clear the failure flag so the next boot re-arms the mod.
+    failsafe_disarm
 
     # Step 8. Return WITHOUT launching klippy; stock's klipper/start.sh does that.
     echo "// [ad5x] Bootstrap complete; stock klipper/start.sh will launch klippy."

@@ -137,4 +137,71 @@ for bad in S55boot boot_mcu zstart_klipper netd tone.py init_swap; do
     esac
 done
 
+# --- failsafe: arm / disarm / one-shot skip gate ----------------------------
+# The failsafe functions read the two flag paths that common.sh derives from
+# $MOD_ROOT. Off-rig we source the bootstrap and point those globals at fixture
+# files, then exercise each function directly.
+FS_DIR="$WORK/failsafe"
+mkdir -p "$FS_DIR"
+FS_FAIL="$FS_DIR/BOOT_FLAG_FAILURE"
+FS_SKIP="$FS_DIR/BOOT_FLAG_SKIP"
+
+fs_call() {
+    FS_FAIL="$FS_FAIL" FS_SKIP="$FS_SKIP" FN="$1" "$BASH_BIN" -c '
+        . "$1"
+        BOOT_FAILURE_F="$FS_FAIL"
+        BOOT_SKIP_F="$FS_SKIP"
+        "$FN"
+    ' _ "$BOOTSTRAP" >/dev/null 2>&1
+}
+
+# arm sets the failure flag; disarm clears it.
+rm -f "$FS_FAIL" "$FS_SKIP"
+fs_call failsafe_arm
+assert_file "failsafe_arm sets the failure flag" "$FS_FAIL"
+fs_call failsafe_disarm
+if [ ! -e "$FS_FAIL" ]; then
+    _t_pass "failsafe_disarm clears the failure flag"
+else
+    _t_fail "failsafe_disarm clears the failure flag" "flag still present"
+fi
+
+# A prior failure flag makes the gate skip once, and clears the flag.
+: > "$FS_FAIL"; rm -f "$FS_SKIP"
+if fs_call failsafe_should_skip; then
+    if [ ! -e "$FS_FAIL" ]; then
+        _t_pass "failsafe skips and clears on a prior failure"
+    else
+        _t_fail "failsafe skips and clears on a prior failure" "flag not cleared"
+    fi
+else
+    _t_fail "failsafe skips and clears on a prior failure" "gate did not skip"
+fi
+
+# An explicit skip flag makes the gate skip once, and clears the flag.
+rm -f "$FS_FAIL"; : > "$FS_SKIP"
+if fs_call failsafe_should_skip; then
+    if [ ! -e "$FS_SKIP" ]; then
+        _t_pass "failsafe skips and clears on an explicit skip request"
+    else
+        _t_fail "failsafe skips and clears on an explicit skip request" "flag not cleared"
+    fi
+else
+    _t_fail "failsafe skips and clears on an explicit skip request" "gate did not skip"
+fi
+
+# A clean boot (no flags) does not skip.
+rm -f "$FS_FAIL" "$FS_SKIP"
+if fs_call failsafe_should_skip; then
+    _t_fail "failsafe does not skip a clean boot" "gate skipped with no flag set"
+else
+    _t_pass "failsafe does not skip a clean boot"
+fi
+
+# The dry-run plan documents the failsafe.
+case "$out" in
+    *failsafe*) _t_pass "dry-run documents the failsafe" ;;
+    *)          _t_fail "dry-run documents the failsafe" "no failsafe line in dry-run output" ;;
+esac
+
 finish
