@@ -81,8 +81,13 @@ fix_config() {
     BATCH_FILE=/tmp/cfg_backup_batch.json
 
     # 1. Create dump with parameters from printer.base.cfg
-    # Check if any parameters were found
-    if chroot "$MOD" /bin/python3 "$PY"/cfg_backup.py \
+    # Check if any parameters were found. cfg_backup.py runs INSIDE the chroot,
+    # where the mod is always at /opt/config/mod (init_buildroot binds it there
+    # on both boards). $PY is the host path ($MOD_ROOT/.py, i.e.
+    # /usr/data/config/mod/.py on the AD5X) and is not visible in the chroot, so
+    # the chroot-relative path is required - the sibling .root chroot calls use
+    # the same /opt/config/mod prefix.
+    if chroot "$MOD" /bin/python3 /opt/config/mod/.py/cfg_backup.py \
         --mode backup \
         --config /opt/config/printer.base.cfg \
         --data $TMP_CFG_PATH \
@@ -212,7 +217,8 @@ fix_config() {
     echo "]" >> $BATCH_FILE
 
     # Run the batch file
-    chroot "$MOD" /bin/python3 "$PY"/cfg_backup.py --batch $BATCH_FILE
+    # Chroot-relative path, as above: $PY is a host path invisible in the chroot.
+    chroot "$MOD" /bin/python3 /opt/config/mod/.py/cfg_backup.py --batch $BATCH_FILE
     sync
 
     # Clean up the temporary files
