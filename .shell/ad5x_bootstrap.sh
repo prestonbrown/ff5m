@@ -253,6 +253,10 @@ run_bootstrap() {
     fi
     _ensure_var display HEADLESS
     _ensure_var use_swap OFF
+    # AD5X has no e0_sensor filament switch (its stock config defines none); the
+    # runout guards read this variable, so default it off. Filament presence on
+    # the AD5X comes from the IFS, wired up separately in the print flow.
+    _ensure_var filament_switch_sensor 0
 
     # Stock app_startup.sh launches the Qt UI (firmwareExe) before our hook runs.
     # Stop it: headless owns the framebuffer, and a live firmwareExe also owns the

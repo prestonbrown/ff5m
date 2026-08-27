@@ -80,6 +80,18 @@ fix_config() {
     TMP_CFG_PATH=/tmp/printer.tmp.cfg
     BATCH_FILE=/tmp/cfg_backup_batch.json
 
+    # Platform config overrides: prefer .cfg.$PLATFORM/<file> when it exists, else
+    # the shared .cfg/<file>. Echoes the CHROOT path (cfg_backup runs in the
+    # chroot); the existence test is on the host tree ($MOD_ROOT maps to the chroot
+    # /opt/config/mod). A board with no override dir (e.g. AD5M) always gets .cfg/.
+    _cfg_path() {
+        if [ -f "$MOD_ROOT/.cfg.$PLATFORM/$1" ]; then
+            echo "/opt/config/mod/.cfg.$PLATFORM/$1"
+        else
+            echo "/opt/config/mod/.cfg/$1"
+        fi
+    }
+
     # 1. Create dump with parameters from printer.base.cfg
     # Check if any parameters were found. cfg_backup.py runs INSIDE the chroot,
     # where the mod is always at /opt/config/mod (init_buildroot binds it there
@@ -91,11 +103,11 @@ fix_config() {
         --mode backup \
         --config /opt/config/printer.base.cfg \
         --data $TMP_CFG_PATH \
-        --params /opt/config/mod/.cfg/init.move.cfg; then
+        --params "$(_cfg_path init.move.cfg)"; then
         # TODO: Merge with defaults?
         DATA_MOVE_CFG=$TMP_CFG_PATH
     else
-        DATA_MOVE_CFG=/opt/config/mod/.cfg/data.init.move.cfg
+        DATA_MOVE_CFG="$(_cfg_path data.init.move.cfg)"
     fi
 
     # Create the batch file
@@ -107,7 +119,7 @@ fix_config() {
         \"mode\": \"restore\",
         \"config\": \"/opt/config/printer.cfg\",
         \"data\": \"$DATA_MOVE_CFG\",
-        \"params\": \"/opt/config/mod/.cfg/init.move.cfg\",
+        \"params\": \"$(_cfg_path init.move.cfg)\",
         \"avoid_writes\": true
     }," >> $BATCH_FILE
 
@@ -163,8 +175,8 @@ fix_config() {
     {
         \"mode\": \"restore\",
         \"config\": \"/opt/config/printer.cfg\",
-        \"params\": \"/opt/config/mod/.cfg/init.cfg\",
-        \"data\": \"/opt/config/mod/.cfg/data.init.cfg\",
+        \"params\": \"$(_cfg_path init.cfg)\",
+        \"data\": \"$(_cfg_path data.init.cfg)\",
         \"avoid_writes\": true
     }," >> $BATCH_FILE
 
@@ -173,8 +185,8 @@ fix_config() {
     {
         \"mode\": \"restore\",
         \"config\": \"/opt/config/printer.base.cfg\",
-        \"params\": \"/opt/config/mod/.cfg/init.base.cfg\",
-        \"data\": \"/opt/config/mod/.cfg/data.init.base.cfg\",
+        \"params\": \"$(_cfg_path init.base.cfg)\",
+        \"data\": \"$(_cfg_path data.init.base.cfg)\",
         \"avoid_writes\": true
     }," >> $BATCH_FILE
 
