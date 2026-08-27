@@ -83,4 +83,34 @@ assert_contains "ad5m builds printer_data on the host /root" \
 assert_contains "ad5m bind-mounts the host printer_data into the chroot" \
     "$ad5m_prov" "mount --bind /root/printer_data /data/.mod/.forge-x/root/printer_data"
 
+# --- apply_platform_macros: board-specific macro selection ------------------
+# Overrides ship as macros/<name>.$PLATFORM.cfg and are copied over the default.
+# AD5X selects its .ad5x variants; AD5M has none, so its defaults stay in force.
+run_platform_macros() {
+    ARCH="$1" WORK="$2" "$BASH_BIN" -c '
+        uname() { echo "$ARCH"; }
+        . "$1"
+        MOD_ROOT="$WORK"
+        apply_platform_macros
+    ' _ "$INIT_LIB" 2>&1
+}
+
+FXA=$(mktemp -d); mkdir -p "$FXA/macros"
+printf "AD5M-DEFAULT\n" > "$FXA/macros/hw_base.cfg"
+printf "AD5X-OVERRIDE\n" > "$FXA/macros/hw_base.ad5x.cfg"
+run_platform_macros mips "$FXA" >/dev/null
+assert_eq "ad5x selects hw_base.ad5x.cfg over hw_base.cfg" \
+    "AD5X-OVERRIDE" "$(cat "$FXA/macros/hw_base.cfg")"
+assert_eq "ad5x leaves the .ad5x source untouched" \
+    "AD5X-OVERRIDE" "$(cat "$FXA/macros/hw_base.ad5x.cfg")"
+rm -rf "$FXA"
+
+FXM=$(mktemp -d); mkdir -p "$FXM/macros"
+printf "AD5M-DEFAULT\n" > "$FXM/macros/hw_base.cfg"
+printf "AD5X-OVERRIDE\n" > "$FXM/macros/hw_base.ad5x.cfg"
+run_platform_macros armv7l "$FXM" >/dev/null
+assert_eq "ad5m leaves hw_base.cfg default (no .ad5m override to select)" \
+    "AD5M-DEFAULT" "$(cat "$FXM/macros/hw_base.cfg")"
+rm -rf "$FXM"
+
 finish

@@ -67,6 +67,22 @@ provision_printer_data() {
     fi
 }
 
+# Klipper's [include] cannot pick a file by platform, so board-specific macro
+# overrides ship as macros/<name>.$PLATFORM.cfg beside the default
+# macros/<name>.cfg and are copied over it here, before Klipper reads them. The
+# AD5M ships no .ad5m overrides, so this is a no-op there and the committed
+# defaults stay in force; the AD5X copies its .ad5x variants (e.g.
+# hw_base.ad5x.cfg, which omits the AD5M-only [temperature_sensor weightValue]
+# that would otherwise halt klippy on hardware that has no load-cell sensor).
+apply_platform_macros() {
+    local override base
+    for override in "$MOD_ROOT"/macros/*."$PLATFORM".cfg; do
+        [ -f "$override" ] || continue
+        base="${override%."$PLATFORM".cfg}.cfg"
+        cp -f "$override" "$base"
+    done
+}
+
 init_buildroot() {
     init_chroot
 
@@ -110,6 +126,9 @@ init_buildroot() {
 fix_config() {
     TMP_CFG_PATH=/tmp/printer.tmp.cfg
     BATCH_FILE=/tmp/cfg_backup_batch.json
+
+    # Select board-specific macro overrides before Klipper reads the tree.
+    apply_platform_macros
 
     # Platform config overrides: prefer .cfg.$PLATFORM/<file> when it exists, else
     # the shared .cfg/<file>. Echoes the CHROOT path (cfg_backup runs in the

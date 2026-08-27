@@ -216,4 +216,31 @@ case "$out" in
     *)          _t_fail "dry-run documents the failsafe" "no failsafe line in dry-run output" ;;
 esac
 
+# --- _ensure_var: mod_params-safe value quoting -----------------------------
+# variables.cfg is read by Klipper's [mod_params] via ast.literal_eval, so a
+# non-numeric seed value must be a quoted string literal or klippy halts at
+# config load. Exercised through the real zconf.sh against a temp variables.cfg.
+EV=$(mktemp -d)
+printf '[Variables]\n' > "$EV/vars.cfg"
+ev_seed() {
+    KEY="$1" VAL="$2" VP="$EV/vars.cfg" RD="$REPO_DIR" "$BASH_BIN" -c '
+        . "$1"
+        CMDS="$RD/.shell/commands"
+        VAR_PATH="$VP"
+        _ensure_var "$KEY" "$VAL"
+    ' _ "$BOOTSTRAP" >/dev/null 2>&1
+}
+ev_seed display HEADLESS
+ev_seed use_swap OFF
+ev_seed filament_switch_sensor 0
+evc=$(cat "$EV/vars.cfg")
+assert_contains "enum value seeded as a quoted literal (mod_params-safe)" "$evc" "display='HEADLESS'"
+assert_contains "second enum value quoted too" "$evc" "use_swap='OFF'"
+assert_contains "numeric value seeded bare (already a valid literal)" "$evc" "filament_switch_sensor=0"
+case "$evc" in
+    *"filament_switch_sensor='0'"*) _t_fail "numeric value is not over-quoted" "0 was wrapped in quotes" ;;
+    *)                              _t_pass "numeric value is not over-quoted" ;;
+esac
+rm -rf "$EV"
+
 finish

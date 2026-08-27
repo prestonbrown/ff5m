@@ -141,11 +141,19 @@ _ensure_bind() {
 }
 
 # Set $key=$val in variables.cfg only when the key is absent, so a user's
-# explicit choice - and every other key - is left untouched.
+# explicit choice - and every other key - is left untouched. A non-numeric value
+# is written as a Python string literal (quoted): variables.cfg is also read by
+# Klipper's [mod_params], which parses each value with ast.literal_eval, so a
+# bare enum name like HEADLESS is a syntax error there and halts klippy at
+# config load. zconf.sh --get strips the quotes again for shell readers
+# (zdisplay.sh etc.), so both consumers agree on the value.
 _ensure_var() {
     local key="$1" val="$2" cur
     cur="$("$CMDS"/zconf.sh "$VAR_PATH" --get "$key" "__MISSING__")"
     if [ "$cur" = "__MISSING__" ]; then
+        case "$val" in
+            ''|*[!0-9]*) val="'$val'" ;;
+        esac
         "$CMDS"/zconf.sh "$VAR_PATH" --set "$key=$val"
     fi
 }
