@@ -20,7 +20,47 @@ API_URL = os.environ.get(
     "FORGE_X_FIRMWARE_API_URL",
     "https://api.github.com/repos/DrA1ex/ff5m/releases/latest",
 )
-ASSET_PATTERN = re.compile(r"Adventurer5M-ForgeX-[A-Za-z0-9._-]+\.tgz")
+## Per-model download configuration. Every board-specific naming detail lives
+## here; the generic code below reads these fields instead of hardcoding a
+## model, so a new board is a new entry rather than a new branch. Fields:
+##   asset_prefix - leading text of the GitHub release asset; the download
+##                  regex is built from it.
+##   glob         - matches a firmware image already sitting on the USB drive.
+##   name_prefix  - the leading "<family>-" stripped from the asset name before
+##                  the selected model is reprepended, so the AD5M Pro gets its
+##                  own filename while the AD5X (one product) round-trips
+##                  unchanged. This is the family prefix, NOT asset_prefix: it
+##                  stops short of "ForgeX-", which is preserved in the suffix.
+MODELS = {
+    "Adventurer5M": {
+        "asset_prefix": "Adventurer5M-ForgeX-",
+        "glob": "Adventurer5M*.tgz",
+        "name_prefix": "Adventurer5M-",
+    },
+    "Adventurer5MPro": {
+        "asset_prefix": "Adventurer5M-ForgeX-",
+        "glob": "Adventurer5M*.tgz",
+        "name_prefix": "Adventurer5M-",
+    },
+    "AD5X": {
+        "asset_prefix": "AD5X-ForgeX-",
+        "glob": "AD5X-*.tgz",
+        "name_prefix": "AD5X-",
+    },
+}
+
+
+def asset_pattern(model):
+    prefix = MODELS[model]["asset_prefix"]
+    return re.compile(re.escape(prefix) + r"[A-Za-z0-9._-]+\.tgz")
+
+
+def final_asset_name(model, asset_name):
+    # Strip the family prefix ("Adventurer5M-", "AD5X-") and reprepend the
+    # concrete model, so the AD5M Pro lands under its own name while the AD5X
+    # round-trips to the identical asset name.
+    suffix = asset_name[len(MODELS[model]["name_prefix"]):]
+    return "{}-{}".format(model, suffix)
 REQUIRED_FILES = {
     "flashforge_init.sh",
     "common.sh",
@@ -71,10 +111,10 @@ def request_json(url):
         return json.load(response)
 
 
-def select_asset(release):
+def select_asset(release, pattern):
     assets = [
         asset for asset in release.get("assets", [])
-        if ASSET_PATTERN.fullmatch(asset.get("name", ""))
+        if pattern.fullmatch(asset.get("name", ""))
     ]
     if len(assets) != 1:
         raise RuntimeError(
@@ -137,13 +177,16 @@ def verify_posix_tar(path):
 
 
 def main():
-    if len(sys.argv) != 3 or sys.argv[1] not in ("Adventurer5M", "Adventurer5MPro"):
-        raise RuntimeError("Usage: zupdate.py Adventurer5M|Adventurer5MPro USB_PATH")
+    if len(sys.argv) != 3 or sys.argv[1] not in MODELS:
+        raise RuntimeError(
+            "Usage: zupdate.py Adventurer5M|Adventurer5MPro|AD5X USB_PATH"
+        )
 
     model, mount_point = sys.argv[1:]
+    config = MODELS[model]
     emit("// Checking the latest Forge-X release...")
 
-    existing = glob.glob(os.path.join(mount_point, "Adventurer5M*.tgz"))
+    existing = glob.glob(os.path.join(mount_point, config["glob"]))
     if existing:
         raise RuntimeError(
             "A firmware image already exists on the USB drive: {}".format(
@@ -152,7 +195,7 @@ def main():
         )
 
     release = request_json(API_URL)
-    asset = select_asset(release)
+    asset = select_asset(release, asset_pattern(model))
     version = str(release.get("tag_name") or "latest")
     asset_name = asset["name"]
     asset_size = int(asset.get("size") or 0)
@@ -160,8 +203,7 @@ def main():
     if asset_size <= 0 or not asset_url:
         raise RuntimeError("GitHub returned invalid firmware metadata.")
 
-    suffix = asset_name[len("Adventurer5M-"):]
-    final_name = "{}-{}".format(model, suffix)
+    final_name = final_asset_name(model, asset_name)
     final_path = os.path.join(mount_point, final_name)
     part_path = final_path + ".part"
 
