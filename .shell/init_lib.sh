@@ -27,7 +27,7 @@ init_buildroot() {
     mkdir -p "$MOD"/opt/klipper
     mkdir -p "$MOD"/root/printer_data
 
-    mount --bind /data "$MOD"/data
+    mount --bind "$DATA_MNT" "$MOD"/data
     mount --bind /opt/config "$MOD"/opt/config
     mount --bind "$KLIPPER_DIR" "$MOD"/opt/klipper
 
