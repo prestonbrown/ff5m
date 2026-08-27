@@ -32,6 +32,10 @@ case "$(uname -m)" in
         DATA_MNT=/usr/data
 
         LOG_DIR=/usr/data/logs
+        ## Host directory holding printed gcode files. init_buildroot maps it into
+        ## the chroot (see _chroot_data_path) as printer_data/gcodes; it must match
+        ## klipper's [virtual_sdcard] path so Moonraker and klippy agree.
+        GCODE_DIR=/usr/data/gcodes
         KLIPPER_DIR=/usr/prog/klipper
 
         ## Mod source tree (the checked-out .shell/.py/.root/... payload).
@@ -59,6 +63,9 @@ case "$(uname -m)" in
         DATA_MNT=/data
 
         LOG_DIR=$DATA_MNT/logFiles
+        ## Host gcode directory (see the AD5X block). On the AD5M the whole data
+        ## mount is the gcode root, matching this board's [virtual_sdcard] path.
+        GCODE_DIR=$DATA_MNT
         KLIPPER_DIR=/opt/klipper
 
         ## Mod source tree (the checked-out .shell/.py/.root/... payload).

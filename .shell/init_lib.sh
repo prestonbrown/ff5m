@@ -18,6 +18,55 @@
 # shellcheck disable=SC1090,SC1091
 . "$(dirname "${BASH_SOURCE[0]}")/common.sh"
 
+# Map a host path under $DATA_MNT to where that same partition is visible inside
+# the chroot: init_buildroot bind-mounts $DATA_MNT at $MOD/data, so the chroot
+# spelling is /data plus whatever followed $DATA_MNT. /usr/data/gcodes ->
+# /data/gcodes on the AD5X; on the AD5M $DATA_MNT is already /data, so /data and
+# /data/logFiles pass through unchanged.
+_chroot_data_path() {
+    echo "/data${1#"$DATA_MNT"}"
+}
+
+# Build the printer_data tree at $1. The symlink targets are chroot-relative on
+# both boards - init_buildroot binds $DATA_MNT->$MOD/data and /opt/config->
+# $MOD/opt/config - so the contents are identical regardless of where the tree
+# is built; only provision_printer_data's choice of location differs per board.
+_init_printer_data() {
+    local pd="$1"
+
+    mkdir -p "$pd" "$pd"/certs "$pd"/comms "$pd"/misc "$pd"/tmp
+
+    # $GCODE_DIR/$LOG_DIR are host paths the chroot cannot see at their host
+    # spelling; _chroot_data_path re-homes them under the /data bind so Moonraker
+    # (in the chroot) and klippy (on the host) agree. On the AD5M both resolve to
+    # the exact strings these symlinks always had (/data and /data/logFiles).
+    ln -fns "$(_chroot_data_path "$GCODE_DIR")" "$pd"/gcodes
+    ln -fns "$(_chroot_data_path "$LOG_DIR")" "$pd"/logs
+    ln -fns /opt/config/ "$pd"/config
+    ln -fns /opt/config/mod_data/database "$pd"/database
+    ln -fns /opt/config/mod/.bin/exec "$pd"/bin
+    ln -fns /opt/config/mod/.py "$pd"/py
+    ln -fns /opt/config/mod/.shell "$pd"/scripts
+
+    ln -fns /opt/config/mod/moonraker.conf "$pd"/config/moonraker.conf
+    ln -fns /opt/config/mod/.root/moonraker.asvc "$pd"/moonraker.asvc
+}
+
+# Provision printer_data in the right place for the board. The AD5M builds it on
+# the host /root and bind-mounts it into the chroot: host-side tools (zmem/zsend/
+# zfs) read the host copy, so it must exist there. The AD5X host / is a
+# read-only squashfs with no writable /root, so there is nowhere on the host to
+# build - it goes straight into the chroot's own writable /root, with no bind.
+provision_printer_data() {
+    if [ "$PLATFORM" = ad5x ]; then
+        _init_printer_data "$MOD"/root/printer_data
+    else
+        _init_printer_data /root/printer_data
+        sync
+        mount --bind /root/printer_data "$MOD"/root/printer_data
+    fi
+}
+
 init_buildroot() {
     init_chroot
 
@@ -31,27 +80,9 @@ init_buildroot() {
     mount --bind /opt/config "$MOD"/opt/config
     mount --bind "$KLIPPER_DIR" "$MOD"/opt/klipper
 
-    mkdir -p /root/printer_data
-    mkdir -p /root/printer_data/certs
-    mkdir -p /root/printer_data/comms
-    mkdir -p /root/printer_data/misc
-    mkdir -p /root/printer_data/tmp
-
-    # Init /root/printer_data
-    ln -fns /data /root/printer_data/gcodes
-    ln -fns "$LOG_DIR" /root/printer_data/logs
-    ln -fns /opt/config/ /root/printer_data/config
-    ln -fns /opt/config/mod_data/database /root/printer_data/database
-    ln -fns /opt/config/mod/.bin/exec /root/printer_data/bin
-    ln -fns /opt/config/mod/.py /root/printer_data/py
-    ln -fns /opt/config/mod/.shell /root/printer_data/scripts
-
-    ln -fns /opt/config/mod/moonraker.conf /root/printer_data/config/moonraker.conf
-    ln -fns /opt/config/mod/.root/moonraker.asvc /root/printer_data/moonraker.asvc
-
-    sync
-
-    mount --bind /root/printer_data "$MOD"/root/printer_data
+    # Init printer_data - on the host /root (AD5M) or in the chroot (AD5X). See
+    # provision_printer_data.
+    provision_printer_data
 
     echo "// Finishing buildroot initialization..."
 

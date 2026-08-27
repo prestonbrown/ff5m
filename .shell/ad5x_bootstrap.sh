@@ -207,7 +207,7 @@ run_bootstrap() {
         echo "[dry-run] AD5X headless bootstrap plan (PLATFORM=$PLATFORM):"
         echo "[dry-run] failsafe: stand down this boot if BOOT_FLAG_FAILURE/SKIP is set; otherwise arm BOOT_FLAG_FAILURE before step 2 and clear it after step 8"
         echo "[dry-run] 1. source platform.sh, common.sh, klipper_overlay.sh, init_lib.sh"
-        echo "[dry-run] 2. preconditions: bind /opt->$DATA_MNT and /data->$DATA_MNT; move aside \$MOD/ZMOD marker; ensure variables.cfg display=HEADLESS, use_swap=OFF; stop stock UI ($STOCK_UI_PROCS)"
+        echo "[dry-run] 2. preconditions: bind /opt->$DATA_MNT; move aside \$MOD/ZMOD marker; ensure variables.cfg display=HEADLESS, use_swap=OFF; stop stock UI ($STOCK_UI_PROCS)"
         echo "[dry-run] 3. mount_data_partition"
         echo "[dry-run] 4. init_buildroot"
         echo "[dry-run] 5. apply_klipper_patches"
@@ -237,10 +237,11 @@ run_bootstrap() {
     # Step 2. Preconditions no installer set up on the AD5X.
     echo "// [ad5x] Establishing preconditions..."
     # The boot scripts carry ~140 /opt/config/mod literals by design; the /opt
-    # bind resolves them to $MOD_ROOT. init_buildroot also has two raw /data
-    # literals the /opt bind does not cover, so bind /data too.
+    # bind resolves them to $MOD_ROOT. init_buildroot binds $DATA_MNT into the
+    # chroot itself (as $MOD/data), so no host /data alias is needed - and the
+    # AD5X host / is a read-only squashfs on which a /data mountpoint cannot be
+    # created anyway.
     _ensure_bind "$DATA_MNT" /opt
-    _ensure_bind "$DATA_MNT" /data
     # A $MOD/ZMOD marker triggers a 30s zversion stall plus ARM tone.py. Move it
     # aside (reversible) rather than deleting it.
     if [ -e "$MOD/ZMOD" ] && [ ! -e "$MOD/ZMOD.forge-x-disabled" ]; then
