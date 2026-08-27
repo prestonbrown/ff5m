@@ -106,16 +106,16 @@ def test_disk_speed(file_path, block_size=16 * 1024, num_operations=None):
     # read test does not influence the next block-size test.
     drop_caches(file_path)
 
+    # Generate the payload before starting the timer.  Do not generate data
+    # between buffered writes and subtract that time afterwards: Linux may be
+    # flushing dirty pages in parallel while Python is in os.urandom(), so
+    # subtracting generation time would also subtract real storage work.
+    data_to_write = generate_random_data(block_size)
+
     write_start_time = time.perf_counter()
-    generate_duration = 0.0
     with open(file_path, 'rb+', buffering=0) as f:
         for random_block in write_blocks:
             f.seek(random_block * block_size)
-
-            gen_start = time.perf_counter()
-            data_to_write = generate_random_data(block_size)
-            generate_duration += time.perf_counter() - gen_start
-
             f.write(data_to_write)
 
             i += 1
@@ -127,7 +127,7 @@ def test_disk_speed(file_path, block_size=16 * 1024, num_operations=None):
         os.fsync(f.fileno())
 
     write_end_time = time.perf_counter()
-    write_duration = write_end_time - write_start_time - generate_duration
+    write_duration = write_end_time - write_start_time
     write_speed = (block_size * num_operations / write_duration) / (1024 * 1024)  # MB/s
 
     # The write pass has just populated page cache, so explicitly evict it
@@ -189,15 +189,15 @@ print(f"Using temporary test file \"{file_path}\" of size {TARGET_FILE_SIZE / 10
 try:
     block_count = TARGET_FILE_SIZE // DEFAULT_FILE_BLOCK_SIZE
     bytes_written = 0
-    generate_duration = 0.0
+
+    # Prepare data outside the timed section. Reusing a random 1 MiB payload is
+    # fine for an eMMC/filesystem throughput test and avoids mixing RNG cost
+    # with I/O without incorrectly subtracting overlapping writeback time.
+    data = generate_random_data(DEFAULT_FILE_BLOCK_SIZE)
 
     create_start_time = time.perf_counter()
     with open(file_path, 'wb') as f:
         for i in range(block_count):
-            gen_start = time.perf_counter()
-            data = generate_random_data(DEFAULT_FILE_BLOCK_SIZE)
-            generate_duration += time.perf_counter() - gen_start
-
             bytes_written += f.write(data)
             print_progress_bar("Generating test file", i + 1, block_count)
 
@@ -205,7 +205,7 @@ try:
         os.fsync(f.fileno())
 
     create_end_time = time.perf_counter()
-    create_duration = create_end_time - create_start_time - generate_duration
+    create_duration = create_end_time - create_start_time
 
     if not NO_PROGRESS:
         sys.stdout.write("\033[1K\r")
