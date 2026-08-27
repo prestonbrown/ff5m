@@ -483,10 +483,19 @@ Obico, a Python-based tool, may work as a standalone application (not a Moonrake
 ## Additional Configuration and Troubleshooting
 
 ### How do I adjust the camera settings?
-Edit the `camera.conf` file or use the web control panel at `http://printer_IP:8080/control.htm`. Manually transfer web panel adjustments to `E_<parameter>` properties in `camera.conf`, as changes are not saved automatically. Apply settings manually with the `CAMERA_RELOAD` macro.
+Open `http://printer_IP:8080/control.htm` for a continuously updating preview
+and the supported image controls. Each edit is applied to the running camera
+automatically. The panel reads ranges and menu entries from the camera, and
+**Save** atomically writes the visible values to `camera.conf` so they survive a
+restart. If you edit `camera.conf` manually, run `CAMERA_RELOAD` to apply it
+without restarting the HTTP stream service. The panel uses the existing camera
+HTTP server and MJPEG endpoint; it does not start a second server.
 
 ### I adjusted the camera settings, but they are not applied after a reboot
-Some camera settings are applied only when a print starts. Use the `CAMERA_RELOAD` macro to apply changes manually at any time.
+Make sure `POST_PROCESSING=1` and the desired `E_<parameter>` lines are
+uncommented in `camera.conf`, or use **Save** in the control panel.
+Saved controls are loaded on service start and applied after the camera's first
+completed frame. `CAMERA_RELOAD` can be used to reread the file manually.
 
 ### What should I do about the warning after an SSH connection: `wtmp_write: problem writing /dev/null/wtmp: Not a directory`?
 This warning is harmless and indicates an incomplete core system configuration in the firmware. It does not affect functionality and can be ignored.
