@@ -585,7 +585,8 @@ esac
 
 # Step 2 must actually call it - a helper nothing invokes is the same bug.
 plan=$(run_forced mips --dry-run)
-assert_contains "the dry-run plan documents the network takeover" "$plan" "take over its network role"
+assert_contains "the dry-run plan documents the network takeover" "$plan" "ifconfig up + udhcpc"
+assert_contains "the dry-run plan documents the buzzer release" "$plan" "release the buzzer"
 
 # Stopping the UI and taking the network over must be ONE operation. A version
 # that kills firmwareExe and forgets the network is a printer nothing can reach,
@@ -599,10 +600,13 @@ out=$(AD5X_NET_IFACES=lo AD5X_NET_WAIT=1 NET_TRACE="$NET_TRACE" "$BASH_BIN" -c '
     ifconfig() { case "$2" in up) echo "IFCONFIG_UP $1";; esac; return 0; }
     ip()       { return 1; }
     udhcpc()   { echo "UDHCPC $*" >> "$NET_TRACE"; }
+    cmd_pwm()  { echo "PWM $*" >> "$NET_TRACE"; }
     sleep()    { :; }
     stop_stock_ui
 ' _ "$BOOTSTRAP" 2>&1)
 assert_contains "stop_stock_ui kills the stock UI" "$(cat "$NET_TRACE")" "KILLALL firmwareExe"
+assert_contains "stop_stock_ui zeroes the buzzer duty cycle" "$(cat "$NET_TRACE")" "PWM set_wc pc12 0 0"
+assert_contains "stop_stock_ui disables the buzzer channel" "$(cat "$NET_TRACE")" "PWM disable_channels pc12"
 assert_contains "stop_stock_ui brings the interface up" "$out" "IFCONFIG_UP lo"
 assert_contains "stop_stock_ui starts DHCP" "$(cat "$NET_TRACE")" "UDHCPC -i lo"
 
@@ -614,6 +618,33 @@ case "$body" in
                        "killall appears directly in run_bootstrap, bypassing the network takeover" ;;
     *)         _t_pass "run_bootstrap does not open-code the killall" ;;
 esac
+
+# --- buzzer release ---------------------------------------------------------
+#
+# firmwareExe plays a melody at startup and drives the buzzer through
+# `cmd_pwm set_level pc12 100`. Killing it mid-note leaves the PWM channel
+# latched and the printer screams until it is power cycled - that happened on
+# the rig, at level 1533857, and needed a manual disable_channels to stop.
+: > "$NET_TRACE"
+out=$(NET_TRACE="$NET_TRACE" AD5X_BUZZER_PWM=pc12 "$BASH_BIN" -c '
+    . "$1"
+    cmd_pwm() { echo "PWM $*" >> "$NET_TRACE"; }
+    silence_stock_buzzer
+' _ "$BOOTSTRAP" 2>&1)
+assert_contains "buzzer duty is zeroed" "$(cat "$NET_TRACE")" "PWM set_wc pc12 0 0"
+assert_contains "buzzer channel is disabled" "$(cat "$NET_TRACE")" "PWM disable_channels pc12"
+assert_contains "the buzzer release is logged" "$out" "released pc12"
+
+# The AD5M has no cmd_pwm; a missing tool must be a clean skip, never a failure
+# that takes the whole bring-up down over a beep.
+out=$(AD5X_BUZZER_CMD=definitely_not_a_command "$BASH_BIN" -c '
+    . "$1"
+    silence_stock_buzzer
+' _ "$BOOTSTRAP" 2>&1)
+_bz_rc=$?
+assert_eq "a missing cmd_pwm is not fatal" "0" "$_bz_rc"
+assert_contains "a missing cmd_pwm is reported" "$out" "not available"
+
 rm -f "$NET_TRACE"
 
 finish

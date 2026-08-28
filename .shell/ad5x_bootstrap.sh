@@ -275,10 +275,37 @@ iface_has_ipv4() {
     return 1
 }
 
-## Stopping the stock UI and taking over its network role are ONE operation, not
-## two steps that happen to be adjacent. Splitting them is what produced a
-## bring-up that completed perfectly and left an unreachable printer, so they get
-## a single name and a single test.
+## The stock UI also owns the buzzer, and plays a melody at startup. firmwareExe
+## drives it through `cmd_pwm set_level pc12 100` - that literal sits among its
+## buzzerPlay symbols, and pc12 is the only PWM channel it names outright (the
+## backlight is a separate GPIO, backlight_gpio0). Killing the UI mid-note leaves
+## the channel latched with nothing alive to call buzzerPlay::stop(), so the
+## printer screams until it is power cycled; measured at level 1533857 on the rig,
+## and it took a manual `cmd_pwm disable_channels pc12` to stop.
+##
+## ZMOD sidesteps this by bind-mounting /bin/echo over /usr/bin/cmd_pwm in its own
+## app_startup.sh hook - a blanket mute for the whole boot. We only need to
+## release the note we interrupted, so the buzzer still works afterwards.
+BUZZER_CMD="${AD5X_BUZZER_CMD:-cmd_pwm}"
+BUZZER_PWM="${AD5X_BUZZER_PWM:-pc12}"
+
+silence_stock_buzzer() {
+    if ! command -v "$BUZZER_CMD" >/dev/null 2>&1; then
+        echo "// [ad5x] Buzzer: $BUZZER_CMD not available, skipping"
+        return 0
+    fi
+    "$BUZZER_CMD" set_wc "$BUZZER_PWM" 0 0 >/dev/null 2>&1
+    "$BUZZER_CMD" disable_channels "$BUZZER_PWM" >/dev/null 2>&1
+    echo "// [ad5x] Buzzer: released $BUZZER_PWM"
+    return 0
+}
+
+## Stopping the stock UI, silencing the note it was mid-way through, and taking
+## over its network role are ONE operation, not three steps that happen to be
+## adjacent. Every one of those jobs belonged to firmwareExe, and each time we
+## took the UI without taking a job with it we got a failure that looked like
+## something else entirely - an unreachable printer, then a screaming one. So
+## they get a single name and a single test.
 stop_stock_ui() {
     local proc
 
@@ -286,6 +313,8 @@ stop_stock_ui() {
     for proc in $STOCK_UI_PROCS; do
         killall "$proc" >/dev/null 2>&1 || true
     done
+
+    silence_stock_buzzer
 
     echo "// [ad5x] Taking over the network from the stock UI..."
     provide_network
@@ -456,7 +485,7 @@ run_bootstrap() {
         echo "[dry-run] AD5X headless bootstrap plan (PLATFORM=$PLATFORM):"
         echo "[dry-run] failsafe: stand down this boot if BOOT_FLAG_FAILURE/SKIP is set; otherwise arm BOOT_FLAG_FAILURE before step 2 and clear it after step 8"
         echo "[dry-run] 1. source platform.sh, common.sh, klipper_overlay.sh, init_lib.sh"
-        echo "[dry-run] 2. preconditions: bind /opt->$DATA_MNT; provide /bin/bash (faithful /bin superset bound over /bin, no mod script modified); move aside \$MOD/ZMOD marker; ensure variables.cfg display=HEADLESS, use_swap=OFF, show_feather_promo=0; stop stock UI ($STOCK_UI_PROCS), then take over its network role (ifconfig up + udhcpc on $NET_IFACES, wait up to ${NET_WAIT}s)"
+        echo "[dry-run] 2. preconditions: bind /opt->$DATA_MNT; provide /bin/bash (faithful /bin superset bound over /bin, no mod script modified); move aside \$MOD/ZMOD marker; ensure variables.cfg display=HEADLESS, use_swap=OFF, show_feather_promo=0; stop stock UI ($STOCK_UI_PROCS), then take over its jobs: release the buzzer ($BUZZER_PWM) and the network (ifconfig up + udhcpc on $NET_IFACES, wait up to ${NET_WAIT}s)"
         echo "[dry-run] 3. mount_data_partition"
         echo "[dry-run] 4. init_buildroot"
         echo "[dry-run] 5. apply_klipper_patches"
