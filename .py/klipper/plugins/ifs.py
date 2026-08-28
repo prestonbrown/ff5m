@@ -33,6 +33,7 @@ import threading
 from . import ifs_diagnostics
 from . import ifs_link
 from . import ifs_operations
+from . import ifs_sequences
 from . import ifs_status
 
 
@@ -52,6 +53,15 @@ DEFAULT_COMMAND_TIMEOUT = 15.0
 ## How often the reactor-side waiter looks for its answer. Short enough to feel
 ## immediate, long enough not to spin.
 COMMAND_POLL_PAUSE = 0.05
+
+## A move can take a while: a metre of filament at 1200 mm/min is fifty
+## seconds, and a cold-ish nozzle makes a purge slower still.
+DEFAULT_MOVE_TIMEOUT = 120.0
+
+## What a move waits for, as the UNTIL= parameter spells it.
+UNTIL_TOOLHEAD = "toolhead"
+UNTIL_CLEAR = "clear"
+UNTIL_DONE = "done"
 
 
 class IfsBusy(Exception):
@@ -95,6 +105,12 @@ class IFS(object):
         ## Only used until F19 answers, and kept by a board that never does.
         self.configured_channels = config.getint(
             "channel_count", ifs_status.MAX_CHANNELS, minval=1, maxval=8)
+        ## Which filament_switch_sensor speaks for the toolhead. UNTIL=toolhead
+        ## has nothing to wait on without it.
+        self.toolhead_sensor_name = config.get("toolhead_sensor", None)
+        self.params = ifs_sequences.Parameters(
+            tube_mm=config.getfloat("tube_length", 1000.0, above=0.),
+            ifs_speed=config.getfloat("ifs_speed", 1200.0, above=0.))
 
         self._lock = threading.Lock()
         self._stopping = threading.Event()
@@ -125,6 +141,23 @@ class IFS(object):
         gcode.register_command("IFS_DIAGNOSTICS", self.cmd_IFS_DIAGNOSTICS,
                                desc="Report IFS firmware, stall counts and "
                                     "stepper driver registers")
+        ## Primitives, each blocking until its move is decided. The sequences
+        ## that use them live in macros, so a user can read, run and override
+        ## them from the console.
+        for name, handler, description in (
+                ("IFS_CLAMP", self.cmd_IFS_CLAMP,
+                 "Clamp a channel and wait for the board to confirm"),
+                ("IFS_RELEASE", self.cmd_IFS_RELEASE, "Release a channel"),
+                ("IFS_RELEASE_ALL", self.cmd_IFS_RELEASE_ALL,
+                 "Release every channel"),
+                ("IFS_FEED", self.cmd_IFS_FEED,
+                 "Feed filament towards the toolhead until the sensor sees it"),
+                ("IFS_RETRACT", self.cmd_IFS_RETRACT,
+                 "Pull filament back into its lane"),
+                ("IFS_STOP", self.cmd_IFS_STOP, "Stop the board feeding"),
+                ("IFS_RESET_DRIVER", self.cmd_IFS_RESET_DRIVER,
+                 "Reset the board's stepper driver after a fault")):
+            gcode.register_command(name, handler, desc=description)
 
     ## -- lifecycle ----------------------------------------------------------
 
@@ -330,6 +363,9 @@ class IFS(object):
             "loaded_channels": [],
             "moving_channels": [],
             "inserted_channels": [],
+            ## Macros own the choreography, so they need the numbers. Sourced
+            ## from the printer's own Multicolour block where available.
+            "params": self.params.as_dict(),
         }
         if status is not None:
             info.update({
@@ -342,6 +378,134 @@ class IFS(object):
                 "inserted_channels": status.inserted_channels,
             })
         return info
+
+    ## -- moves, with the wait that decides whether they worked ------------
+
+    def _toolhead_sensor(self):
+        if not self.toolhead_sensor_name:
+            return None
+        return self.printer.lookup_object(
+            "filament_switch_sensor %s" % self.toolhead_sensor_name, None)
+
+    def _toolhead_has_filament(self):
+        """True/False/None from the toolhead sensor, None when we cannot ask."""
+        sensor = self._toolhead_sensor()
+        if sensor is None or not hasattr(sensor, "read_present"):
+            return None
+        return sensor.read_present()
+
+    def _fresh_status(self, previous):
+        """The newest poll, skipping the one that predates our command."""
+        status = self.latest_status()
+        return None if status is previous else status
+
+    def _await(self, gcmd, waiter, timeout, until=None):
+        """Watch until the move ends, yielding the reactor throughout.
+
+        Reads the poller's snapshots rather than issuing its own F13s: the
+        poller is already asking, and doubling the traffic would only slow both.
+        """
+        started = self.reactor.monotonic()
+        deadline = started + timeout
+        before = self.latest_status()
+        while self.reactor.monotonic() < deadline:
+            self.reactor.pause(self.reactor.monotonic() + COMMAND_POLL_PAUSE)
+            elapsed = self.reactor.monotonic() - started
+
+            if until == UNTIL_TOOLHEAD and self._toolhead_has_filament() is True:
+                return ifs_sequences.Outcome(
+                    ifs_sequences.FILAMENT, self.latest_status(), elapsed,
+                    "toolhead sensor sees filament")
+            if until == UNTIL_CLEAR and self._toolhead_has_filament() is False:
+                return ifs_sequences.Outcome(
+                    ifs_sequences.FILAMENT, self.latest_status(), elapsed,
+                    "toolhead sensor is clear")
+
+            status = self._fresh_status(before)
+            if status is None:
+                continue
+            before = status
+            outcome = waiter.update(status, elapsed)
+            if outcome.kind != ifs_sequences.WAITING:
+                return outcome
+        return waiter.timed_out(self.latest_status(),
+                                self.reactor.monotonic() - started)
+
+    def _finish(self, gcmd, outcome, what):
+        """Report an outcome, and stop the board if it was a bad one."""
+        if not outcome.is_problem:
+            gcmd.respond_info("%s: %s%s"
+                              % (what, outcome.kind,
+                                 " (%s)" % outcome.detail if outcome.detail
+                                 else ""))
+            return outcome
+        ## Leaving a jammed board feeding is how filament gets ground away.
+        try:
+            self.execute("F112")
+        except Exception as exc:
+            logging.warning("IFS: could not stop after %s: %s",
+                            outcome.kind, exc)
+        raise gcmd.error("%s failed: %s%s"
+                         % (what, outcome.kind,
+                            " (%s)" % outcome.detail if outcome.detail else ""))
+
+    def _channel(self, gcmd):
+        return gcmd.get_int("CHANNEL", minval=1, maxval=self.channel_count)
+
+    def cmd_IFS_CLAMP(self, gcmd):
+        channel = self._channel(gcmd)
+        self.execute("F24 C%d" % channel)
+        waiter = ifs_sequences.StateWaiter(channel, ifs_status.CLAMPED,
+                                           watch_stall=False)
+        self._finish(gcmd, self._await(gcmd, waiter,
+                                       gcmd.get_float("TIMEOUT", 15.0)),
+                     "clamp channel %d" % channel)
+
+    def cmd_IFS_RELEASE(self, gcmd):
+        channel = self._channel(gcmd)
+        self.execute("F39 C%d" % channel)
+        gcmd.respond_info("released channel %d" % channel)
+
+    def cmd_IFS_RELEASE_ALL(self, gcmd):
+        self.execute("F18")
+        gcmd.respond_info("released every channel")
+
+    def cmd_IFS_STOP(self, gcmd):
+        self.execute("F112")
+        gcmd.respond_info("stopped")
+
+    def cmd_IFS_RESET_DRIVER(self, gcmd):
+        ## The literal C is what the firmware expects; it is not a channel.
+        self.execute("F15 C")
+        gcmd.respond_info("driver reset")
+
+    def _move(self, gcmd, opcode, activity, default_until, what):
+        channel = self._channel(gcmd)
+        length = gcmd.get_float("LENGTH", self.params.tube_mm, above=0.)
+        speed = gcmd.get_float("SPEED", self.params.ifs_speed, above=0.)
+        until = gcmd.get("UNTIL", default_until)
+        timeout = gcmd.get_float("TIMEOUT", DEFAULT_MOVE_TIMEOUT, above=0.)
+
+        if until in (UNTIL_TOOLHEAD, UNTIL_CLEAR):
+            if self._toolhead_has_filament() is None:
+                raise gcmd.error(
+                    "UNTIL=%s needs a toolhead sensor; set toolhead_sensor= "
+                    "in [ifs]" % until)
+        elif until != UNTIL_DONE:
+            raise gcmd.error("UNTIL must be %s, %s or %s"
+                             % (UNTIL_TOOLHEAD, UNTIL_CLEAR, UNTIL_DONE))
+
+        self.execute("%s C%d L%d S%d" % (opcode, channel, length, speed))
+        waiter = ifs_sequences.StateWaiter(channel, activity)
+        outcome = self._await(gcmd, waiter, timeout, until=until)
+        return self._finish(gcmd, outcome,
+                            "%s channel %d" % (what, channel))
+
+    def cmd_IFS_FEED(self, gcmd):
+        self._move(gcmd, "F10", ifs_status.LOADING, UNTIL_TOOLHEAD, "feed")
+
+    def cmd_IFS_RETRACT(self, gcmd):
+        self._move(gcmd, "F11", ifs_status.UNLOADING, UNTIL_DONE, "retract")
 
     ## -- gcode --------------------------------------------------------------
 

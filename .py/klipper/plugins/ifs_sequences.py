@@ -147,70 +147,28 @@ class StateWaiter(object):
 
 
 ## ---------------------------------------------------------------------------
-## Load and unload, as plans
+## Motion parameters
 ## ---------------------------------------------------------------------------
 ##
-## A sequence is a list of steps and nothing else - no serial, no gcode, no
-## klipper - so what a load actually does is readable in one place and testable
-## without a printer. The executor above klipper turns each step into an IFS
-## command or an extruder move.
+## The choreography of a load - what order, when to heat, where to purge - lives
+## in gcode macros, not here. That is deliberate: a macro can be read, run and
+## overridden by the user from the console, shows up as a button in Mainsail,
+## and composes with PRINT_START and tool changes. What stays in Python is the
+## part Jinja cannot do: a command plus the wait that decides whether it worked.
 ##
-## Distances and speeds come from the printer's OWN `Multicolour` block (see
-## flashforge_config), not from constants we invented. zmod's "defaults" are
-## those same numbers copied out, so this reads the source rather than the copy.
-
-## What ends a step, when the board's own state is not the answer.
-UNTIL_TOOLHEAD_FILAMENT = "toolhead_filament"   # the toolhead sensor sees it
-UNTIL_TOOLHEAD_CLEAR = "toolhead_clear"         # and stops seeing it
-
-CLAMP = "clamp"
-RELEASE = "release"
-FEED = "feed"              # IFS pushes filament towards the toolhead
-RETRACT = "retract"        # IFS pulls filament back into its lane
-STOP = "stop"              # F112
-EXTRUDE = "extrude"        # the printer's own extruder moves
-FAN = "fan"
-HEAT = "heat"
-
-
-class Step(object):
-    """One action, plus what finishing it looks like."""
-
-    __slots__ = ("kind", "channel", "distance", "speed", "value", "expect",
-                 "until", "note")
-
-    def __init__(self, kind, channel=None, distance=None, speed=None,
-                 value=None, expect=None, until=None, note=None):
-        self.kind = kind
-        self.channel = channel
-        self.distance = distance
-        self.speed = speed
-        self.value = value
-        self.expect = expect
-        self.until = until
-        self.note = note
-
-    def __repr__(self):
-        bits = [self.kind]
-        if self.channel is not None:
-            bits.append("ch%d" % self.channel)
-        if self.distance is not None:
-            bits.append("%gmm" % self.distance)
-        if self.speed is not None:
-            bits.append("@%g" % self.speed)
-        if self.value is not None:
-            bits.append("=%g" % self.value)
-        return "Step(%s)" % " ".join(bits)
+## This is the numbers those macros need, taken from the printer's OWN
+## `Multicolour` block rather than constants we invented. zmod's "defaults" are
+## these values copied out, so this reads the source rather than the copy.
 
 
 class Parameters(object):
-    """Load and unload distances, taken from the printer's own settings.
+    """Load and unload distances, from the printer's own settings.
 
     `tube_mm` and `ifs_speed` have no home in `Multicolour`, so they are ours:
-    an upper bound on how far the lane is from the toolhead, and how fast the
-    IFS pushes. They follow zmod's tube length and stock's observed insert,
-    which used 1200 mm/min. `tube_mm` is a bound rather than a target - the
-    feed ends when the toolhead sensor sees filament.
+    an upper bound on how far a lane is from the toolhead, and how fast the IFS
+    pushes. They follow zmod's tube length and stock's observed insert, which
+    used 1200 mm/min. `tube_mm` is a bound rather than a target - a feed ends
+    when the toolhead sensor sees filament, so a part-fed lane cannot overshoot.
     """
 
     DEFAULTS = {
@@ -231,8 +189,8 @@ class Parameters(object):
     }
 
     def __init__(self, tube_mm=1000.0, ifs_speed=1200.0, **overrides):
-        self.tube_mm = tube_mm
-        self.ifs_speed = ifs_speed
+        self.tube_mm = float(tube_mm)
+        self.ifs_speed = float(ifs_speed)
         for name, default in self.DEFAULTS.items():
             setattr(self, name, float(overrides.pop(name, default)))
         if overrides:
@@ -248,58 +206,7 @@ class Parameters(object):
         values.update(kwargs)
         return cls(**values)
 
-
-def load_plan(channel, params, temperature=None):
-    """Get filament from a lane into the nozzle, purged and ready.
-
-    The IFS pushes the filament the whole way by itself - the extruder motor
-    does not run until the purge. What ends the feed is the TOOLHEAD sensor
-    seeing filament, not a distance: the tube length is only an upper bound, so
-    a lane that is already part-fed does not overshoot.
-
-    This mirrors zmod's _INSERT_PRUTOK_IFS, which is the only known working
-    sequence for this board: clamp, then one F10 for the whole tube with its
-    wait watching the extruder sensor, then purge. An earlier draft of this had
-    the extruder pulling the filament past its own gear mid-feed; that was
-    invented, and no driver does it.
-    """
-    steps = []
-    if temperature is not None:
-        ## The printer sets min_extrude_temp to 0, so klipper will NOT refuse a
-        ## cold extrude. Nothing below us enforces this.
-        steps.append(Step(HEAT, value=temperature,
-                          note="klipper will not refuse a cold extrude here"))
-    steps.append(Step(CLAMP, channel=channel, expect=ifs_status.CLAMPED))
-    steps.append(Step(FEED, channel=channel, distance=params.tube_mm,
-                      speed=params.ifs_speed, expect=ifs_status.LOADING,
-                      until=UNTIL_TOOLHEAD_FILAMENT,
-                      note="tube length is a bound; the toolhead sensor ends it"))
-    steps.append(Step(STOP))
-    steps.append(Step(FAN, value=params.first_fan))
-    steps.append(Step(EXTRUDE, distance=params.first_purge_mm,
-                      speed=params.first_purge_speed, note="purge"))
-    steps.append(Step(FAN, value=params.second_fan))
-    steps.append(Step(EXTRUDE, distance=params.second_purge_mm,
-                      speed=params.second_purge_speed, note="purge, cooling"))
-    steps.append(Step(FAN, value=0.0))
-    steps.append(Step(RELEASE, channel=channel))
-    return steps
-
-
-def unload_plan(channel, params, temperature=None):
-    """Take filament out of the nozzle and back into its lane."""
-    steps = []
-    if temperature is not None:
-        steps.append(Step(HEAT, value=temperature,
-                          note="molten before pulling, or it snaps"))
-    steps.append(Step(CLAMP, channel=channel, expect=ifs_status.CLAMPED))
-    steps.append(Step(EXTRUDE, distance=-params.unload_extruder_mm,
-                      speed=params.unload_speed,
-                      note="the extruder pulls it back off the sensor first"))
-    steps.append(Step(RETRACT, channel=channel, distance=params.unload_ifs_mm,
-                      speed=params.unload_speed, expect=ifs_status.UNLOADING,
-                      until=UNTIL_TOOLHEAD_CLEAR,
-                      note="then the IFS takes it the rest of the way"))
-    steps.append(Step(STOP))
-    steps.append(Step(RELEASE, channel=channel))
-    return steps
+    def as_dict(self):
+        """Everything a macro needs, for get_status()."""
+        names = ["tube_mm", "ifs_speed"] + sorted(self.DEFAULTS)
+        return {name: getattr(self, name) for name in names}

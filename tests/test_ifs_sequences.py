@@ -199,10 +199,6 @@ MULTICOLOUR = {
 }
 
 
-def kinds(plan):
-    return [step.kind for step in plan]
-
-
 class TestParameters(unittest.TestCase):
     def test_it_reads_the_printers_own_numbers(self):
         ## zmod's "defaults" are these values copied out; read the source.
@@ -228,79 +224,19 @@ class TestParameters(unittest.TestCase):
             SEQ.Parameters(nonsense=1)
 
 
-class TestLoadPlan(unittest.TestCase):
-    def setUp(self):
-        self.params = SEQ.Parameters.from_multicolour(MULTICOLOUR)
-        self.plan = SEQ.load_plan(CH, self.params, temperature=220)
+class TestParametersExport(unittest.TestCase):
+    def test_as_dict_carries_everything_a_macro_needs(self):
+        values = SEQ.Parameters.from_multicolour(MULTICOLOUR).as_dict()
+        self.assertEqual(values["first_purge_mm"], 100.0)
+        self.assertEqual(values["unload_ifs_mm"], 70.0)
+        self.assertIn("tube_mm", values)
+        self.assertIn("ifs_speed", values)
 
-    def test_the_ifs_feeds_the_whole_way_by_itself(self):
-        ## Regression: an earlier draft had the extruder pulling the filament
-        ## past its own gear mid-feed. That was invented - zmod issues one F10
-        ## for the whole tube and the extruder does not run until the purge.
-        feed_at = kinds(self.plan).index(SEQ.FEED)
-        first_extrude = kinds(self.plan).index(SEQ.EXTRUDE)
-        purge_at = kinds(self.plan).index(SEQ.STOP)
-        self.assertGreater(first_extrude, purge_at,
-                           "the extruder must not run before the purge")
-        self.assertLess(feed_at, purge_at)
-
-    def test_the_feed_ends_on_the_toolhead_sensor(self):
-        ## Distance is an upper bound, not the target: a part-fed lane must not
-        ## overshoot.
-        feed = self.plan[kinds(self.plan).index(SEQ.FEED)]
-        self.assertEqual(feed.until, SEQ.UNTIL_TOOLHEAD_FILAMENT)
-        self.assertEqual(feed.distance, self.params.tube_mm)
-        self.assertEqual(feed.expect, S.LOADING)
-
-    def test_it_clamps_before_feeding_and_releases_after(self):
-        order = kinds(self.plan)
-        self.assertLess(order.index(SEQ.CLAMP), order.index(SEQ.FEED))
-        self.assertEqual(order[-1], SEQ.RELEASE)
-
-    def test_it_heats_first_because_klipper_will_not(self):
-        ## min_extrude_temp is 0 on this printer.
-        self.assertEqual(self.plan[0].kind, SEQ.HEAT)
-        self.assertEqual(self.plan[0].value, 220)
-
-    def test_no_temperature_means_no_heat_step(self):
-        plan = SEQ.load_plan(CH, self.params)
-        self.assertNotIn(SEQ.HEAT, kinds(plan))
-
-    def test_the_purge_uses_the_printers_own_distances(self):
-        extrudes = [s for s in self.plan if s.kind == SEQ.EXTRUDE]
-        self.assertEqual([s.distance for s in extrudes], [100.0, 30.0])
-
-    def test_the_fan_ends_off(self):
-        fans = [s for s in self.plan if s.kind == SEQ.FAN]
-        self.assertEqual(fans[-1].value, 0.0)
-
-    def test_every_step_names_its_channel_where_it_matters(self):
-        for step in self.plan:
-            if step.kind in (SEQ.CLAMP, SEQ.RELEASE, SEQ.FEED, SEQ.RETRACT):
-                self.assertEqual(step.channel, CH, repr(step))
+    def test_every_value_is_a_number(self):
+        ## These land in Jinja, where a stray string is a runtime surprise.
+        for value in SEQ.Parameters.from_multicolour(MULTICOLOUR).as_dict().values():
+            self.assertIsInstance(value, float)
 
 
-class TestUnloadPlan(unittest.TestCase):
-    def setUp(self):
-        self.params = SEQ.Parameters.from_multicolour(MULTICOLOUR)
-        self.plan = SEQ.unload_plan(CH, self.params, temperature=220)
-
-    def test_the_extruder_pulls_it_off_the_sensor_first(self):
-        order = kinds(self.plan)
-        self.assertLess(order.index(SEQ.EXTRUDE), order.index(SEQ.RETRACT))
-
-    def test_the_extruder_move_is_backwards(self):
-        extrude = self.plan[kinds(self.plan).index(SEQ.EXTRUDE)]
-        self.assertLess(extrude.distance, 0)
-        self.assertEqual(extrude.distance, -self.params.unload_extruder_mm)
-
-    def test_the_ifs_retract_ends_when_the_sensor_clears(self):
-        retract = self.plan[kinds(self.plan).index(SEQ.RETRACT)]
-        self.assertEqual(retract.until, SEQ.UNTIL_TOOLHEAD_CLEAR)
-        self.assertEqual(retract.expect, S.UNLOADING)
-
-    def test_it_heats_because_cold_filament_snaps(self):
-        self.assertEqual(self.plan[0].kind, SEQ.HEAT)
-
-    def test_it_releases_last(self):
-        self.assertEqual(kinds(self.plan)[-1], SEQ.RELEASE)
+if __name__ == "__main__":
+    unittest.main()
