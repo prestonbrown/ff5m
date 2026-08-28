@@ -12,6 +12,12 @@ from fcntl import ioctl
 from struct import pack
 import argparse
 import errno
+import sys
+
+# Display ioctls that mean "this board has no controllable LCD backlight": the
+# node is not the Allwinner display device (the AD5X exposes /dev/disp as a plain
+# file), so open() succeeds but the ioctl is rejected. Treated as a no-op below.
+_NO_BACKLIGHT_ERRNO = (errno.ENOTTY, errno.ENODEV, errno.ENXIO)
 
 DISP_LCD_SET_BRIGHTNESS = 0x102
 DISP_LCD_GET_BRIGHTNESS = 0x103
@@ -70,13 +76,27 @@ def main():
 
     value = args.brightness
 
-    if value is None:
-        print("%d" % backlight_get())
-    elif value == 0 or value == 0.0:
-        backlight_enable(False)
-    else:
-        backlight_enable()
-        backlight_set(args.brightness)
+    try:
+        if value is None:
+            print("%d" % backlight_get())
+        elif value == 0 or value == 0.0:
+            backlight_enable(False)
+        else:
+            backlight_enable()
+            backlight_set(args.brightness)
+    except OSError as exc:
+        # No controllable backlight on this board (see _NO_BACKLIGHT_ERRNO).
+        # Degrade to a no-op rather than failing the caller: screen.sh runs this
+        # from the print macros (START_PRINT etc.), and an uncaught error there
+        # surfaces as "Error running command {screen}". Boards that do have the
+        # backlight never enter this branch - the ioctl succeeds for them.
+        if exc.errno not in _NO_BACKLIGHT_ERRNO:
+            raise
+        sys.stderr.write(
+            "backlight: no controllable backlight on this board "
+            "(errno %d); skipping\n" % exc.errno)
+        if value is None:
+            print("0")
 
 if __name__ == "__main__":
     main()
