@@ -298,6 +298,16 @@ how the framing A/B, the `F19` probe, the full read-only opcode sweep and the
 `/usr/prog/Python-3.8.2/bin/python3` (needs `LD_LIBRARY_PATH` - lift it from the
 running klippy's `/proc/<pid>/environ`).
 
+The read-only half is `tools/ifs/ifs_probe.py`, which is safe to re-run on any
+board: it refuses every actuator and the four undocumented opcodes, and brackets
+the sweep with an `F13` snapshot. **Run it against a different board or firmware
+revision before trusting the tables above** - they are one board at 3.0.6.
+
+Motion was tested separately by hand: clamp (`F24 C2`), retract 20 mm at
+600 mm/min (`F11 C2 L20 S600`), feed the same distance back, release (`F39 C2`),
+with `F112` between phases and a release in the failure path. Filament ended
+where it started.
+
 ### The state encoding, confirmed on hardware
 
 Every channelled activity was observed on channel 2, and each matches
