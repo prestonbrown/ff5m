@@ -26,9 +26,11 @@ fi
 ## squashfs; nothing auto-runs /etc/init.d, so Forge-X's S00init -> S99root
 ## chain never fires the way it does on the AD5M. This script is the single hook
 ## we inject into that stock file to drive Forge-X's orchestration imperatively,
-## calling only the MIPS-safe stages. S55boot/boot_mcu/netd/zstart_klipper/
-## init_swap/tone.py are deliberately never invoked: they are ARM ELFs or would
-## double-launch klippy (stock's own klipper/start.sh owns that launch).
+## calling only the MIPS-safe stages. S55boot/boot_mcu/netd/init_swap/tone.py
+## are deliberately never invoked: they are ARM ELFs. zstart_klipper IS invoked
+## (Step 7): stock app_startup.sh carries no klipper launch on this board - the
+## Qt UI does it, as "/usr/prog/klipper/start.sh &" - so once Step 2 stops that
+## UI, nothing else would start klippy.
 ##
 ## Subcommands:
 ##   install    inject the hook into stock app_startup.sh (idempotent, reversible)
@@ -198,10 +200,10 @@ failsafe_arm() {
 # watchdog - bound the bring-up so it can never wedge the boot
 # ---------------------------------------------------------------------------
 #
-# Steps 2-8 run SYNCHRONOUSLY inside stock app_startup.sh: the hook is injected
-# ahead of the stock klipper launch precisely so patches land first. That
-# ordering is worth keeping, but it means any single hang in the bring-up stops
-# the entire printer - no UI past "Initializing...", no Moonraker, and no
+# Steps 2-8 run SYNCHRONOUSLY inside stock app_startup.sh. On the AD5X that
+# file carries no klipper launch to sit ahead of, so the hook lands at the end -
+# the same place ZMOD appends its own prepare.sh. Nothing stock runs after it,
+# but a hang there still stops the entire printer - no UI past "Initializing...", no Moonraker, and no
 # dropbear either, since that is a mod service too. The machine is then only
 # recoverable over USB.
 #
@@ -241,6 +243,59 @@ watchdog_disarm() {
     WATCHDOG_PID=""
 }
 
+# ---------------------------------------------------------------------------
+# klippy launch - detached, then a bounded wait for its socket
+# ---------------------------------------------------------------------------
+#
+# zstart_klipper.sh ends in `exec "$KLIPPER_DIR/start.sh"`, and on the AD5X that
+# is the STOCK launcher: `/usr/prog/klipper/klipperDaemon start`. Nothing on this
+# board treats that as self-daemonising. The stock Qt UI runs it as
+# "/usr/prog/klipper/start.sh &" (the literal is in the firmwareExe binary), and
+# ZMOD does not call it at all - it bind-mounts its own klipper13.sh over the
+# path, which starts klippy through `start-stop-daemon -S -b` and returns.
+#
+# Calling it in the foreground therefore risks never returning, which takes
+# Step 8 with it: no Moonraker, no dropbear, no network, and a printer
+# recoverable only over USB. Launch it detached, like both references do.
+KLIPPY_UDS="${AD5X_KLIPPY_UDS:-/tmp/uds}"
+KLIPPY_WAIT="${AD5X_KLIPPY_WAIT:-30}"
+KLIPPER_LAUNCH_PID=""
+
+launch_klipper() {
+    "$CMDS"/zstart_klipper.sh > /dev/null 2>&1 &
+    KLIPPER_LAUNCH_PID=$!
+}
+
+# Bounded wait for klippy's unix socket, purely so the common case is logged as
+# a fact rather than raced. Never fatal: Moonraker retries its klippy connection,
+# so a timeout costs a slower first connect, not a failed boot.
+wait_for_klippy_socket() {
+    local n=0
+    [ "$KLIPPY_WAIT" -gt 0 ] 2>/dev/null || return 0
+    while [ "$n" -lt "$KLIPPY_WAIT" ]; do
+        if [ -e "$KLIPPY_UDS" ]; then
+            echo "// [ad5x] Klipper socket up after ${n}s ($KLIPPY_UDS)"
+            return 0
+        fi
+        sleep 1
+        n=$((n + 1))
+    done
+    # Whether the launcher itself is still running says which failure this is: a
+    # launcher still alive with no socket is klipperDaemon not returning (the
+    # thing this detach exists to survive); a launcher already gone means klippy
+    # started and died, and its log is the place to look.
+    if [ -n "$KLIPPER_LAUNCH_PID" ] && kill -0 "$KLIPPER_LAUNCH_PID" 2>/dev/null; then
+        echo "@@ [ad5x] Klipper socket $KLIPPY_UDS absent after ${KLIPPY_WAIT}s and" \
+             "the launcher (pid $KLIPPER_LAUNCH_PID) is still running - it is not" \
+             "returning. Continuing; Moonraker retries its klippy connection." >&2
+    else
+        echo "@@ [ad5x] Klipper socket $KLIPPY_UDS absent after ${KLIPPY_WAIT}s and" \
+             "the launcher already exited - check the klippy log. Continuing;" \
+             "Moonraker retries its klippy connection." >&2
+    fi
+    return 0
+}
+
 failsafe_disarm() {
     rm -f "$BOOT_FAILURE_F"
 }
@@ -271,7 +326,7 @@ run_bootstrap() {
         echo "[dry-run] 4. init_buildroot"
         echo "[dry-run] 5. apply_klipper_patches"
         echo "[dry-run] 6. fix_config"
-        echo "[dry-run] 7. launch klipper (zstart_klipper.sh against the patched /usr/prog/klipper)"
+        echo "[dry-run] 7. launch klipper DETACHED (zstart_klipper.sh against the patched /usr/prog/klipper), then wait up to ${KLIPPY_WAIT}s for $KLIPPY_UDS"
         echo "[dry-run] 8. first-run database (migrate_db + restore_ota) then chroot start.sh (ntpd, Moonraker :7125, httpd :80)"
         echo "[dry-run] 9. done; stock app_startup.sh continues (it does not launch klippy)"
         return 0
@@ -356,13 +411,15 @@ run_bootstrap() {
     echo "// [ad5x] Restoring config..."
     fix_config
 
-    # Step 7. Launch klippy. Stock app_startup.sh never launches it (unlike the
-    # AD5M, where S55boot/boot.sh runs zstart_klipper), so the mod owns the launch
-    # - the same MIPS-safe launcher, run against the just-patched /usr/prog/klipper
-    # through the host Python env in its start.sh. klipperDaemon backgrounds, so
-    # this returns and moonraker (Step 8) connects to it.
+    # Step 7. Launch klippy, detached. Stock app_startup.sh never launches it
+    # (unlike the AD5M, where S55boot/boot.sh runs zstart_klipper), and Step 2
+    # stopped the Qt UI that otherwise would, so the mod owns the launch - the
+    # same MIPS-safe launcher, run against the just-patched /usr/prog/klipper
+    # through the host Python env in its start.sh. See launch_klipper() for why
+    # it must not be called in the foreground.
     echo "// [ad5x] Launching klipper..."
-    "$CMDS"/zstart_klipper.sh > /dev/null 2>&1
+    launch_klipper
+    wait_for_klippy_socket
 
     # Step 8. First-run DB seed, then bring up the chroot services. The chroot
     # target paths are resolved INSIDE $MOD, where init_buildroot bind-mounts

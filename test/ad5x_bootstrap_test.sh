@@ -21,49 +21,7 @@ assert_file "bootstrap script exists" "$BOOTSTRAP"
 BASH_BIN=$(command -v bash 2>/dev/null)
 if [ -z "$BASH_BIN" ]; then
     echo "ok     bash not installed, skipping ad5x_bootstrap tests"
-    # --- bring-up watchdog ------------------------------------------------------
-#
-# The bring-up runs synchronously inside stock app_startup.sh, so an unbounded
-# hang takes the whole printer down. The watchdog must actually fire, and must
-# actually stand down when the run completes - a watchdog that never fires and
-# one that always fires are both silent failures.
-
-# Arm a 2s watchdog, then hang for 30s. Should die in ~2-4s, not 30.
-_wd_start=$(date +%s)
-AD5X_BRINGUP_LIMIT=2 "$BASH_BIN" -c '
-    . "$1"
-    watchdog_arm
-    sleep 30
-' _ "$BOOTSTRAP" >/dev/null 2>&1
-_wd_elapsed=$(( $(date +%s) - _wd_start ))
-if [ "$_wd_elapsed" -lt 10 ]; then
-    _t_pass "watchdog kills a bring-up that overruns its limit (${_wd_elapsed}s)"
-else
-    _t_fail "watchdog kills a bring-up that overruns its limit" \
-            "still alive after ${_wd_elapsed}s"
-fi
-
-# Disarmed watchdog must NOT kill a run that finished inside the limit.
-_wd_out=$(AD5X_BRINGUP_LIMIT=2 "$BASH_BIN" -c '
-    . "$1"
-    watchdog_arm
-    watchdog_disarm
-    sleep 4
-    echo SURVIVED
-' _ "$BOOTSTRAP" 2>/dev/null)
-assert_contains "disarmed watchdog does not kill a completed bring-up" \
-    "$_wd_out" "SURVIVED"
-
-# A limit of 0 disables the watchdog entirely (escape hatch).
-_wd_out=$(AD5X_BRINGUP_LIMIT=0 "$BASH_BIN" -c '
-    . "$1"
-    watchdog_arm
-    sleep 3
-    echo SURVIVED
-' _ "$BOOTSTRAP" 2>/dev/null)
-assert_contains "AD5X_BRINGUP_LIMIT=0 disables the watchdog" "$_wd_out" "SURVIVED"
-
-finish
+    finish
 fi
 
 WORK=$(mktemp -d)
@@ -113,6 +71,41 @@ placement=$(awk '
     END { if (h > 0 && s > 0 && h < s) print "before"; else print "after" }
 ' "$FIX")
 assert_eq "hook is placed before stock klipper/start.sh" "before" "$placement"
+
+# --- placement on the REAL stock AD5X app_startup.sh shape ------------------
+#
+# The fixture above carries a klipper/start.sh line, but the shipped AD5X file
+# does not: on this board the Qt UI launches klippy ("/usr/prog/klipper/start.sh
+# &" is a literal inside firmwareExe), so app_startup.sh names it nowhere. The
+# insert-before branch therefore never fires on a real printer and the hook is
+# appended - which is also where ZMOD appends its own prepare.sh. Pin that, so
+# the append fallback is covered rather than assumed.
+cat > "$FIX" <<'EOF'
+#!/bin/sh
+echo "stock preamble"
+/usr/prog/PROGRAM/software/firmwareExe -1 -D -qws &
+sleep 10
+count=`ps |grep firmwareExe |grep -v "grep" |wc -l`
+if [ 0 == $count ];then
+	/usr/prog/PROGRAM/software/firmwareExe -1 -D -qws &
+fi
+EOF
+cp "$FIX" "$WORK/stock_shape"
+rm -f "$FIX.orig"
+bs install
+assert_eq "stock-shaped file: exactly one hook line" "1" "$(grep -c -F -- "$MARKER" "$FIX")"
+if tail -n 1 "$FIX" | grep -Fq -- "$MARKER"; then
+    _t_pass "stock-shaped file: hook is appended as the last line"
+else
+    _t_fail "stock-shaped file: hook is appended as the last line" \
+            "last line is: $(tail -n 1 "$FIX")"
+fi
+bs uninstall
+if cmp -s "$FIX" "$WORK/stock_shape"; then
+    _t_pass "stock-shaped file: uninstall restores it byte-identically"
+else
+    _t_fail "stock-shaped file: uninstall restores it byte-identically" "differs"
+fi
 
 # --- .orig preservation ------------------------------------------------------
 make_fixture
@@ -339,5 +332,109 @@ _wd_out=$(AD5X_BRINGUP_LIMIT=0 "$BASH_BIN" -c '
     echo SURVIVED
 ' _ "$BOOTSTRAP" 2>/dev/null)
 assert_contains "AD5X_BRINGUP_LIMIT=0 disables the watchdog" "$_wd_out" "SURVIVED"
+
+
+# --- klippy launch: detached, with a bounded socket wait --------------------
+#
+# zstart_klipper.sh execs the STOCK /usr/prog/klipper/start.sh on this board,
+# which ends in `klipperDaemon start`. Both other consumers detach it (stock
+# firmwareExe: "start.sh &"; ZMOD: start-stop-daemon -S -b), so a foreground
+# call here can hold the bring-up forever and Step 8 never runs. Point CMDS at a
+# launcher that never returns and require launch_klipper to come back anyway.
+LK=$(mktemp -d)
+mkdir -p "$LK/commands"
+cat > "$LK/commands/zstart_klipper.sh" <<'EOF'
+#!/bin/sh
+sleep 30
+EOF
+chmod +x "$LK/commands/zstart_klipper.sh"
+
+_lk_start=$(date +%s)
+_lk_out=$(CMDS="$LK/commands" "$BASH_BIN" -c '
+    . "$1"
+    CMDS="$2"
+    launch_klipper
+    echo "RETURNED pid=${KLIPPER_LAUNCH_PID:-none}"
+' _ "$BOOTSTRAP" "$LK/commands" 2>/dev/null)
+_lk_elapsed=$(( $(date +%s) - _lk_start ))
+if [ "$_lk_elapsed" -lt 5 ]; then
+    _t_pass "launch_klipper detaches a launcher that never returns (${_lk_elapsed}s)"
+else
+    _t_fail "launch_klipper detaches a launcher that never returns" \
+            "blocked for ${_lk_elapsed}s"
+fi
+assert_contains "launch_klipper records the launched pid" "$_lk_out" "RETURNED pid="
+case "$_lk_out" in
+    *"pid=none"*) _t_fail "launch_klipper records the launched pid" "pid was empty" ;;
+    *)            _t_pass "launch_klipper records a non-empty pid" ;;
+esac
+
+# An already-present socket must be seen at once, not slept through.
+: > "$LK/uds"
+_ws_start=$(date +%s)
+_ws_out=$(AD5X_KLIPPY_UDS="$LK/uds" AD5X_KLIPPY_WAIT=20 "$BASH_BIN" -c '
+    . "$1"
+    wait_for_klippy_socket
+' _ "$BOOTSTRAP" 2>/dev/null)
+_ws_elapsed=$(( $(date +%s) - _ws_start ))
+if [ "$_ws_elapsed" -lt 3 ]; then
+    _t_pass "wait_for_klippy_socket returns at once when the socket exists (${_ws_elapsed}s)"
+else
+    _t_fail "wait_for_klippy_socket returns at once when the socket exists" \
+            "took ${_ws_elapsed}s"
+fi
+assert_contains "socket-up path is logged" "$_ws_out" "Klipper socket up"
+
+# A missing socket must time out and still succeed: Moonraker retries, so this
+# is a diagnostic, not a boot failure.
+_ws_start=$(date +%s)
+AD5X_KLIPPY_UDS="$LK/absent" AD5X_KLIPPY_WAIT=2 "$BASH_BIN" -c '
+    . "$1"
+    wait_for_klippy_socket
+' _ "$BOOTSTRAP" >/dev/null 2>&1
+_ws_rc=$?
+_ws_elapsed=$(( $(date +%s) - _ws_start ))
+assert_eq "wait_for_klippy_socket is non-fatal on timeout" "0" "$_ws_rc"
+if [ "$_ws_elapsed" -ge 2 ] && [ "$_ws_elapsed" -lt 8 ]; then
+    _t_pass "wait_for_klippy_socket honours its limit (${_ws_elapsed}s for a 2s limit)"
+else
+    _t_fail "wait_for_klippy_socket honours its limit" \
+            "waited ${_ws_elapsed}s for a 2s limit"
+fi
+
+# The timeout message must discriminate the two failures, because they need
+# different next steps: a launcher still running with no socket is klipperDaemon
+# not returning; a launcher already gone means klippy started and died.
+_ws_err=$(CMDS="$LK/commands" AD5X_KLIPPY_UDS="$LK/absent" AD5X_KLIPPY_WAIT=2 \
+    "$BASH_BIN" -c '
+    . "$1"
+    CMDS="$2"
+    launch_klipper
+    wait_for_klippy_socket
+' _ "$BOOTSTRAP" "$LK/commands" 2>&1 >/dev/null)
+assert_contains "timeout names a launcher that is still running" \
+    "$_ws_err" "still running"
+
+_ws_err=$(AD5X_KLIPPY_UDS="$LK/absent" AD5X_KLIPPY_WAIT=2 "$BASH_BIN" -c '
+    . "$1"
+    KLIPPER_LAUNCH_PID=""
+    wait_for_klippy_socket
+' _ "$BOOTSTRAP" 2>&1 >/dev/null)
+assert_contains "timeout with no live launcher points at the klippy log" \
+    "$_ws_err" "already exited"
+
+# Limit 0 disables the wait entirely (escape hatch, same shape as the watchdog).
+_ws_start=$(date +%s)
+AD5X_KLIPPY_UDS="$LK/absent" AD5X_KLIPPY_WAIT=0 "$BASH_BIN" -c '
+    . "$1"
+    wait_for_klippy_socket
+' _ "$BOOTSTRAP" >/dev/null 2>&1
+_ws_elapsed=$(( $(date +%s) - _ws_start ))
+if [ "$_ws_elapsed" -lt 2 ]; then
+    _t_pass "AD5X_KLIPPY_WAIT=0 disables the socket wait"
+else
+    _t_fail "AD5X_KLIPPY_WAIT=0 disables the socket wait" "waited ${_ws_elapsed}s"
+fi
+rm -rf "$LK"
 
 finish
