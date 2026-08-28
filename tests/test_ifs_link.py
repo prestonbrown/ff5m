@@ -45,9 +45,12 @@ class FakeSerial:
     def write(self, data):
         self.events.append(("write", data))
         if data == IFS.COMMIT_BYTE:
-            self._commit()
+            ## Tolerated but not required - see docs/AD5X_IFS_PROTOCOL.md. The
+            ## real board answers the command line either way.
             return len(data)
         self._partial += data
+        if self._partial.endswith(b"\r\n"):
+            self._commit()
         return len(data)
 
     def readline(self):
@@ -138,21 +141,30 @@ class TestCapabilities(unittest.TestCase):
 
 
 class TestFraming(unittest.TestCase):
-    def test_command_then_commit_byte(self):
+    def test_one_write_no_commit_byte_no_delay(self):
+        ## Measured on firmware 3.0.6: the board answers with or without the
+        ## 0xFF commit byte, so the default sends neither it nor the 200 ms
+        ## sleep that has to precede it.
         link, fake, events = make_open_link({13: "F13 ok. FFS_state: 5"})
         link.request("F13")
+        self.assertEqual(events, [("write", b"F13 \r\n")])
+
+    def test_commit_byte_can_be_re_enabled_for_a_stubborn_board(self):
+        ## One board at one firmware revision is not every board.
+        events = []
+        fake = FakeSerial({13: "F13 ok. FFS_state: 5", 19: PROBE_REPLY},
+                          None, events)
+        link = IFS.IfsLink(serial_factory=lambda: fake,
+                           sleep=lambda d: events.append(("sleep", d)),
+                           send_commit_byte=True)
+        link.open()
+        del events[:]
+        link.request("F13")
         self.assertEqual(events, [
-            ("write", b"F13\r\n"),
+            ("write", b"F13 \r\n"),
             ("sleep", IFS.COMMIT_DELAY),
             ("write", IFS.COMMIT_BYTE),
         ])
-
-    def test_commit_byte_is_required_by_the_board(self):
-        ## The fake only answers on the commit byte, mirroring the real board.
-        ## Dropping it must therefore time out, not quietly succeed.
-        link, fake, _ = make_open_link({13: "F13 ok. FFS_state: 5"})
-        fake.write(b"F13\r\n")
-        self.assertEqual(fake.readline(), b"")
 
     def test_rejects_a_non_command(self):
         link, _, _ = make_open_link()
@@ -299,7 +311,7 @@ class TestTimeoutAndRetry(unittest.TestCase):
         with self.assertRaises(IFS.IfsTimeout):
             link.request("F13")
         writes = [d for kind, d in events if kind == "write"]
-        self.assertEqual(writes.count(b"F13\r\n"), 3)
+        self.assertEqual(writes.count(b"F13 \r\n"), 3)
 
     def test_a_retry_can_succeed(self):
         link, fake, _ = make_open_link(retries=2)
@@ -322,7 +334,7 @@ class TestTimeoutAndRetry(unittest.TestCase):
         link, _, events = make_open_link({}, retries=0)
         with self.assertRaises(IFS.IfsTimeout):
             link.request("F13")
-        self.assertEqual([d for k, d in events if k == "write"].count(b"F13\r\n"), 1)
+        self.assertEqual([d for k, d in events if k == "write"].count(b"F13 \r\n"), 1)
 
 
 class TestClose(unittest.TestCase):

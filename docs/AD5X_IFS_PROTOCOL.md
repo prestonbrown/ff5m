@@ -31,12 +31,28 @@ Everything in this section is **measured** - see "Ground truth" below.
 | Request | `<command> \r\n` - note the **space before CRLF** |
 | Reply | bytes, **no terminator**; the reply ends when the board goes quiet |
 | First byte | ~105 ms after the command |
-| Byte rate | ~4.6 ms/byte, so a 126-byte `F13` reply takes ~600 ms |
+| Whole reply | ~165 ms for a 127-byte `F13`, reading in blocks |
 | Poll cadence | stock sends `F13` every ~0.91 s, and nothing else while idle |
 
+The board is not slow. Watching `firmwareExe` suggests ~4.6 ms per byte, but that
+is its own read loop - it calls `read()` for **one byte at a time**, so a 127-byte
+reply is 127 syscalls. Reading in blocks gets the same reply in ~165 ms.
+
 **There is no `0xFF` commit byte.** An earlier revision of this document called it
-required. Stock sent 101 polls and five action commands without one. `zmod_ifs.py`
-does send it and also works, so the board tolerates it - but nothing needs it.
+required. Stock sent 101 polls and five action commands without one. Tested
+directly against the board, all four combinations return an identical 127-byte
+`F13` reply:
+
+| command sent | reply |
+|---|---|
+| `F13 \r\n` (OEM: space, no commit) | yes |
+| `F13\r\n` + `0xFF` (zmod) | yes |
+| `F13\r\n` (neither) | yes |
+| `F13 \r\n` + `0xFF` (both) | yes |
+
+So the trailing space and the commit byte are both **cosmetic** on firmware 3.0.6.
+Sending the commit byte also forces a delay before it, which is a hard 200 ms on
+every command for nothing.
 
 **There is no `\r\n` at the end of a reply.** A 126-byte `F13` response contains no
 CR and no LF anywhere. What delimits a reply is silence, which is why `zmod_ifs.py`'s
@@ -79,10 +95,20 @@ excepted, which embeds CRLF *between* its three lines).
 F21 ok. \r\n silk: %d %d %d %d \r\n stall: %d %d %d %d
 ```
 
+Confirmed on hardware - a live reply, embedded CRLFs and all:
+
+```
+F21 ok.
+ silk: 199 333 1688 271
+ stall: 2048 2128 3417 2146
+```
+
 A transport that does one `readline()` per command reads `F21 ok.` and leaves two
 lines in the buffer, which then answer the *next* two requests. Every later poll
 is off by one, silently. Read until the response is complete, not until the first
-newline. No other opcode does this.
+newline. No other opcode does this - and note this is the one place a reply
+contains CRLF at all, which is why "read one line" is the wrong primitive here
+generally.
 
 ## Commands
 
@@ -183,18 +209,54 @@ format specifiers).
 
 ## What the unused two-thirds buys us
 
-- **`F19` is a capability probe.** `F19 ok. four color. version: 3.0.6` gives
-  channel count *and* firmware version. Note it is a **literal** - no format
-  specifiers - so both the count word and the version are baked into each
-  firmware build, and a different board answers with its own literal. Every
-  driver today assumes four channels; this asks.
-- **`F14`, `F21`, `F22`, `F40`** are cheaper/narrower reads than the full `F13`
-  line - `F21` returns silk+stall together, `F40` returns cumulative stall counts.
-- **`F41`/`F44`/`F45` and `F50`-`F54` / `F60`-`F64`** expose both TMC drivers'
-  `GCONF`, `GSTAT`, `CHOPCONF`, `DRV_STATUS`, `PWMCONF`. Real motor diagnostics -
-  overtemperature, open load, short detection - none of which reaches any UI today.
+All values below were read off a live board (firmware 3.0.6, four channels, with
+filament in 1, 2 and 4).
+
+- **`F19` is a capability probe, and it answers.** `F19 ok. four color. version:
+  3.0.6`. It is a **literal** with no format specifiers, so both the count word
+  and the version are baked into each firmware build and a different board
+  answers with its own. Every driver today assumes four channels; this asks.
+
+- **`F21` returns raw per-channel sensor values, not bitmasks.** This is the find
+  of the sweep:
+
+  ```
+  F21 ok.
+   silk: 199 333 1688 271
+   stall: 2048 2128 3417 2146
+  ```
+
+  Compare `F14`, which returns `stall: 0 0 0 0` for the same instant, and `F13`,
+  whose `silk_state`/`stall_state` are single bits per channel. So `F13` and `F14`
+  give the thresholded answer and **`F21` gives the underlying measurement**. A
+  channel that is marginal - filament present but barely triggering - is visible
+  in `F21` and invisible everywhere else. No driver reads it.
+
+- **`F40` returns cumulative-looking stall counts**, e.g.
+  `stall count: C1: 1 C2: 462 C3: 1 C4: 1` after a channel fought resistance.
+  **Not monotonic**: the same counter read 462, then 30 after an unrelated
+  clamp/retract/feed/release cycle. Something resets or windows it. Do not treat
+  it as a lifetime total until that is understood.
+
+- **Both TMC drivers are readable.** `F41`/`F44`/`F45` and `F50`-`F54` (driver 1)
+  and `F60`-`F64` (driver 2) expose `GCONF`, `GSTAT`, `CHOPCONF`, `DRV_STATUS`,
+  `PWMCONF`. Observed at idle:
+
+  | register | driver 1 | driver 2 |
+  |---|---|---|
+  | `GCONF` | `000001dc` | `000001dc` |
+  | `GSTAT` | `00000001` | `00000000` |
+  | `DRV_STATUS` | `80000000` | `00000000` |
+  | `CHOPCONF` / `PWMCONF` | `00000000` | `00000000` |
+
+  `GSTAT` bit 0 is the TMC reset flag and `DRV_STATUS` bit 31 is `stst`
+  (standstill), both plausible at idle. `F41` returned the same `GCONF` as `F50`,
+  so it likely aliases driver 1. Overtemperature, open-load and short detection
+  all live in `DRV_STATUS` and reach no UI today.
+
 - `F12`, `F20`, `F30`, `F43` acknowledge but reveal nothing about their effect.
-  Do not send them blind; they may actuate.
+  Do not send them blind; they may actuate. They were deliberately excluded from
+  the sweep.
 
 ## Versioning
 
@@ -206,9 +268,13 @@ holds for every board.
 
 ## Ground truth
 
-Captured 2026-08-28 on an AD5X booted **stock**, by attaching `strace` to
-`firmwareExe` and watching its syscalls on the `/dev/ttyS4` fd. Passive: nothing
-else opened the port, so no bytes were stolen from the stock UI's own session.
+Two independent sessions on a real AD5X, 2026-08-28. Everything marked measured
+in this document comes from one of them.
+
+### 1. Passive capture, stock boot
+
+`strace` attached to `firmwareExe`'s `/dev/ttyS4` fd. Nothing else opened the
+port, so no bytes were taken from the stock UI's own session.
 
 ```bash
 PID=$(ps | grep '[f]irmwareExe' | awk '{print $1}')
@@ -217,33 +283,49 @@ FD=$(for f in /proc/$PID/fd/*; do
 strace -f -tt -s 512 -y -e trace=read,write -e trace-fds="$FD" -p "$PID" -o capture.log
 ```
 
-Two traps in reading such a capture. `firmwareExe` reads **one byte per `read()`**,
-so a 126-byte reply is 126 syscalls and must be reassembled before it means
-anything. And an interrupted syscall is split across two `strace` lines as
-`read <unfinished ...>`; a parser that ignores those reports the reply as
-short by a byte and looks exactly like the board dropping data. It was not.
+Two traps when reading such a capture. `firmwareExe` reads **one byte per
+`read()`**, so a reply is one syscall per byte and must be reassembled. And an
+interrupted syscall is split across two lines as `read <unfinished ...>`; a parser
+that ignores those reports the reply short by a byte, which looks exactly like the
+board dropping data. It is not.
+
+### 2. Direct probe, Forge-X boot
+
+Under Forge-X the stock UI is stopped and `uart4` sits at `tx:0 rx:0`, so the port
+is **free** and the board can be driven directly - no stock boot, no heat. This is
+how the framing A/B, the `F19` probe, the full read-only opcode sweep and the
+`F11` capture were done. `pyserial` 3.4 is present at
+`/usr/prog/Python-3.8.2/bin/python3` (needs `LD_LIBRARY_PATH` - lift it from the
+running klippy's `/proc/<pid>/environ`).
+
+### The state encoding, confirmed on hardware
+
+Every channelled activity was observed on channel 2, and each matches
+base + 11*(channel-1) exactly:
+
+| observed | decodes as | after |
+|---:|---|---|
+| 18 | clamped, channel 2 | `F24 C2` |
+| 22 | loading, channel 2 | `F10 C2 ...` |
+| 23 | unclamping, channel 2 | `F39 C2` |
+| 26 | unloading, channel 2 | `F11 C2 ...` |
+
+`L` is millimetres and `S` is mm/min, confirmed by timing: `L600 S1200` took
+exactly 30 s, and 600/1200 = 0.5 min.
 
 ### The insert sequence, observed
 
-Filament pushed into an empty channel 2, with the board's `F13` state alongside:
+Filament pushed into an empty channel 2, driven by the stock UI:
 
 ```
 board reports  silk 9->11, insert=2      board notices by itself
-F24 C2         -> F24 ok. chan 2.        clamp
-               state=18                  clamped, channel 2
-F10 C2 L600 S1200 -> ... channel 2 feeding.
-               state=22                  loading, channel 2
+F24 C2         -> F24 ok. chan 2.        clamp        state=18
+F10 C2 L600 S1200 -> ... channel 2 feeding.           state=22
                (30 s: 600 mm at 1200 mm/min)
 F112           -> F112 ok.               stop
 F23 C2         -> F23 ok. chan 2.
-F39 C2         -> ... channel 2 release.
-               state=23, insert=0        unclamping, channel 2
+F39 C2         -> ... channel 2 release.              state=23, insert=0
 ```
-
-This confirms the state encoding **on hardware**: 18, 22 and 23 are exactly
-base + 11*(channel-1) for clamped, loading and unclamping on channel 2. It also
-confirms `L` is millimetres and `S` is mm/min, since 600/1200 = 0.5 min and the
-board took 30 s.
 
 `ffs_channels_insert` went 2 -> 0 across this sequence. **Which command cleared it
 is not established** - `F112`, `F23` and `F39` all landed inside 350 ms and the
@@ -252,12 +334,14 @@ that without a capture that separates them.
 
 ## Not yet verified
 
-- **`F11` (retract) has never been seen on the wire.** Its syntax comes from
-  `zmod_ifs.py` and its reply from the firmware image, and it is symmetric with
-  `F10`, which is now confirmed. Capturing a real unload also needs the *unload
-  flow* - opcode order and lengths - which nothing else records.
-- The effect of `F12`, `F20`, `F30`, `F43` is unknown. They acknowledge and
-  reveal nothing; do not send them blind on a loaded machine.
-- Whether the trailing space and the `0xFF` byte are each merely tolerated or
-  actually meaningful to some opcode. Stock always sends the first and never the
-  second; zmod does the opposite on both counts, and both drivers work.
+- **Whether a full unload differs from a bare `F11`.** `F11` itself is confirmed
+  on the wire (`F11 C2 L20 S600` -> `F11 ok. FFS channel 2 exiting.`, state 26),
+  but that was driven by hand. The stock UI's complete unload flow - opcode order,
+  lengths, and how it coordinates with the extruder - has not been captured,
+  because an unload needs filament actually loaded to the nozzle.
+- **What resets `F40`'s stall counters.** Observed dropping 462 -> 30.
+- The effect of `F12`, `F20`, `F30`, `F43` is unknown. They acknowledge and reveal
+  nothing; do not send them blind on a loaded machine.
+- Whether the trailing space and the `0xFF` byte matter to any **other** firmware
+  revision. On 3.0.6 neither is needed, and the two shipping drivers disagree
+  about both, which is itself evidence that neither is load-bearing.

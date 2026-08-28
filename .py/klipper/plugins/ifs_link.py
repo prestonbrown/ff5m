@@ -30,15 +30,23 @@ STOPBITS = 1
 ## a silent board has to be noticed quickly.
 READ_TIMEOUT = 0.2
 
-## The board needs the command and its commit byte separated. zmod_ifs.py sleeps
-## 200 ms here and works; whether the board actually requires the gap, or how
-## short it can be, is unverified. It costs a hard 200 ms on every command, so it
-## is worth measuring once a live capture exists.
+## Measured on an IFS board running firmware 3.0.6: the board answers identically
+## with and without the trailing 0xFF, and with and without a space before the
+## CRLF. All four combinations returned the same 127-byte F13 reply. FlashForge's
+## own firmware sends the space and never the commit byte; zmod does the reverse.
+## Neither is required, so the default sends neither extra and skips the delay -
+## that is a hard 200 ms saved on every single command.
+##
+## SEND_COMMIT_BYTE stays as an escape hatch. One board at one firmware revision
+## is not every board, and if a different revision ever goes silent this is the
+## first knob to turn.
+SEND_COMMIT_BYTE = False
 COMMIT_DELAY = 0.2
-
-## A bare 0xFF after the command line appears to commit it. Without it the board
-## does not answer.
 COMMIT_BYTE = b"\xff"
+
+## FlashForge's own driver puts a space before the CRLF on every command. The
+## board does not care, but matching the OEM costs nothing.
+COMMAND_SUFFIX = " \r\n"
 
 DEFAULT_CHANNEL_COUNT = 4
 
@@ -171,10 +179,12 @@ class IfsLink(object):
     ## to other opcodes the link is broken, not merely behind.
     MAX_STALE_LINES = 8
 
-    def __init__(self, serial_factory=None, sleep=None, retries=2):
+    def __init__(self, serial_factory=None, sleep=None, retries=2,
+                 send_commit_byte=SEND_COMMIT_BYTE):
         self._serial_factory = serial_factory or _default_serial_factory
         self._sleep = sleep or time.sleep
         self._retries = max(0, retries)
+        self._send_commit_byte = send_commit_byte
         self._serial = None
         self.capabilities = None
         self.stale_lines = 0
@@ -266,7 +276,9 @@ class IfsLink(object):
         return int(match.group(1))
 
     def _write_frame(self, command):
-        self._serial.write((command + "\r\n").encode())
+        self._serial.write((command + COMMAND_SUFFIX).encode())
+        if not self._send_commit_byte:
+            return
         self._sleep(COMMIT_DELAY)
         self._serial.write(COMMIT_BYTE)
 
