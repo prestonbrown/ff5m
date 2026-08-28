@@ -142,6 +142,27 @@ both their `GCONF` registers.
 - `ffs_channels_insert` - consumed as a bit length
 - `chan` - active channel, 0 = none
 
+### `stall_state` reports MOTION, not a stall
+
+The bit is **set while that channel's filament is moving** and clear when it is
+not. Measured with an empty channel as the control:
+
+| | `F10` reply | motion bit during the feed |
+|---|---|---|
+| channel 3, **empty** | `F10 ok. FFS not ready.` (refused) | clear |
+| channel 1, **loaded** | `F10 ok. FFS channel 1 feeding.` | **set**, then clear when done |
+
+The same bit sets for the duration of an `F11` retract. `zmod_ifs.py` agrees
+without saying so: its wait declares a stall when the bit reads **clear** for
+several consecutive polls during a commanded move.
+
+So a jam is the *absence* of this bit while something was told to move. Reading
+it as "stalled" inverts every motion check - healthy moves look jammed and jams
+look healthy.
+
+Note also that the board **refuses to feed an empty channel**, which is a free
+precondition check: `F10` on a lane with no filament answers `FFS not ready.`
+
 ### Where `channel_count` comes from: nowhere, on this firmware
 
 `zmod_ifs.py` regexes `channel_count:\s*(\d+)` out of the `F13` line. **That field
