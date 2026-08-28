@@ -244,6 +244,92 @@ watchdog_disarm() {
 }
 
 # ---------------------------------------------------------------------------
+# network - take over what the stock UI owned
+# ---------------------------------------------------------------------------
+#
+# Stock app_startup.sh takes eth0 DOWN and sets its MAC, and never brings it
+# back up:
+#
+#     ifconfig eth0 down
+#     ifconfig eth0 hw ether $MAC
+#
+# firmwareExe does the rest - `ifconfig eth0 up` and
+# `udhcpc -i eth0 -p /var/run/udhcpc.pid` are both literals inside that binary,
+# and the second is the exact cmdline of the live udhcpc on a stock boot. The Qt
+# UI is the network manager on this board, for wlan0 as well as eth0.
+#
+# Step 2 kills it so HEADLESS can own the framebuffer, which silently takes the
+# network with it. A completely successful bring-up then presents as a dead
+# printer: no Moonraker, no ssh, and a frozen last frame on the panel, because
+# every channel out needs the interface that just went away. That cost two days
+# of chasing a boot "hang" that had already logged `Bootstrap complete`. ZMOD
+# does not kill firmwareExe on the AD5X, which is why ZMOD keeps its network.
+#
+# So: whoever stops the stock UI has to take over what it owned.
+NET_IFACES="${AD5X_NET_IFACES:-eth0}"
+NET_WAIT="${AD5X_NET_WAIT:-20}"
+
+iface_has_ipv4() {
+    ifconfig "$1" 2>/dev/null | grep -q 'inet addr:' && return 0
+    ip -4 addr show "$1" 2>/dev/null | grep -q 'inet ' && return 0
+    return 1
+}
+
+## Stopping the stock UI and taking over its network role are ONE operation, not
+## two steps that happen to be adjacent. Splitting them is what produced a
+## bring-up that completed perfectly and left an unreachable printer, so they get
+## a single name and a single test.
+stop_stock_ui() {
+    local proc
+
+    echo "// [ad5x] Stopping stock UI ($STOCK_UI_PROCS)..."
+    for proc in $STOCK_UI_PROCS; do
+        killall "$proc" >/dev/null 2>&1 || true
+    done
+
+    echo "// [ad5x] Taking over the network from the stock UI..."
+    provide_network
+}
+
+provide_network() {
+    local n=0 iface
+
+    for iface in $NET_IFACES; do
+        if [ ! -d "/sys/class/net/$iface" ]; then
+            echo "// [ad5x] Network: $iface not present, skipping"
+            continue
+        fi
+        if iface_has_ipv4 "$iface"; then
+            echo "// [ad5x] Network: $iface already addressed, leaving it alone"
+            continue
+        fi
+        ifconfig "$iface" up 2>/dev/null
+        # Same client and pid-file convention firmwareExe used, backgrounded so
+        # the bring-up is never blocked by a missing DHCP server.
+        udhcpc -i "$iface" -p "/var/run/udhcpc.$iface.pid" >/dev/null 2>&1 &
+        echo "// [ad5x] Network: brought $iface up, udhcpc started (pid $!)"
+    done
+
+    [ "$NET_WAIT" -gt 0 ] 2>/dev/null || return 0
+    while [ "$n" -lt "$NET_WAIT" ]; do
+        for iface in $NET_IFACES; do
+            if iface_has_ipv4 "$iface"; then
+                echo "// [ad5x] Network up on $iface after ${n}s"
+                return 0
+            fi
+        done
+        sleep 1
+        n=$((n + 1))
+    done
+    # Not fatal. A printer with no network is still a printer, and the bring-up
+    # has more to do; but say so loudly, because everything downstream that
+    # looks broken will actually be this.
+    echo "@@ [ad5x] Network: no IPv4 on ($NET_IFACES) after ${NET_WAIT}s." \
+         "Moonraker and ssh will be unreachable even if the bring-up completes." >&2
+    return 0
+}
+
+# ---------------------------------------------------------------------------
 # klippy launch - detached, then a bounded wait for its socket
 # ---------------------------------------------------------------------------
 #
@@ -370,7 +456,7 @@ run_bootstrap() {
         echo "[dry-run] AD5X headless bootstrap plan (PLATFORM=$PLATFORM):"
         echo "[dry-run] failsafe: stand down this boot if BOOT_FLAG_FAILURE/SKIP is set; otherwise arm BOOT_FLAG_FAILURE before step 2 and clear it after step 8"
         echo "[dry-run] 1. source platform.sh, common.sh, klipper_overlay.sh, init_lib.sh"
-        echo "[dry-run] 2. preconditions: bind /opt->$DATA_MNT; provide /bin/bash (faithful /bin superset bound over /bin, no mod script modified); move aside \$MOD/ZMOD marker; ensure variables.cfg display=HEADLESS, use_swap=OFF, show_feather_promo=0; stop stock UI ($STOCK_UI_PROCS)"
+        echo "[dry-run] 2. preconditions: bind /opt->$DATA_MNT; provide /bin/bash (faithful /bin superset bound over /bin, no mod script modified); move aside \$MOD/ZMOD marker; ensure variables.cfg display=HEADLESS, use_swap=OFF, show_feather_promo=0; stop stock UI ($STOCK_UI_PROCS), then take over its network role (ifconfig up + udhcpc on $NET_IFACES, wait up to ${NET_WAIT}s)"
         echo "[dry-run] 3. mount_data_partition"
         echo "[dry-run] 4. init_buildroot"
         echo "[dry-run] 5. apply_klipper_patches"
@@ -444,13 +530,10 @@ run_bootstrap() {
     # the web UI) is only noise here. Default it off; a user can still re-enable it.
     _ensure_var show_feather_promo 0
 
-    # Stock app_startup.sh launches the Qt UI (firmwareExe) before our hook runs.
-    # Stop it: headless owns the framebuffer, and a live firmwareExe also owns the
-    # MCU/klippy we are about to take over. STOCK_UI_PROCS is from platform.sh.
-    echo "// [ad5x] Stopping stock UI ($STOCK_UI_PROCS)..."
-    for _proc in $STOCK_UI_PROCS; do
-        killall "$_proc" >/dev/null 2>&1 || true
-    done
+    # Stock app_startup.sh launches the Qt UI (firmwareExe) before our hook runs,
+    # and that UI is also this board's network manager. stop_stock_ui() does both
+    # halves - see its comment for why they are inseparable.
+    stop_stock_ui
 
     # Step 3. No-op on AD5X (/usr/data is already mounted); parity with S00init.
     echo "// [ad5x] Mounting data partition..."

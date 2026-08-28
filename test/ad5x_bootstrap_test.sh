@@ -514,4 +514,106 @@ else
 fi
 rm -rf "$BL"
 
+
+# --- network takeover -------------------------------------------------------
+#
+# Step 2 kills the stock UI, and on this board that UI is the network manager:
+# `ifconfig eth0 up` and `udhcpc -i eth0 -p /var/run/udhcpc.pid` are literals
+# inside firmwareExe, while stock app_startup.sh only ever takes eth0 DOWN. A
+# bring-up that does not take the role over leaves a fully working mod that
+# nothing can reach - which is exactly how a completed bring-up got mistaken for
+# a two-day boot hang. These pin the behaviour that stops that recurring.
+#
+# ifconfig/udhcpc/ip are shadowed as functions so this runs off-rig with no
+# interface touched. NET_IFACES points at a name under /sys/class/net that
+# really exists here (lo), so the "present" path is exercised for real.
+NET_TRACE=$(mktemp)
+net_call() {
+    : > "$NET_TRACE"
+    # The real call sends udhcpc to /dev/null, so the shadow records itself to a
+    # file instead - a redirect inside the function beats the caller's.
+    AD5X_NET_IFACES="$1" AD5X_NET_WAIT="$2" NET_FAKE_IP="$3" NET_TRACE="$NET_TRACE" \
+    "$BASH_BIN" -c '
+        . "$1"
+        ifconfig() {
+            case "$2" in up) echo "IFCONFIG_UP $1"; return 0 ;; esac
+            [ -n "$NET_FAKE_IP" ] && echo "          inet addr:10.0.0.5  Bcast:..."
+            return 0
+        }
+        ip() { return 1; }
+        udhcpc() { echo "UDHCPC $*" >> "$NET_TRACE"; }
+        sleep() { :; }
+        provide_network
+    ' _ "$BOOTSTRAP" 2>&1
+}
+
+out=$(net_call lo 3 "")
+assert_contains "brings a present, unaddressed interface up" "$out" "IFCONFIG_UP lo"
+assert_contains "starts a DHCP client on it" "$(cat "$NET_TRACE")" "UDHCPC -i lo"
+assert_contains "uses a per-interface pid file" "$(cat "$NET_TRACE")" "/var/run/udhcpc.lo.pid"
+
+# An interface that already has an address must be left completely alone: the
+# stock UI may still be managing it, and re-running DHCP would fight it.
+out=$(net_call lo 3 yes)
+assert_contains "an already-addressed interface is left alone" "$out" "already addressed"
+case "$(cat "$NET_TRACE")" in
+    *UDHCPC*) _t_fail "no DHCP client on an addressed interface" "udhcpc was started anyway" ;;
+    *)        _t_pass "no DHCP client on an addressed interface" ;;
+esac
+
+# A name that is not an interface must be skipped, not have ifconfig run at it.
+out=$(net_call definitely_not_an_iface 3 "")
+assert_contains "an absent interface is skipped" "$out" "not present, skipping"
+case "$out" in
+    *IFCONFIG_UP*) _t_fail "no ifconfig on an absent interface" "it was brought up anyway" ;;
+    *)             _t_pass "no ifconfig on an absent interface" ;;
+esac
+
+# Never fatal, and it must say so loudly - everything downstream that looks
+# broken will actually be this.
+out=$(net_call lo 2 "")
+_net_rc=$?
+assert_eq "provide_network is non-fatal when no address arrives" "0" "$_net_rc"
+assert_contains "a network failure is reported loudly" "$out" "will be unreachable"
+
+# The wait is skippable, same escape-hatch shape as the watchdog and the socket wait.
+out=$(net_call lo 0 "")
+case "$out" in
+    *"will be unreachable"*) _t_fail "AD5X_NET_WAIT=0 skips the wait" "it still waited and complained" ;;
+    *)                       _t_pass "AD5X_NET_WAIT=0 skips the wait" ;;
+esac
+
+# Step 2 must actually call it - a helper nothing invokes is the same bug.
+plan=$(run_forced mips --dry-run)
+assert_contains "the dry-run plan documents the network takeover" "$plan" "take over its network role"
+
+# Stopping the UI and taking the network over must be ONE operation. A version
+# that kills firmwareExe and forgets the network is a printer nothing can reach,
+# and that is not a hypothetical - it is what happened. Assert both halves fire
+# from the single call the bring-up makes.
+: > "$NET_TRACE"
+out=$(AD5X_NET_IFACES=lo AD5X_NET_WAIT=1 NET_TRACE="$NET_TRACE" "$BASH_BIN" -c '
+    . "$1"
+    STOCK_UI_PROCS="firmwareExe"
+    killall()  { echo "KILLALL $*" >> "$NET_TRACE"; }   # real call sends it to /dev/null
+    ifconfig() { case "$2" in up) echo "IFCONFIG_UP $1";; esac; return 0; }
+    ip()       { return 1; }
+    udhcpc()   { echo "UDHCPC $*" >> "$NET_TRACE"; }
+    sleep()    { :; }
+    stop_stock_ui
+' _ "$BOOTSTRAP" 2>&1)
+assert_contains "stop_stock_ui kills the stock UI" "$(cat "$NET_TRACE")" "KILLALL firmwareExe"
+assert_contains "stop_stock_ui brings the interface up" "$out" "IFCONFIG_UP lo"
+assert_contains "stop_stock_ui starts DHCP" "$(cat "$NET_TRACE")" "UDHCPC -i lo"
+
+# ...and the bring-up must call THAT, not open-code half of it.
+body=$(awk '/^run_bootstrap\(\)/,/^}/' "$BOOTSTRAP")
+assert_contains "run_bootstrap calls stop_stock_ui" "$body" "stop_stock_ui"
+case "$body" in
+    *killall*) _t_fail "run_bootstrap does not open-code the killall" \
+                       "killall appears directly in run_bootstrap, bypassing the network takeover" ;;
+    *)         _t_pass "run_bootstrap does not open-code the killall" ;;
+esac
+rm -f "$NET_TRACE"
+
 finish
