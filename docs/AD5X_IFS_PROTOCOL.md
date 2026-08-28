@@ -251,8 +251,30 @@ filament in 1, 2 and 4).
 
   `GSTAT` bit 0 is the TMC reset flag and `DRV_STATUS` bit 31 is `stst`
   (standstill), both plausible at idle. `F41` returned the same `GCONF` as `F50`,
-  so it likely aliases driver 1. Overtemperature, open-load and short detection
-  all live in `DRV_STATUS` and reach no UI today.
+  so it likely aliases the F50 bank. Overtemperature, open-load and short
+  detection all live in `DRV_STATUS` and reach no UI today.
+
+  **Which bank is which, settled by experiment.** Both read identically at idle,
+  so they were separated by making each motor move and watching the standstill
+  bit drop:
+
+  | moved by | bank that lost `stst` | so it is |
+  |---|---|---|
+  | `F24 C2` (select a channel) | `F60`-`F64` | the **selector** (`qiehuan`, 切换) |
+  | `F11 C2 ...` (move filament) | `F50`-`F54` | the **feeder** (`jinsi`, 进丝) |
+
+  That matches the two `GCONF` values `F13` already reports under those names.
+  While moving, `DRV_STATUS` read `00090000` - bits 16-20 are `CS_ACTUAL`, the
+  current scale actually applied, which independently corroborates the register
+  layout.
+
+  **The part is almost certainly a TMC2209.** Both drivers report
+  `GCONF: 000001dc`, which sets `pdn_disable` and `mstep_reg_select` together -
+  the canonical configuration for driving a 2209 over UART, which is how this
+  board does it. Read as a TMC2130 the same value would mean `enc_commutation`
+  on a filament feeder, which makes no sense. Strong but circumstantial, so the
+  fault-bit decoding names the family it assumed and an unknown family still
+  reports that *some* fault bit is set rather than staying silent.
 
 - `F12`, `F20`, `F30`, `F43` acknowledge but reveal nothing about their effect.
   Do not send them blind; they may actuate. They were deliberately excluded from
