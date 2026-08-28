@@ -19,3 +19,6 @@ scripts/ui_preview/coverage/
 /feather-ui-designer/
 sql/version
 /.py/klipper/plugins/ui/themes/preview/
+
+# Build output (build_ad5x_image.sh OUT_DIR)
+/dist/
