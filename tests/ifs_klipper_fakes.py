@@ -58,6 +58,40 @@ class FakeGCode:
         return self
 
 
+class FakeGcmd:
+    """klipper's parsed-command object, as far as these extras use it."""
+
+    class error(Exception):
+        pass
+
+    def __init__(self, params=None, gcode=None):
+        self.params = dict(params or {})
+        self.gcode = gcode or FakeGCode()
+        self.responses = self.gcode.responses
+
+    def get(self, key, default=Ellipsis):
+        if key in self.params:
+            return str(self.params[key])
+        if default is Ellipsis:
+            raise self.error("missing %s" % key)
+        return default
+
+    def get_int(self, key, default=Ellipsis, minval=None, maxval=None):
+        if key not in self.params:
+            if default is Ellipsis:
+                raise self.error("missing %s" % key)
+            return default
+        value = int(self.params[key])
+        if minval is not None and value < minval:
+            raise self.error("%s below %s" % (key, minval))
+        if maxval is not None and value > maxval:
+            raise self.error("%s above %s" % (key, maxval))
+        return value
+
+    def respond_info(self, message):
+        self.gcode.respond_info(message)
+
+
 class FakePrinter:
     def __init__(self):
         self.reactor = FakeReactor()

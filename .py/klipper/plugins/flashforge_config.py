@@ -1,0 +1,171 @@
+## The printer's own settings file, /usr/prog/config/Adventurer5M.json.
+##
+## This is STOCK FlashForge state, not a mod artifact: it lives on the stock
+## firmware partition and the stock UI reads and writes it. So it is the
+## authority on what is in each slot, how many channels the machine has, and
+## what the factory load/unload distances are - and anything we change here has
+## to survive being read back by that UI.
+##
+## This module is the one place that knows FlashForge's file format. Everything
+## above asks it questions and never opens the file itself.
+##
+## Copyright (C) 2026, Preston Brown
+##
+## This file may be distributed under the terms of the GNU GPLv3 license
+
+import json
+import logging
+import os
+import tempfile
+
+
+PATH = "/usr/prog/config/Adventurer5M.json"
+
+## FFMInfo indexes slots from 1. Index 0 is not a lane: zmod_color reads it as
+## `materialName`/`materialColor`, i.e. what is currently loaded in the
+## extruder. Treated as such here, and kept separate from the lanes so a wrong
+## guess cannot silently become a fifth channel.
+LOADED_SLOT = 0
+
+## Stock's own filament-sensor thresholds. Recorded because they are almost
+## certainly where zmod's 0.3/0.72 came from - and our measured raw ADC is
+## 0.008 present / 0.043 absent, nowhere near either. Stock is presumably
+## comparing against a different scale (a resistance conversion), so these are
+## exposed for reference and deliberately NOT wired into our classifier.
+SENSOR_MIN_KEY = "FilamentSenserMin"
+SENSOR_MAX_KEY = "FilamentSenserMax"
+
+
+class FlashForgeConfig(object):
+    """Read and write the printer's settings file without losing anything.
+
+    Every write is read-modify-write of the whole document and lands through a
+    temporary file and a rename, so a power cut cannot leave the stock UI with
+    half a config.
+    """
+
+    def __init__(self, path=PATH):
+        self.path = path
+
+    ## -- raw document -------------------------------------------------------
+
+    def load(self):
+        with open(self.path, "r") as handle:
+            return json.load(handle)
+
+    def save(self, document):
+        directory = os.path.dirname(self.path) or "."
+        handle = tempfile.NamedTemporaryFile(
+            mode="w", dir=directory, prefix=".ffconfig-", suffix=".tmp",
+            delete=False, encoding="utf-8")
+        try:
+            with handle:
+                json.dump(document, handle, indent=4, sort_keys=True)
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.replace(handle.name, self.path)
+        except Exception:
+            ## Never leave a stray temp file next to the printer's own config.
+            try:
+                os.unlink(handle.name)
+            except OSError:
+                pass
+            raise
+
+    def update(self, mutate):
+        """Apply `mutate(document)` and write the result back. Returns it."""
+        document = self.load()
+        mutate(document)
+        self.save(document)
+        return document
+
+    ## -- typed views --------------------------------------------------------
+
+    def section(self, name, document=None):
+        document = self.load() if document is None else document
+        value = document.get(name)
+        return value if isinstance(value, dict) else {}
+
+    def channel_count(self, document=None):
+        """How many lanes the machine says it has.
+
+        This is where the count actually lives. `F13` has no `channel_count`
+        field on firmware 3.0.6, and `F19` reports it as an English word baked
+        into the board's firmware image; this is the printer's own number.
+        """
+        value = self.section("FFMInfo", document).get("channel")
+        return int(value) if isinstance(value, (int, float)) else None
+
+    def is_enabled(self, document=None):
+        return bool(self.section("FFMInfo", document).get("ffmEnable", False))
+
+    def materials(self, document=None):
+        """{slot: {"type", "color"}} for every lane, slot numbers from 1.
+
+        A slot the printer has nothing for reads type "?" and colour "", which
+        is normalised to None rather than passed through as a literal.
+        """
+        info = self.section("FFMInfo", document)
+        count = self.channel_count(document) or 0
+        return {slot: self._slot(info, slot) for slot in range(1, count + 1)}
+
+    def loaded_material(self, document=None):
+        """What FFMInfo says is in the extruder, or None."""
+        return self._slot(self.section("FFMInfo", document), LOADED_SLOT)
+
+    @staticmethod
+    def _slot(info, slot):
+        material = info.get("ffmType%d" % slot)
+        colour = info.get("ffmColor%d" % slot)
+        return {
+            "type": None if material in (None, "", "?") else material,
+            "color": None if colour in (None, "") else colour,
+        }
+
+    def set_material(self, slot, material=None, colour=None):
+        """Write one slot back, leaving the rest of the document untouched.
+
+        `None` clears a field to the printer's own empty markers, so a slot we
+        empty looks to the stock UI exactly like one it emptied itself.
+        """
+        def mutate(document):
+            info = document.setdefault("FFMInfo", {})
+            info["ffmType%d" % slot] = "?" if material is None else material
+            info["ffmColor%d" % slot] = "" if colour is None else colour
+
+        self.update(mutate)
+
+    ## -- factory motion parameters -----------------------------------------
+
+    def multicolour(self, document=None):
+        """Stock's own load, purge and unload distances and speeds.
+
+        The `Multicolour` block. Worth preferring over any constant we might
+        invent: zmod's "defaults" are these numbers copied out - its
+        filament_unload_into_tube 70 is UnloadIFSSpace, nozzle_cleaning_length
+        60 is UnloadESpace, filament_extruder_speed 300 is FristESpeed.
+        """
+        return dict(self.section("Multicolour", document))
+
+    def stock_sensor_thresholds(self, document=None):
+        """Stock's filament-sensor limits, for reference only.
+
+        NOT used to classify: our measured raw ADC is an order of magnitude
+        below these, so stock is comparing something else. See
+        ifs_sensor_logic for the measured bands.
+        """
+        general = self.section("general", document)
+        return (general.get(SENSOR_MIN_KEY), general.get(SENSOR_MAX_KEY))
+
+
+def load_quietly(path=PATH):
+    """Best-effort read; None when the file is missing or unreadable.
+
+    A printer without this file is not an error worth refusing to start over -
+    it just means we have no slot metadata.
+    """
+    try:
+        return FlashForgeConfig(path).load()
+    except (OSError, ValueError) as exc:
+        logging.info("FlashForge config unavailable at %s: %s", path, exc)
+        return None
