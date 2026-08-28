@@ -2,10 +2,10 @@
 # AD5X Stage-B installer (tools/release/ad5x/flashforge_init.sh) guard + unpack tests.
 #
 # All off-rig. The installer paints /dev/fb0, reads df/mount, unpacks into
-# /usr/data, and sysrq-reboots - none of which a test box can do. It exposes a
+# /usr/data - none of which a test box can do. It exposes a
 # handful of env seams that default to the real device values and are only
 # redirected here (FF_FB, FF_DATA_MNT, FF_UNAME, FF_FREE_KB, FF_MOUNTS,
-# FF_NO_REBOOT, FF_SKIP_INSTALL), so the guards and the unpack can be exercised
+# FF_SKIP_INSTALL), so the guards and the unpack can be exercised
 # against a fake root with a fake mount table and a forced arch/free-space.
 #
 # The guard cases run the FULL path (FF_SKIP_INSTALL unset): a correct build
@@ -98,7 +98,6 @@ run_installer() {
         FF_FREE_KB="$FREE_KB" \
         FF_MOUNTS="$MOUNTS" \
         FF_SKIP_INSTALL="$SKIP" \
-        FF_NO_REBOOT=1 \
         sh "$RUN_SCRIPT" "$_m" "$_p" 2>&1) && RC=0 || RC=$?
 }
 
@@ -204,16 +203,37 @@ assert_contains "exactly the 512 MB threshold passes the guard" "$OUT" "guards p
 # ---------------------------------------------------------------------------
 if [ "$HAVE_TOOLS" -eq 1 ]; then
     # A verified payload unpacks both trees, skips the empty entware stub, and
-    # reaches the (suppressed) reboot.
+    # finishes WITHOUT rebooting.
+    #
+    # The USB fixture carries a decoy image so the self-delete is exercised: the
+    # installer that shipped never removed its own payload, and combined with an
+    # unconditional sysrq reboot that was an endless reinstall loop.
+    USB_MNT="$WORK/usb"; mkdir -p "$USB_MNT"
+    : > "$USB_MNT/AD5X-ForgeX-9.9.9.tgz"
+    MOUNTS_USB="$WORK/mounts.usb"
+    printf '/dev/mmcblk0p7 /usr/data ext4 rw 0 0\n/dev/sda1 %s vfat rw 0 0\n' \
+        "$USB_MNT" > "$MOUNTS_USB"
+
     new_data install
-    ARCH=mips; FREE_KB=2000000; MOUNTS="$MOUNTS_CLEAN"; SKIP=
+    ARCH=mips; FREE_KB=2000000; MOUNTS="$MOUNTS_USB"; SKIP=
     run_installer AD5X 0026
     assert_eq   "verified payload installs and exits 0"   "0" "$RC"
     assert_file "buildroot rootfs unpacked into \$MOD"    "$MOD_DIR/ROOTFS_MARKER"
     assert_file "mod tree unpacked into \$MOD_ROOT"       "$MOD_ROOT_DIR/MOD_MARKER"
     assert_contains "version is announced"                "$OUT" "forgex-test-1.0.0"
     assert_contains "empty entware stub is skipped"       "$OUT" "Entware stub is empty"
-    assert_contains "install reaches the (suppressed) reboot" "$OUT" "zreboot suppressed"
+
+    # The three properties that together break the install loop.
+    assert_contains "install tells the user to pull the USB" \
+        "$OUT" "Remove the USB drive"
+    assert_not_contains "install does NOT reboot" "$OUT" "sysrq"
+    if [ -e "$USB_MNT/AD5X-ForgeX-9.9.9.tgz" ]; then
+        _t_fail "install removes its own image from the USB stick" "image still present"
+    else
+        _t_pass "install removes its own image from the USB stick"
+    fi
+    assert_file "install defers the first bring-up to the next boot" \
+        "$MOD_ROOT_DIR/BOOT_FLAG_SKIP"
 
     # A corrupted member must fail md5 and abort BEFORE any unpack.
     STAGE_BAD="$WORK/stage_bad"

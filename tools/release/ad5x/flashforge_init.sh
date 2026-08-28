@@ -18,7 +18,9 @@
 ## We verify the payload (md5), guard the environment (right printer, mod not
 ## already running, enough free space), unpack the chroot rootfs + mod tree,
 ## wire the reversible boot hook into the stock app_startup.sh via the already
-## built injector, then sysrq-reboot into Forge-X.
+## built injector, defer the first bring-up to the next boot, remove our image
+## from the stick, and stop. We deliberately DO NOT reboot: see
+## remove_image_from_usb() for the install loop that behaviour created.
 ##
 ## This is the single most safety-critical file in the AD5X port. It runs ON
 ## THE PRINTER under BusyBox ash: POSIX sh only - no bash, no GNU coreutils.
@@ -97,18 +99,49 @@ free_kb() {
     fi
 }
 
-# Force a reboot into the freshly installed mod via the magic-sysrq path, the
-# way the stock updater expects its child to hand control back.
-zreboot() {
-    if [ -n "${FF_NO_REBOOT:-}" ]; then
-        echo "[ad5x-install] zreboot suppressed (FF_NO_REBOOT set)."
-        return 0
+# Remove our own image from the USB stick.
+#
+# The stock updater re-reads the stick on EVERY boot, so an image left in place
+# reinstalls forever. That, combined with the unconditional sysrq reboot this
+# installer used to end on, was an airtight install loop: reboot -> updater
+# finds the same .tgz -> installs again -> reboots. The "mod already running"
+# guard could never break it either, because the reboot happened before
+# app_startup.sh ever reached our boot hook, so no .forge-x mount ever existed.
+#
+# ZMOD solves it exactly this way (rm -f /mnt/AD5X-zmod-*); the port dropped it.
+# The stick is mounted at /mnt on this platform.
+remove_image_from_usb() {
+    _removed=0
+    # current_mounts() honours FF_MOUNTS, so a test drives this against a
+    # fixture instead of whatever the build host happens to have mounted.
+    for _mp in $(current_mounts 2>/dev/null | awk '/vfat|msdos/ {print $2}'); do
+        [ -d "$_mp" ] || continue
+        for _img in "$_mp"/AD5X-*.tgz "$_mp"/AD5X-*.tar; do
+            if [ -f "$_img" ]; then
+                rm -f "$_img" 2>/dev/null && echo "[ad5x-install] Removed $_img" \
+                    && _removed=$((_removed + 1))
+            fi
+        done
+    done
+    sync
+    [ "$_removed" -gt 0 ] || echo "[ad5x-install] No image found on USB to remove."
+}
+
+# Stand the mod down for the REST OF THIS BOOT.
+#
+# Without the reboot, stock app_startup.sh carries on in the same boot and would
+# reach the hook we just injected - running a first bring-up against a mod tree
+# unpacked seconds earlier, mid-update, with the stock UI still coming up. The
+# one-shot skip flag defers that to a clean power cycle. failsafe_should_skip()
+# consumes the flag on that pass, so the NEXT boot is a normal first run.
+defer_first_bringup() {
+    if mkdir -p "$MOD_ROOT_DIR" 2>/dev/null \
+       && touch "$MOD_ROOT_DIR/BOOT_FLAG_SKIP" 2>/dev/null; then
+        echo "[ad5x-install] Deferred first bring-up to the next boot."
+    else
+        echo "[ad5x-install] WARNING: could not write BOOT_FLAG_SKIP;" \
+             "the mod may start before the power cycle."
     fi
-    sync
-    echo 1 > /proc/sys/kernel/sysrq
-    sync
-    echo b > /proc/sysrq-trigger || echo "sysrq reboot failed"
-    sync
 }
 
 # --------------------------------------------------------------------------
@@ -221,13 +254,15 @@ main() {
     install_payload
 
     echo "[ad5x-install] Forge-X installed successfully."
+
+    # Order matters: defer the bring-up BEFORE the stock startup can reach the
+    # hook, and clear the stick BEFORE telling the user it is safe to pull.
+    defer_first_bringup
+    remove_image_from_usb
+
+    echo "[ad5x-install] Remove the USB drive, then power cycle the printer."
     paint forgex-complete.raw.xz
     sync
-
-    # Let the completion frame sit before we yank the machine down. Skipped
-    # together with the reboot itself when FF_NO_REBOOT is set (tests).
-    [ -n "${FF_NO_REBOOT:-}" ] || sleep 5
-    zreboot
     exit 0
 }
 
