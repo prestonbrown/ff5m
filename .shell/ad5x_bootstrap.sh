@@ -258,6 +258,13 @@ watchdog_disarm() {
 # and the second is the exact cmdline of the live udhcpc on a stock boot. The Qt
 # UI is the network manager on this board, for wlan0 as well as eth0.
 #
+# We deliberately replace only the WIRED half. The binary also carries
+# `ifconfig wlan0 up` / `udhcpc -i wlan0`, and it would be easy to "finish the
+# job" here - do not. Wi-Fi belongs to HelixScreen's WiFiManager, which owns
+# scanning, credentials and reconnection; a second claimant in a boot script
+# would fight it. This function exists to get the machine on the wire so the
+# bring-up is reachable, nothing more.
+#
 # Step 2 kills it so HEADLESS can own the framebuffer, which silently takes the
 # network with it. A completely successful bring-up then presents as a dead
 # printer: no Moonraker, no ssh, and a frozen last frame on the panel, because
