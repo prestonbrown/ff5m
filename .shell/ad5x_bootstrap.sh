@@ -215,7 +215,7 @@ run_bootstrap() {
         echo "[dry-run] AD5X headless bootstrap plan (PLATFORM=$PLATFORM):"
         echo "[dry-run] failsafe: stand down this boot if BOOT_FLAG_FAILURE/SKIP is set; otherwise arm BOOT_FLAG_FAILURE before step 2 and clear it after step 8"
         echo "[dry-run] 1. source platform.sh, common.sh, klipper_overlay.sh, init_lib.sh"
-        echo "[dry-run] 2. preconditions: bind /opt->$DATA_MNT; provide /bin/bash (faithful /bin superset bound over /bin, no mod script modified); move aside \$MOD/ZMOD marker; ensure variables.cfg display=HEADLESS, use_swap=OFF; stop stock UI ($STOCK_UI_PROCS)"
+        echo "[dry-run] 2. preconditions: bind /opt->$DATA_MNT; provide /bin/bash (faithful /bin superset bound over /bin, no mod script modified); move aside \$MOD/ZMOD marker; ensure variables.cfg display=HEADLESS, use_swap=OFF, show_feather_promo=0; stop stock UI ($STOCK_UI_PROCS)"
         echo "[dry-run] 3. mount_data_partition"
         echo "[dry-run] 4. init_buildroot"
         echo "[dry-run] 5. apply_klipper_patches"
@@ -271,6 +271,10 @@ run_bootstrap() {
     # runout guards read this variable, so default it off. Filament presence on
     # the AD5X comes from the IFS, wired up separately in the print flow.
     _ensure_var filament_switch_sensor 0
+    # The AD5X runs headless with no working Feather on-device UI, so the one-shot
+    # "Try Feather" promo (config/display_offer.cfg, which pops an action:prompt in
+    # the web UI) is only noise here. Default it off; a user can still re-enable it.
+    _ensure_var show_feather_promo 0
 
     # Stock app_startup.sh launches the Qt UI (firmwareExe) before our hook runs.
     # Stop it: headless owns the framebuffer, and a live firmwareExe also owns the

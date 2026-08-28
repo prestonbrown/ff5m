@@ -155,6 +155,13 @@ case "$out" in
     *)                     _t_fail "dry-run documents providing /bin/bash" "absent" ;;
 esac
 
+# The AD5X has no working Feather UI; the plan must document defaulting the
+# "Try Feather" web-UI promo off (Step 2 variables.cfg seeding).
+case "$out" in
+    *show_feather_promo*) _t_pass "dry-run documents disabling the Feather promo" ;;
+    *)                    _t_fail "dry-run documents disabling the Feather promo" "absent" ;;
+esac
+
 # --- failsafe: arm / disarm / one-shot skip gate ----------------------------
 # The failsafe functions read the two flag paths that common.sh derives from
 # $MOD_ROOT. Off-rig we source the bootstrap and point those globals at fixture
