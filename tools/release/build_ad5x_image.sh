@@ -74,8 +74,13 @@ for it in $PAYLOAD_ITEMS; do
     fi
 done
 [ -n "$_items" ] || die "no payload items found under $REPO_ROOT"
+# Exclude Python bytecode caches: they are gitignored working-tree cruft (from
+# running the test suite / klippy locally), x86 .pyc that has no business in a
+# MIPS firmware image. The device regenerates bytecode from source on first run.
 # shellcheck disable=SC2086
-tar -C "$REPO_ROOT" --format=ustar -cf - $_items | xz -T0 -c > "$STAGE/xz/data.tar.xz"
+tar -C "$REPO_ROOT" --format=ustar \
+    --exclude='__pycache__' --exclude='*.pyc' \
+    -cf - $_items | xz -T0 -c > "$STAGE/xz/data.tar.xz"
 
 # ---- xz/buildroot.tar.xz : the borrowed/clean MIPS rootfs ------------------
 echo "  buildroot.tar.xz<- $BUILDROOT_TAR"
