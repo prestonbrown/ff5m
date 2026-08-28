@@ -77,7 +77,10 @@ connection and reconnects if camera recovery closes that connection.
   `CAMERA_RELOAD` or service restart.
 - The panel reads supported ranges, current values, and menu entries from the
   active V4L2 driver. Camera menus and small discrete integer ranges are shown
-  as selectors, so invalid intermediate values cannot be entered.
+  as selectors, so invalid intermediate values cannot be entered. A numeric
+  selector whose advertised minimum is above zero also includes `0 (special)`
+  for camera drivers that accept zero as an undocumented off value. Hold
+  `Shift` while pressing an arrow key to move a numeric control by ten steps.
 - **Save** atomically updates the image-control entries in `camera.conf` and
   preserves unrelated settings and comments. Saving is available because
   `S98camera` passes the configuration path through `--controls-file`.

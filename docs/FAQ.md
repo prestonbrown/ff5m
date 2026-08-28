@@ -491,6 +491,11 @@ restart. If you edit `camera.conf` manually, run `CAMERA_RELOAD` to apply it
 without restarting the HTTP stream service. The panel uses the existing camera
 HTTP server and MJPEG endpoint; it does not start a second server.
 
+For numeric selectors whose camera-reported minimum is greater than zero, the
+panel adds `0 (special)` because some drivers still accept zero as an
+undocumented off value (for example, Gain). `Shift` + arrow changes numeric
+controls by ten steps instead of one.
+
 ### I adjusted the camera settings, but they are not applied after a reboot
 Make sure `POST_PROCESSING=1` and the desired `E_<parameter>` lines are
 uncommented in `camera.conf`, or use **Save** in the control panel.
