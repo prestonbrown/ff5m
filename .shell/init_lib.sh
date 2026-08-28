@@ -60,6 +60,16 @@ _init_printer_data() {
 provision_printer_data() {
     if [ "$PLATFORM" = ad5x ]; then
         _init_printer_data "$MOD"/root/printer_data
+        # klippy runs on the host, whose / is a read-only squashfs: /root is
+        # empty and no /root/printer_data can be created there, yet Klipper's
+        # config references /root/printer_data by absolute path (the
+        # gcode_shell_command command: paths, etc.). Bind the chroot's /root -
+        # which holds the tree just built - over the host's empty /root, so host
+        # klippy and the chroot's Moonraker share one printer_data tree. This is
+        # the AD5M's single-tree sharing in reverse: the AD5M builds on the host
+        # and binds into the chroot; the AD5X builds in the chroot and binds onto
+        # the host, because the writable side is flipped.
+        mount --bind "$MOD"/root /root
     else
         _init_printer_data /root/printer_data
         sync

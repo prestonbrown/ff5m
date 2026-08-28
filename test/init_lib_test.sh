@@ -72,10 +72,12 @@ assert_contains "ad5m gcodes -> /data (unchanged)" \
 ad5x_prov=$(capture_provision mips)
 assert_contains "ad5x builds printer_data in the chroot's own /root" \
     "$ad5x_prov" "build /usr/data/.mod/.forge-x/root/printer_data"
-case "$ad5x_prov" in
-    *mount*) _t_fail "ad5x does not bind-mount printer_data" "a mount was issued" ;;
-    *)       _t_pass "ad5x does not bind-mount printer_data (host /root is read-only squashfs)" ;;
-esac
+# klippy runs on the host; bind the chroot /root (which holds the tree just
+# built) over the host's empty read-only /root so host /root/printer_data
+# resolves for klippy's gcode_shell_command paths, sharing one tree with the
+# chroot's Moonraker.
+assert_contains "ad5x binds the chroot /root over the host /root" \
+    "$ad5x_prov" "mount --bind /usr/data/.mod/.forge-x/root /root"
 
 ad5m_prov=$(capture_provision armv7l)
 assert_contains "ad5m builds printer_data on the host /root" \
