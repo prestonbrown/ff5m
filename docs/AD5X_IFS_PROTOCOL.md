@@ -22,16 +22,30 @@ this sits alongside.
 
 ## Wire
 
+Everything in this section is **measured** - see "Ground truth" below.
+
 | | |
 |---|---|
-| Port | `/dev/ttyS4` |
-| Baud | 115200, 8N1 |
-| Read timeout | 0.2 s |
-| Request | `<command>\r\n`, then after ~200 ms a bare `0xFF` byte |
-| Reply | one or more `\r\n`-terminated lines (see framing) |
+| Port | `/dev/ttyS4`, held by `firmwareExe` under stock |
+| Baud | 115200, 8N1 (read off the live termios) |
+| Request | `<command> \r\n` - note the **space before CRLF** |
+| Reply | bytes, **no terminator**; the reply ends when the board goes quiet |
+| First byte | ~105 ms after the command |
+| Byte rate | ~4.6 ms/byte, so a 126-byte `F13` reply takes ~600 ms |
+| Poll cadence | stock sends `F13` every ~0.91 s, and nothing else while idle |
 
-The trailing `0xFF` is required - it appears to commit the command. Any
-reimplementation must send it.
+**There is no `0xFF` commit byte.** An earlier revision of this document called it
+required. Stock sent 101 polls and five action commands without one. `zmod_ifs.py`
+does send it and also works, so the board tolerates it - but nothing needs it.
+
+**There is no `\r\n` at the end of a reply.** A 126-byte `F13` response contains no
+CR and no LF anywhere. What delimits a reply is silence, which is why `zmod_ifs.py`'s
+0.2 s read timeout is not a safety net - it *is* the framing. A reader that blocks for
+a newline waits forever. (`F21` is the exception: it embeds CRLF *between* its three
+lines. See below.)
+
+The trailing space is on every command stock sends - `F13 \r\n`, `F24 C2 \r\n`,
+`F10 C2 L600 S1200 \r\n`. zmod sends none and works, so it too looks optional.
 
 `/proc/tty/driver` shows `uart4` at `tx:0 rx:0` under a Forge-X bring-up, because
 we stop the stock UI and ship no IFS driver. Under stock, `firmwareExe` owns it.
@@ -55,7 +69,9 @@ Success has to be read from the payload after the prefix, never from `ok.`
 `"F13 ok. FFS_state:"` with a space; `F40`-`F64` emit `"F40 ok.stall count:"`
 with none. Split on the `F<n> ok.` prefix and strip - do not split on `"ok. "`.
 
-Most responses also carry a **trailing space** before the CRLF. Strip.
+Most responses also carry a **trailing space** at the end. Strip. Note this is
+the reply's last byte, not a separator - there is no CRLF after it (`F21`
+excepted, which embeds CRLF *between* its three lines).
 
 ### `F21` returns three lines
 
@@ -104,7 +120,9 @@ both their `GCONF` registers.
 
 `zmod_ifs.py` regexes `channel_count:\s*(\d+)` out of the `F13` line. **That field
 is not in 3.0.6's format string**, so on this board the regex never matches and
-the value stays 0. It is presumably a newer IFS revision's field.
+the value stays 0. It is presumably a newer IFS revision's field. Confirmed against
+101 live `F13` replies: the fields present are exactly `FFS_state`, `silk_state`,
+`chan`, `ffs_channels_insert`, `stall_state`, `jinsi_GCONF`, `qiehuan_GCONF`.
 
 ZMOD's actual channel count is neither probed nor parsed: it is the `color_limit`
 config option, `config.getint('color_limit', 4)`. Every install is hardcoded to
@@ -186,12 +204,60 @@ revisions. The missing `channel_count` field is a second instance of the same
 thing. Probe `F19` and branch on the version rather than assuming this table
 holds for every board.
 
+## Ground truth
+
+Captured 2026-08-28 on an AD5X booted **stock**, by attaching `strace` to
+`firmwareExe` and watching its syscalls on the `/dev/ttyS4` fd. Passive: nothing
+else opened the port, so no bytes were stolen from the stock UI's own session.
+
+```bash
+PID=$(ps | grep '[f]irmwareExe' | awk '{print $1}')
+FD=$(for f in /proc/$PID/fd/*; do
+        case "$(readlink $f)" in */ttyS4) echo "${f##*/}";; esac; done)
+strace -f -tt -s 512 -y -e trace=read,write -e trace-fds="$FD" -p "$PID" -o capture.log
+```
+
+Two traps in reading such a capture. `firmwareExe` reads **one byte per `read()`**,
+so a 126-byte reply is 126 syscalls and must be reassembled before it means
+anything. And an interrupted syscall is split across two `strace` lines as
+`read <unfinished ...>`; a parser that ignores those reports the reply as
+short by a byte and looks exactly like the board dropping data. It was not.
+
+### The insert sequence, observed
+
+Filament pushed into an empty channel 2, with the board's `F13` state alongside:
+
+```
+board reports  silk 9->11, insert=2      board notices by itself
+F24 C2         -> F24 ok. chan 2.        clamp
+               state=18                  clamped, channel 2
+F10 C2 L600 S1200 -> ... channel 2 feeding.
+               state=22                  loading, channel 2
+               (30 s: 600 mm at 1200 mm/min)
+F112           -> F112 ok.               stop
+F23 C2         -> F23 ok. chan 2.
+F39 C2         -> ... channel 2 release.
+               state=23, insert=0        unclamping, channel 2
+```
+
+This confirms the state encoding **on hardware**: 18, 22 and 23 are exactly
+base + 11*(channel-1) for clamped, loading and unclamping on channel 2. It also
+confirms `L` is millimetres and `S` is mm/min, since 600/1200 = 0.5 min and the
+board took 30 s.
+
+`ffs_channels_insert` went 2 -> 0 across this sequence. **Which command cleared it
+is not established** - `F112`, `F23` and `F39` all landed inside 350 ms and the
+next poll was ~900 ms later. `F23` is the semantically likely one. Do not build on
+that without a capture that separates them.
+
 ## Not yet verified
 
-- No live capture. Everything here is the firmware's own format strings plus
-  `zmod_ifs.py`'s command construction. A passive sniff of `/dev/ttyS4` at 115200
-  under a **stock** boot, while driving the IFS from the stock UI, would confirm
-  the cadence and might reveal opcodes with no format string.
-- The effect of `F12`, `F20`, `F30`, `F43` is unknown.
-- Whether the ~200 ms gap before the `0xFF` commit byte is required, or merely
-  what ZMOD happens to do. It costs a hard 200 ms per command.
+- **`F11` (retract) has never been seen on the wire.** Its syntax comes from
+  `zmod_ifs.py` and its reply from the firmware image, and it is symmetric with
+  `F10`, which is now confirmed. Capturing a real unload also needs the *unload
+  flow* - opcode order and lengths - which nothing else records.
+- The effect of `F12`, `F20`, `F30`, `F43` is unknown. They acknowledge and
+  reveal nothing; do not send them blind on a loaded machine.
+- Whether the trailing space and the `0xFF` byte are each merely tolerated or
+  actually meaningful to some opcode. Stock always sends the first and never the
+  second; zmod does the opposite on both counts, and both drivers work.
