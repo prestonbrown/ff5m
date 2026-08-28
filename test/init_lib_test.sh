@@ -115,6 +115,46 @@ assert_eq "ad5m leaves hw_base.cfg default (no .ad5m override to select)" \
     "AD5M-DEFAULT" "$(cat "$FXM/macros/hw_base.cfg")"
 rm -rf "$FXM"
 
+# --- the deploy path applies platform macros before klipper reads them -------
+# sync_remote.sh unpacks the committed macros/ - where hw_base.cfg is the AD5M
+# variant - and then restarts klipper. Only apply_platform_macros puts the
+# .$PLATFORM override back over it, and normally only the boot path calls it.
+# If that call goes missing, or drifts below the restart, a synced AD5X hands
+# klippy the AD5M [temperature_sensor weightValue] on hardware with no
+# load-cell sensor and klippy halts - with the printer reachable and Moonraker
+# answering, which is what makes it hard to read.
+SYNC_REMOTE="$REPO_DIR/sync_remote.sh"
+assert_file "sync_remote.sh exists" "$SYNC_REMOTE"
+
+sync_line_of() { grep -n "$1" "$SYNC_REMOTE" | head -1 | cut -d: -f1; }
+
+APPLY_AT=$(sync_line_of '^apply_platform_macros$')
+SOURCE_AT=$(sync_line_of 'init_lib\.sh"$')
+RESTART_AT=$(sync_line_of 'restart_klipper\.sh')
+
+assert_ne "sync_remote.sh calls apply_platform_macros" "" "$APPLY_AT"
+assert_ne "sync_remote.sh sources init_lib.sh for it" "" "$SOURCE_AT"
+assert_ne "sync_remote.sh restarts klipper" "" "$RESTART_AT"
+
+# Ordering, not just presence: the copy is worthless after the restart.
+if [ -n "$APPLY_AT" ] && [ -n "$RESTART_AT" ] && [ "$APPLY_AT" -lt "$RESTART_AT" ]; then
+    ORDER=before
+else
+    ORDER="after (apply=$APPLY_AT restart=$RESTART_AT)"
+fi
+assert_eq "platform macros are applied before klipper restarts" "before" "$ORDER"
+
+if [ -n "$SOURCE_AT" ] && [ -n "$APPLY_AT" ] && [ "$SOURCE_AT" -lt "$APPLY_AT" ]; then
+    SRC_ORDER=before
+else
+    SRC_ORDER="after (source=$SOURCE_AT apply=$APPLY_AT)"
+fi
+assert_eq "init_lib.sh is sourced before the call" "before" "$SRC_ORDER"
+
+# The function it reaches for must be the one this file already exercises.
+assert_contains "init_lib.sh defines apply_platform_macros" \
+    "$(cat "$INIT_LIB")" "apply_platform_macros()"
+
 # --- provide_host_bash: AD5X /bin/bash provider ------------------------------
 # The AD5X host has no /bin/bash; provide_host_bash builds a faithful /bin
 # superset (a copy of /bin plus the host-bin/bash trampoline) and binds it over

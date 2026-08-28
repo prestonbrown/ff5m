@@ -271,6 +271,17 @@ fi
 
 sync
 
+## Klipper is about to be restarted against whatever macros/ now holds, and the
+## archive ships the committed defaults - macros/hw_base.cfg is the AD5M
+## variant. Normally only the boot path copies the .$PLATFORM overrides over
+## them, so a sync that restarts without rebooting would hand klippy the AD5M
+## [temperature_sensor weightValue] on an AD5X that has no load-cell sensor,
+## and klippy would halt. Call the same function the boot path calls rather
+## than restating the rule; it is a no-op on the AD5M, which ships no overrides.
+# shellcheck disable=SC1090,SC1091
+. "$MOD_ROOT/.shell/init_lib.sh"
+apply_platform_macros
+
 if [ "$CHANGED" -eq 1 ]; then
     date -u +%Y-%m-%dT%H:%M:%SZ > "$MOD_ROOT/patch.txt"
     cp -f "$MOD_ROOT/patch.txt" /tmp/version_patch
