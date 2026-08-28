@@ -34,6 +34,10 @@ fi
 ##   install    inject the hook into stock app_startup.sh (idempotent, reversible)
 ##   uninstall  remove the hook / restore the .orig backup (idempotent)
 ##   run        (default) the ordered headless bring-up; --dry-run prints the plan
+##
+## The bring-up is bounded by a watchdog (AD5X_BRINGUP_LIMIT, default 180s): it
+## runs inside stock app_startup.sh, so an unbounded hang here takes the whole
+## printer down with no screen and no network. See watchdog_arm().
 
 # Resolve our own directory so the sibling descriptor/lib scripts are found both
 # on-device (executed) and when the test suite sources this file (bash only).
@@ -190,6 +194,53 @@ failsafe_arm() {
     : > "$BOOT_FAILURE_F"
 }
 
+# ---------------------------------------------------------------------------
+# watchdog - bound the bring-up so it can never wedge the boot
+# ---------------------------------------------------------------------------
+#
+# Steps 2-8 run SYNCHRONOUSLY inside stock app_startup.sh: the hook is injected
+# ahead of the stock klipper launch precisely so patches land first. That
+# ordering is worth keeping, but it means any single hang in the bring-up stops
+# the entire printer - no UI past "Initializing...", no Moonraker, and no
+# dropbear either, since that is a mod service too. The machine is then only
+# recoverable over USB.
+#
+# The BOOT_FLAG_FAILURE failsafe does not cover this: it is only consulted on
+# the NEXT boot, and it is armed after the bash trampoline and four library
+# sources, so anything that hangs earlier is never caught by it at all.
+#
+# So: arm a timer that kills us if the bring-up overruns. A timeout leaves
+# BOOT_FLAG_FAILURE set (only a completed run clears it), so the next boot
+# stands the mod down by itself and comes up clean stock.
+BRINGUP_LIMIT="${AD5X_BRINGUP_LIMIT:-180}"
+WATCHDOG_PID=""
+
+watchdog_arm() {
+    [ "$BRINGUP_LIMIT" -gt 0 ] 2>/dev/null || return 0
+    _target=$$
+    (
+        _n=0
+        while [ "$_n" -lt "$BRINGUP_LIMIT" ]; do
+            kill -0 "$_target" 2>/dev/null || exit 0
+            sleep 1
+            _n=$((_n + 1))
+        done
+        echo "@@ [ad5x] bring-up exceeded ${BRINGUP_LIMIT}s - aborting so the" \
+             "printer can finish booting. BOOT_FLAG_FAILURE stays set, so the" \
+             "next boot runs stock." >&2
+        kill -TERM "$_target" 2>/dev/null
+        sleep 2
+        kill -KILL "$_target" 2>/dev/null
+    ) &
+    WATCHDOG_PID=$!
+}
+
+watchdog_disarm() {
+    [ -n "$WATCHDOG_PID" ] || return 0
+    kill "$WATCHDOG_PID" 2>/dev/null
+    WATCHDOG_PID=""
+}
+
 failsafe_disarm() {
     rm -f "$BOOT_FAILURE_F"
 }
@@ -241,6 +292,7 @@ run_bootstrap() {
         return 0
     fi
     failsafe_arm
+    watchdog_arm
 
     # Step 2. Preconditions no installer set up on the AD5X.
     echo "// [ad5x] Establishing preconditions..."
@@ -296,6 +348,7 @@ run_bootstrap() {
     echo "// [ad5x] Applying klipper patches..."
     if ! apply_klipper_patches; then
         echo "@@ [ad5x] Failed to apply klipper patches." >&2
+        watchdog_disarm
         return 1
     fi
 
@@ -322,7 +375,9 @@ run_bootstrap() {
     echo "// [ad5x] Starting Buildroot services..."
     chroot "$MOD" /opt/config/mod/.root/start.sh
 
-    # Bring-up completed: clear the failure flag so the next boot re-arms the mod.
+    # Bring-up completed: stand the watchdog down, then clear the failure flag
+    # so the next boot re-arms the mod.
+    watchdog_disarm
     failsafe_disarm
 
     # Step 9. Done: klippy (Step 7) and the chroot services (Step 8) are up. Stock

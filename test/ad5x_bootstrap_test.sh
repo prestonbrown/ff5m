@@ -21,7 +21,49 @@ assert_file "bootstrap script exists" "$BOOTSTRAP"
 BASH_BIN=$(command -v bash 2>/dev/null)
 if [ -z "$BASH_BIN" ]; then
     echo "ok     bash not installed, skipping ad5x_bootstrap tests"
-    finish
+    # --- bring-up watchdog ------------------------------------------------------
+#
+# The bring-up runs synchronously inside stock app_startup.sh, so an unbounded
+# hang takes the whole printer down. The watchdog must actually fire, and must
+# actually stand down when the run completes - a watchdog that never fires and
+# one that always fires are both silent failures.
+
+# Arm a 2s watchdog, then hang for 30s. Should die in ~2-4s, not 30.
+_wd_start=$(date +%s)
+AD5X_BRINGUP_LIMIT=2 "$BASH_BIN" -c '
+    . "$1"
+    watchdog_arm
+    sleep 30
+' _ "$BOOTSTRAP" >/dev/null 2>&1
+_wd_elapsed=$(( $(date +%s) - _wd_start ))
+if [ "$_wd_elapsed" -lt 10 ]; then
+    _t_pass "watchdog kills a bring-up that overruns its limit (${_wd_elapsed}s)"
+else
+    _t_fail "watchdog kills a bring-up that overruns its limit" \
+            "still alive after ${_wd_elapsed}s"
+fi
+
+# Disarmed watchdog must NOT kill a run that finished inside the limit.
+_wd_out=$(AD5X_BRINGUP_LIMIT=2 "$BASH_BIN" -c '
+    . "$1"
+    watchdog_arm
+    watchdog_disarm
+    sleep 4
+    echo SURVIVED
+' _ "$BOOTSTRAP" 2>/dev/null)
+assert_contains "disarmed watchdog does not kill a completed bring-up" \
+    "$_wd_out" "SURVIVED"
+
+# A limit of 0 disables the watchdog entirely (escape hatch).
+_wd_out=$(AD5X_BRINGUP_LIMIT=0 "$BASH_BIN" -c '
+    . "$1"
+    watchdog_arm
+    sleep 3
+    echo SURVIVED
+' _ "$BOOTSTRAP" 2>/dev/null)
+assert_contains "AD5X_BRINGUP_LIMIT=0 disables the watchdog" "$_wd_out" "SURVIVED"
+
+finish
 fi
 
 WORK=$(mktemp -d)
@@ -255,5 +297,47 @@ case "$evc" in
     *)                              _t_pass "numeric value is not over-quoted" ;;
 esac
 rm -rf "$EV"
+
+# --- bring-up watchdog ------------------------------------------------------
+#
+# The bring-up runs synchronously inside stock app_startup.sh, so an unbounded
+# hang takes the whole printer down. The watchdog must actually fire, and must
+# actually stand down when the run completes - a watchdog that never fires and
+# one that always fires are both silent failures.
+
+# Arm a 2s watchdog, then hang for 30s. Should die in ~2-4s, not 30.
+_wd_start=$(date +%s)
+AD5X_BRINGUP_LIMIT=2 "$BASH_BIN" -c '
+    . "$1"
+    watchdog_arm
+    sleep 30
+' _ "$BOOTSTRAP" >/dev/null 2>&1
+_wd_elapsed=$(( $(date +%s) - _wd_start ))
+if [ "$_wd_elapsed" -lt 10 ]; then
+    _t_pass "watchdog kills a bring-up that overruns its limit (${_wd_elapsed}s)"
+else
+    _t_fail "watchdog kills a bring-up that overruns its limit" \
+            "still alive after ${_wd_elapsed}s"
+fi
+
+# Disarmed watchdog must NOT kill a run that finished inside the limit.
+_wd_out=$(AD5X_BRINGUP_LIMIT=2 "$BASH_BIN" -c '
+    . "$1"
+    watchdog_arm
+    watchdog_disarm
+    sleep 4
+    echo SURVIVED
+' _ "$BOOTSTRAP" 2>/dev/null)
+assert_contains "disarmed watchdog does not kill a completed bring-up" \
+    "$_wd_out" "SURVIVED"
+
+# A limit of 0 disables the watchdog entirely (escape hatch).
+_wd_out=$(AD5X_BRINGUP_LIMIT=0 "$BASH_BIN" -c '
+    . "$1"
+    watchdog_arm
+    sleep 3
+    echo SURVIVED
+' _ "$BOOTSTRAP" 2>/dev/null)
+assert_contains "AD5X_BRINGUP_LIMIT=0 disables the watchdog" "$_wd_out" "SURVIVED"
 
 finish
