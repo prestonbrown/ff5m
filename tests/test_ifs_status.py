@@ -8,16 +8,12 @@
 ##
 ## This file may be distributed under the terms of the GNU GPLv3 license
 
-import importlib.util
-import pathlib
 import unittest
 
 
-MODULE_PATH = (pathlib.Path(__file__).parents[1] / ".py" / "klipper" /
-               "plugins" / "ifs_status.py")
-SPEC = importlib.util.spec_from_file_location("ifs_status", MODULE_PATH)
-S = importlib.util.module_from_spec(SPEC)
-SPEC.loader.exec_module(S)
+import ifs_modules
+
+S = ifs_modules.load("ifs_status")
 
 
 ## A full F13 reply as the firmware formats it: channel 2 loading, filament in

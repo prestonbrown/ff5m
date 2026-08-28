@@ -9,29 +9,14 @@
 ##
 ## This file may be distributed under the terms of the GNU GPLv3 license
 
-import importlib.util
-import pathlib
-import sys
 import unittest
 
-
-PLUGIN_DIR = (pathlib.Path(__file__).parents[1] / ".py" / "klipper" /
-              "plugins")
-sys.path.insert(0, str(PLUGIN_DIR))
+import ifs_modules
 
 
-def _load(name):
-    spec = importlib.util.spec_from_file_location(
-        name, PLUGIN_DIR / (name + ".py"))
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[name] = module
-    spec.loader.exec_module(module)
-    return module
-
-
-STATUS = _load("ifs_status")
-LINK = _load("ifs_link")
-OPS = _load("ifs_operations")
+STATUS = ifs_modules.load("ifs_status")
+LINK = ifs_modules.load("ifs_link")
+OPS = ifs_modules.load("ifs_operations")
 
 
 STATUS_LINE = ("FFS_state: 5 silk_state: 3 chan: 0 ffs_channels_insert: 0 "

@@ -159,6 +159,9 @@ def split_response(line):
 
 
 def _default_serial_factory():
+    ## Imported here rather than at module scope so this module stays importable
+    ## without pyserial. Every test drives it through an injected factory, and
+    ## the klipper object is the only caller that reaches a real port.
     import serial
 
     return serial.Serial(

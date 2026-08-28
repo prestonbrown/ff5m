@@ -17,7 +17,7 @@
 ##
 ## This file may be distributed under the terms of the GNU GPLv3 license
 
-import ifs_status
+from . import ifs_status
 
 
 class IfsOperationError(Exception):
@@ -54,7 +54,7 @@ class IfsOperations(object):
         """Channels this board has, probed if the link managed to ask."""
         if self._channel_count is not None:
             return self._channel_count
-        capabilities = getattr(self._link, "capabilities", None)
+        capabilities = self._link.capabilities
         if capabilities is not None:
             return capabilities.channel_count
         return ifs_status.MAX_CHANNELS
@@ -123,7 +123,7 @@ class IfsOperations(object):
 
     def capabilities(self):
         """What the board reported about itself, or None if it never said."""
-        return getattr(self._link, "capabilities", None)
+        return self._link.capabilities
 
     ## -- plumbing -----------------------------------------------------------
 

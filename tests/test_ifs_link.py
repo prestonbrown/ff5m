@@ -9,16 +9,12 @@
 ##
 ## This file may be distributed under the terms of the GNU GPLv3 license
 
-import importlib.util
-import pathlib
 import unittest
 
 
-MODULE_PATH = (pathlib.Path(__file__).parents[1] / ".py" / "klipper" /
-               "plugins" / "ifs_link.py")
-SPEC = importlib.util.spec_from_file_location("ifs_link", MODULE_PATH)
-IFS = importlib.util.module_from_spec(SPEC)
-SPEC.loader.exec_module(IFS)
+import ifs_modules
+
+IFS = ifs_modules.load("ifs_link")
 
 
 PROBE_REPLY = "F19 ok. four color. version: 3.0.6 "
