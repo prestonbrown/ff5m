@@ -2,8 +2,8 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Generate the AD5X flash-time framebuffer status frames.
 
-The AD5X touch panel is portrait 480x800 at 32 bits/pixel. A raw framebuffer
-dump is therefore exactly 480 * 800 * 4 = 1,536,000 bytes. The flash-time
+The AD5X touch panel is landscape 800x480 at 32 bits/pixel. A raw framebuffer
+dump is therefore exactly 800 * 480 * 4 = 1,536,000 bytes. The flash-time
 installer paints one of these to the panel with:
 
     xzcat img/<name>.raw.xz > /dev/fb0
@@ -28,15 +28,30 @@ import os
 import sys
 
 # --- Panel format ------------------------------------------------------------
-WIDTH = 480
-HEIGHT = 800
+#
+# 800x480 LANDSCAPE, the same panel geometry as the AD5M. This was previously
+# 480x800 portrait, which is why every shipped frame rendered sheared: both
+# geometries are exactly 1,536,000 bytes at 32bpp, so the write to /dev/fb0
+# succeeds and the picture scrambles instead of failing loudly.
+#
+# Confirmed against ZMOD's own AD5X assets, which are the same byte count and
+# only resolve to clean rows at width 800, and against ZMOD's framebuffer
+# screenshot path, which reads /dev/fb0 as `-pix_fmt bgra -video_size 800x480`.
+# Forge-X's typer hardcodes the same (`.bin/src/typer/main.cpp`: WIDTH 800,
+# HEIGHT 480) and addresses pixels flat, so the panel's line_length is exactly
+# width*4 = 3200 with no row padding.
+WIDTH = 800
+HEIGHT = 480
 BYTES_PER_PIXEL = 4
 EXPECTED_SIZE = WIDTH * HEIGHT * BYTES_PER_PIXEL  # 1,536,000
 
-# Byte order written per pixel. Common FlashForge/Allwinner panels are 32bpp
-# little-endian, which in memory is byte order B,G,R,A (i.e. 0xAARRGGBB stored
-# little-endian). If red and blue look swapped on the printer, change this to
-# "RGBA" and regenerate -- it is the only line that needs to change.
+# Byte order written per pixel: 32bpp little-endian 0xAARRGGBB, which in memory
+# is B,G,R,A. Verified against the shipped Forge-X and ZMOD assets -- Forge-X's
+# accent cyan #00f0f0 appears as bytes f0 f0 00 ff, and ZMOD's error screen red
+# #f00a10 as 10 0a f0 ff. Both decode correctly only as BGRA. This matches the
+# documented conversion recipe in Forge-X's docs/SCREEN.md:
+#     convert -size 800x480 xc:none in.png -geometry +0+0 -composite \
+#             -depth 8 bgra:- | xz -c > out.img.xz
 CHANNEL_ORDER = "BGRA"
 
 # Source channel index for each letter, so CHANNEL_ORDER alone drives byte order.
@@ -58,7 +73,7 @@ FRAMES = [
         "name": "forgex-complete",
         "bg": (40, 158, 74),      # green
         "title": "Complete",
-        "subtitle": "Rebooting...",
+        "subtitle": "Remove USB, then power cycle",
     },
     {
         "name": "forgex-error",
@@ -118,7 +133,7 @@ def render_rgba_stdlib(frame: dict) -> bytes:
 
     Produces a distinguishable frame using only the standard library: a solid
     background, a full-width horizontal band, and a bordered box centered on
-    the panel. Still a valid 480x800 RGBA buffer.
+    the panel. Still a valid 800x480 RGBA buffer.
     """
     r, g, b = frame["bg"]
     buf = bytearray(bytes((r, g, b, 255)) * (WIDTH * HEIGHT))
