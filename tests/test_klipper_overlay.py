@@ -508,6 +508,32 @@ class KlipperOverlayTest(unittest.TestCase):
                 "STOCK = True\n")
 
 
+    def test_overlay_teardown_has_exactly_one_implementation(self):
+        # uninstall.sh used to carry its own revert_klipper_patches(), and the
+        # two had drifted: that copy walked the SOURCE tree, so it only removed
+        # plugins whose source file still existed and only restored patches with
+        # a .bak. Anything whose source had been deleted was left as a dangling
+        # symlink into a tree about to disappear - which is precisely what stops
+        # stock klippy starting. One rule, one implementation.
+        shell = ROOT / ".shell"
+        definers = sorted(
+            path.relative_to(ROOT).as_posix()
+            for path in shell.rglob("*")
+            if path.is_file()
+            and "revert_klipper_patches()" in path.read_text(
+                encoding="utf-8", errors="ignore")
+        )
+        self.assertEqual(
+            definers, ["\u002eshell/klipper_overlay.sh".replace("\u002e", "."),],
+            "revert_klipper_patches() must be defined only in klipper_overlay.sh; "
+            "found in: %s" % definers)
+
+    def test_uninstall_sources_the_shared_overlay_module(self):
+        text = (ROOT / ".shell" / "uninstall.sh").read_text(encoding="utf-8")
+        self.assertIn("klipper_overlay.sh", text)
+        self.assertIn("revert_klipper_patches", text)
+
+
 
 class McuTuningTest(unittest.TestCase):
     @classmethod

@@ -8,35 +8,21 @@
 
 source /opt/config/mod/.shell/common.sh
 
-revert_klipper_patches() {
-    local SRC_DIR="/opt/config/mod/.py/klipper"
-    local TARGET_DIR="$KLIPPER_DIR/klippy"
-    
-    # Klipper extensions
-    echo "Remove klipper plugins: "
-    echo $SRC_DIR/plugins/*
-    echo
-    
-    find $SRC_DIR/plugins/ -type f | while read -r file; do
-        local rel_file=${file#"$SRC_DIR/plugins/"}
-        
-        rm -f "$TARGET_DIR/extras/$rel_file"
-        
-        echo "?? Removed \"$rel_file\""
-    done
-    
-    # Klipper patches
-    find $SRC_DIR/patches -type f | while read -r file; do
-        local rel_file=${file#"$SRC_DIR/patches/"}
-        local target="$TARGET_DIR/$rel_file"
-        
-        if [ -f "$target.bak" ]; then
-            mv -f "$target.bak" "$target"
-            echo "?? Restored \"$target\""
-        fi
-    done
+## Klipper overlay teardown comes from klipper_overlay.sh, which owns the rule.
+## This file used to carry its own copy, and the two had drifted: this one walked
+## the SOURCE tree and so only removed plugins whose source file still existed,
+## and only restored patches that had a .bak. Anything whose source had since been
+## deleted was left behind as a dangling symlink into a tree that is about to go
+## away - the exact leftover that stops stock klippy starting. The shared
+## klipper_overlay_remove_all() walks the TARGET tree instead, so it cannot miss
+## those, and it is covered by tests.
+## shellcheck source=/dev/null
+source /opt/config/mod/.shell/klipper_overlay.sh
 
-    # Klipper tunning
+revert_klipper_patches_and_tuning() {
+    revert_klipper_patches || return 1
+
+    # Klipper tunning - not the overlay's business, so it stays here.
     "$CMDS"/ztune_klipper.sh 0
 }
 
@@ -82,7 +68,7 @@ uninstall() {
     
     echo "// Restore klipper..."
     
-    revert_klipper_patches
+    revert_klipper_patches_and_tuning
     
     echo "// Remove mod..."
     
