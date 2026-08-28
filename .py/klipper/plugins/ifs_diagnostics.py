@@ -246,17 +246,40 @@ class IfsDiagnostics(object):
     def is_healthy(self):
         return not self.faults
 
+    ## Observed with silk_state 11 (channels 1, 2 and 4 loaded, 3 empty):
+    ##     silk: 200 328 1689 275
+    ## The three loaded channels read 200-330 and the empty one 1689, so a LOW
+    ## raw value means filament PRESENT. Only one empty channel has been seen,
+    ## so treat the polarity as strongly indicated rather than proven - but do
+    ## not assume the intuitive direction, because it is backwards.
+    SILK_LOADED_TYPICAL = 330
+    SILK_EMPTY_TYPICAL = 1689
+
     def marginal_channels(self, low, high):
         """Channels whose raw silk reading sits between two thresholds.
 
         The reason F21 is worth reading at all: F13 and F14 report filament
         presence as one bit per channel, so a channel that is barely triggering
         looks identical to a solid one right up until it fails mid-print. The
-        raw value shows it coming.
+        raw value shows it coming - a loaded channel drifting UP toward the
+        empty value is the failure about to happen.
         """
         if not self.silk_raw:
             return []
         return [i + 1 for i, v in enumerate(self.silk_raw) if low <= v <= high]
+
+    def loaded_by_raw(self, threshold=None):
+        """Channels the RAW silk reading says are loaded. Low means present.
+
+        A cross-check on `F13`'s bitmask: the two disagreeing means a channel is
+        sitting near whatever threshold the board applies internally, which is
+        the interesting case and is invisible in `F13` alone.
+        """
+        if not self.silk_raw:
+            return []
+        if threshold is None:
+            threshold = (self.SILK_LOADED_TYPICAL + self.SILK_EMPTY_TYPICAL) // 2
+        return [i + 1 for i, v in enumerate(self.silk_raw) if v <= threshold]
 
     def as_dict(self):
         return {

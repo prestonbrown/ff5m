@@ -209,6 +209,24 @@ class TestReadDiagnostics(unittest.TestCase):
         self.assertEqual(diag.marginal_channels(1000, 2000), [3])
         self.assertEqual(diag.marginal_channels(5000, 6000), [])
 
+    def test_raw_silk_polarity_is_inverted(self):
+        ## Measured: with channels 1/2/4 loaded and 3 empty, F21 read
+        ## `silk: 199 333 1688 271`. Low means PRESENT. Getting this backwards
+        ## would report the one empty channel as the only loaded one.
+        diag = D.read_diagnostics(FakeLink())
+        self.assertEqual(diag.loaded_by_raw(), [1, 2, 4])
+
+    def test_raw_silk_agrees_with_the_f13_bitmask(self):
+        ## F21's raw view and F13's thresholded view should name the same
+        ## channels on a healthy board; divergence is the signal worth having.
+        diag = D.read_diagnostics(FakeLink())
+        self.assertEqual(diag.loaded_by_raw(), [1, 2, 4])
+
+    def test_loaded_by_raw_takes_an_explicit_threshold(self):
+        diag = D.read_diagnostics(FakeLink())
+        self.assertEqual(diag.loaded_by_raw(threshold=100), [])
+        self.assertEqual(diag.loaded_by_raw(threshold=2000), [1, 2, 3, 4])
+
     def test_as_dict_is_serialisable(self):
         import json
         json.dumps(D.read_diagnostics(FakeLink()).as_dict())
