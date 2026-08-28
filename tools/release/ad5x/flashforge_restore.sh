@@ -34,6 +34,9 @@ FF_DATA_MNT="${FF_DATA_MNT:-/usr/data}"
 FF_FB="${FF_FB:-/dev/fb0}"
 KLIPPER_DIR="${FF_KLIPPER_DIR:-/usr/prog/klipper}"
 MOD_ROOT_DIR="$FF_DATA_MNT/config/mod"
+CONFIG_DIR="$FF_DATA_MNT/config"
+MOD_DATA_DIR="$FF_DATA_MNT/config/mod_data"
+APP_STARTUP="${FF_APP_STARTUP:-/usr/prog/app_startup.sh}"
 BOOTSTRAP_SH="$MOD_ROOT_DIR/.shell/ad5x_bootstrap.sh"
 WORK_DIR=$(dirname "$0")
 STAMP="$(date '+%Y%m%d-%H%M%S' 2>/dev/null || echo unknown)-$$"
@@ -118,6 +121,10 @@ say "  .bak backups found: $(find "$KLIPPER_DIR" -name '*.bak' 2>/dev/null | wc 
 # compat tree and logFiles/ is the AD5M path; keep both, but they are not where
 # a stock-only boot writes.
 for _log in \
+    "$MOD_DATA_DIR"/log/ad5x_bootstrap.log \
+    "$MOD_DATA_DIR"/log/ad5x_bootstrap.log.1 \
+    "$MOD_DATA_DIR"/log/ad5x_bootstrap.log.2 \
+    "$MOD_DATA_DIR"/log/*.log \
     "$FF_DATA_MNT"/logs/printer.log \
     "$FF_DATA_MNT"/logs/*.log \
     "$FF_DATA_MNT"/printer_data/logs/*.log \
@@ -141,6 +148,24 @@ done
 # /opt/config/printer.cfg, which is the same directory once Step 2 binds
 # $DATA_MNT onto /opt. An earlier probe list guessed printer_data/config and
 # found nothing - that was the probe being wrong, not the config being absent.
+# The bring-up log in full - it is short, and the LAST line is the answer.
+if [ -f "$MOD_DATA_DIR/log/ad5x_bootstrap.log" ]; then
+    note ""; note "===== FULL BRING-UP LOG ====="
+    cat "$MOD_DATA_DIR/log/ad5x_bootstrap.log" >> "$REPORT" 2>/dev/null
+    say "  *** bring-up log captured: $(wc -l < "$MOD_DATA_DIR/log/ad5x_bootstrap.log" 2>/dev/null) lines"
+    say "  *** last line: $(tail -1 "$MOD_DATA_DIR/log/ad5x_bootstrap.log" 2>/dev/null)"
+else
+    say "  !! no bring-up log at $MOD_DATA_DIR/log/ad5x_bootstrap.log"
+fi
+
+note ""; note "===== app_startup.sh hook state ====="
+grep -n 'forge-x' "$APP_STARTUP" >> "$REPORT" 2>&1
+for _f in "$APP_STARTUP" "$APP_STARTUP.orig"; do
+    [ -f "$_f" ] || continue
+    note "--- $_f ($(wc -c < "$_f") bytes) ---"
+    for _d in $OUT_DIRS; do cp "$_f" "$_d/$(basename "$_f")" 2>/dev/null; done
+done
+
 note ""; note "===== printer.cfg candidates ====="
 for _c in "$FF_DATA_MNT"/config/printer.cfg "$FF_DATA_MNT"/config/printer.base.cfg \
           /opt/config/printer.cfg "$FF_DATA_MNT"/printer_data/config/printer.cfg; do
@@ -208,17 +233,93 @@ sync
 # --------------------------------------------------------------------------
 say ""
 say "[ad5x-restore] 2. CONFIG"
-_cfg_done=no
-_c="$FF_DATA_MNT/config/printer.cfg"
-for _b in "$_c.bak" "$_c.orig" "$_c.backup"; do
-    if [ -f "$_b" ] && [ ! -L "$_b" ]; then
-        # Keep what the mod left, so a wrong guess here is still reversible.
-        cp "$_c" "$_c.forgex-was" 2>/dev/null
-        cp "$_b" "$_c" 2>/dev/null && say "  restored $_c from $(basename "$_b")" && _cfg_done=yes
-        break
+
+# Reverting the klipper OVERLAY does not revert the CONFIG, and fix_config
+# (bring-up Step 6) rewrites printer.cfg with mod includes that resolve only
+# under the mod's /opt bind. Stock klippy then cannot parse its own config,
+# exits, and the stock UI sits on "Initializing..." forever - indistinguishable
+# from the overlay failure, and not fixed by undoing the overlay alone.
+#
+# Only touch a config that is actually mod-flavoured: a stock-loadable file must
+# be left exactly as it is, because the user's own tuning lives in it.
+cfg_is_mod_flavoured() {
+    grep -q -e '/opt/config/mod' -e 'mod/\.cfg' -e 'mod_data' "$1" 2>/dev/null
+}
+
+restore_cfg() {
+    _live="$1"; _ship="$2"; _label="$(basename "$_live")"
+
+    if [ ! -f "$_live" ]; then
+        say "  $_label: absent, nothing to restore"
+        return 0
     fi
-done
-[ "$_cfg_done" = yes ] || say "  no printer.cfg backup found; left as-is (see captured copy)"
+    if ! cfg_is_mod_flavoured "$_live"; then
+        say "  $_label: already stock-loadable (no mod references); left alone"
+        return 0
+    fi
+    say "  $_label: contains mod references - stock klippy cannot load it"
+
+    # Keep what the mod left, so a wrong guess here is still reversible.
+    cp "$_live" "$_live.forgex-was" 2>/dev/null
+
+    # Ordered candidates. The feather-before-headless name is what the display
+    # switch leaves behind, and on this printer it is often the only backup.
+    for _b in "$_live.bak" "$_live.orig" "$_live.backup" \
+              "$_live.feather-before-headless.bak" \
+              "$_live".*.bak; do
+        [ -f "$_b" ] || continue
+        [ -L "$_b" ] && continue
+        case "$_b" in *.forgex-was) continue ;; esac
+        if cfg_is_mod_flavoured "$_b"; then
+            say "    skip $(basename "$_b"): also mod-flavoured"
+            continue
+        fi
+        cp "$_b" "$_live" 2>/dev/null \
+            && say "    restored from $(basename "$_b")" && return 0
+    done
+
+    # Last resort: the pristine copy shipped on this stick, straight out of the
+    # FlashForge factory image. Only reached when no usable backup exists.
+    if [ -n "$_ship" ] && [ -f "$_ship" ]; then
+        cp "$_ship" "$_live" 2>/dev/null \
+            && say "    restored from the FACTORY copy shipped on this stick" \
+            && return 0
+    fi
+
+    say "    !! no usable backup and no shipped copy; left as-is"
+    return 1
+}
+
+restore_cfg "$CONFIG_DIR/printer.cfg"      "$WORK_DIR/cfg/printer.cfg"
+restore_cfg "$CONFIG_DIR/printer.base.cfg" "$WORK_DIR/cfg/printer.base.cfg"
+sync
+
+# --------------------------------------------------------------------------
+# 2b. APP_STARTUP - take the hook out of the stock file entirely.
+#
+# Leaving the bootstrap non-executable already neuters the hook (it is guarded
+# by `[ -x ... ]`), but restoring the pristine .orig removes any doubt and puts
+# the stock file back byte-for-byte.
+# --------------------------------------------------------------------------
+say ""
+say "[ad5x-restore] 2b. APP_STARTUP"
+if [ -f "$APP_STARTUP.orig" ]; then
+    cp "$APP_STARTUP" "$APP_STARTUP.forgex-was" 2>/dev/null
+    if cat "$APP_STARTUP.orig" > "$APP_STARTUP" 2>/dev/null; then
+        rm -f "$APP_STARTUP.orig"
+        say "  restored $APP_STARTUP from .orig ($(wc -c < "$APP_STARTUP") bytes)"
+    else
+        say "  !! could not restore $APP_STARTUP from .orig"
+    fi
+elif grep -q 'forge-x' "$APP_STARTUP" 2>/dev/null; then
+    # No .orig: strip exactly the sentinel-marked line.
+    grep -v 'forge-x' "$APP_STARTUP" > "$APP_STARTUP.tmp" 2>/dev/null \
+        && cat "$APP_STARTUP.tmp" > "$APP_STARTUP" 2>/dev/null \
+        && rm -f "$APP_STARTUP.tmp" \
+        && say "  stripped the hook line from $APP_STARTUP"
+else
+    say "  no hook present; nothing to do"
+fi
 sync
 
 # --------------------------------------------------------------------------
