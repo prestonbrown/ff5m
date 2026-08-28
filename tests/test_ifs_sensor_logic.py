@@ -88,6 +88,70 @@ class TestZmodCompatibility(unittest.TestCase):
             self.assertEqual(s.has_filament(v), zmod(v), "adc=%.2f" % v)
 
 
+class TestMeasuredAD5X(unittest.TestCase):
+    """Readings taken on the rig, twice, in both directions."""
+
+    ENGAGED = (0.0081, 0.0075, 0.0082, 0.008089)
+    DISENGAGED = (0.0249, 0.0432, 0.0484, 0.053205)
+
+    def test_engaged_readings_are_present(self):
+        s = L.AnalogFilamentSensor.for_ad5x()
+        for v in self.ENGAGED:
+            self.assertEqual(s.classify(v), L.PRESENT, "adc=%s" % v)
+            self.assertTrue(s.has_filament(v), "adc=%s" % v)
+
+    def test_disengaged_readings_are_absent(self):
+        s = L.AnalogFilamentSensor.for_ad5x()
+        for v in self.DISENGAGED:
+            self.assertEqual(s.classify(v), L.ABSENT, "adc=%s" % v)
+            self.assertFalse(s.has_filament(v), "adc=%s" % v)
+
+    def test_the_two_clusters_do_not_touch(self):
+        ## The thresholds must sit strictly between the measured groups, or the
+        ## sensor is being asked to resolve something it did not measure.
+        self.assertLess(max(self.ENGAGED), L.AD5X_PRESENT_MAX)
+        self.assertGreater(min(self.DISENGAGED), L.AD5X_ABSENT_MIN)
+        self.assertLess(L.AD5X_PRESENT_MAX, L.AD5X_ABSENT_MIN)
+
+    def test_the_gap_between_clusters_is_a_fault(self):
+        ## Nothing was ever observed here. A reading in the gap means a
+        ## half-inserted strand or a failing sensor, not a clean state.
+        s = L.AnalogFilamentSensor.for_ad5x()
+        self.assertEqual(s.classify(0.017), L.FAULT)
+        self.assertTrue(s.has_filament(0.017))   # fail-safe: no false runout
+
+    def test_polarity_is_inverted(self):
+        ## Low means PRESENT. Getting this backwards inverts every runout.
+        s = L.AnalogFilamentSensor.for_ad5x()
+        self.assertTrue(s.has_filament(0.008))
+        self.assertFalse(s.has_filament(0.048))
+
+
+class TestZmodCannotDetectRunout(unittest.TestCase):
+    """The finding this whole exercise produced, pinned as a test."""
+
+    def test_zmod_reports_present_in_every_measured_state(self):
+        ## Every reading on this printer is below 0.055, so zmod's rule takes
+        ## its `else True` branch always - loaded, empty, or disconnected.
+        z = L.AnalogFilamentSensor.zmod()
+        for v in (TestMeasuredAD5X.ENGAGED + TestMeasuredAD5X.DISENGAGED):
+            self.assertTrue(z.has_filament(v), "adc=%s" % v)
+
+    def test_the_two_configurations_disagree_where_it_matters(self):
+        ad5x = L.AnalogFilamentSensor.for_ad5x()
+        zmod = L.AnalogFilamentSensor.zmod()
+        empty = 0.0432
+        self.assertFalse(ad5x.has_filament(empty))
+        self.assertTrue(zmod.has_filament(empty))
+
+    def test_zmod_would_need_a_reading_it_never_sees(self):
+        ## For zmod's rule to report a runout the sensor would have to land
+        ## between 0.30 and 0.72. The measured range tops out near 0.05.
+        z = L.AnalogFilamentSensor.zmod()
+        self.assertFalse(z.has_filament(0.5))
+        self.assertGreater(L.ZMOD_LOW, max(TestMeasuredAD5X.DISENGAGED) * 5)
+
+
 class TestFailSafe(unittest.TestCase):
     def test_an_unreadable_sensor_does_not_cause_a_runout(self):
         ## A broken wire must not pause a running print.

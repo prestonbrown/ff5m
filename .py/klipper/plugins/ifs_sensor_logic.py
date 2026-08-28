@@ -29,36 +29,67 @@ PRESENT = "present"
 ABSENT = "absent"
 FAULT = "fault"
 
-## ZMOD's numbers, from `value >= 0.72 if value > 0.3 else True`. Its low branch
-## returns "filament present", which on this printer is what an EMPTY toolhead
-## reads - see docs. Kept as the compatibility default and nothing more; the
-## thresholds are constructor arguments precisely so a measured set can replace
-## them without touching logic.
+## ZMOD's numbers, from `value >= 0.72 if value > 0.3 else True`.
 ZMOD_LOW = 0.30
 ZMOD_HIGH = 0.72
+
+## MEASURED on an AD5X toolhead, twice, in both directions:
+##
+##     filament engaged in the sensor   0.0075 - 0.0082
+##     no filament, resting at the gear 0.025  - 0.049
+##
+## So a LOW value means filament PRESENT - the opposite of the intuitive
+## reading, and the same inversion the IFS channel sensors show. It saturates
+## within 3 mm of travel and is fully reversible.
+##
+## The consequence for ZMOD: every one of those readings is below 0.055, so its
+## rule takes the `else True` branch in every state and reports filament present
+## whether the toolhead is loaded, empty, or the sensor is disconnected. Its
+## runout detection cannot fire on this hardware. Its thresholds look chosen for
+## a sensor scaled an order of magnitude differently.
+AD5X_PRESENT_MAX = 0.015
+AD5X_ABSENT_MIN = 0.020
 
 
 class AnalogFilamentSensor(object):
     """Classifies a raw 0..1 ADC reading from the toolhead filament sensor.
 
-    Three bands, low to high: below `low` is `low_meaning`, between `low` and
-    `high` is ABSENT, at or above `high` is PRESENT.
+    Three bands, and what each MEANS is a constructor argument, because the
+    polarity is a property of the hardware. The AD5X reads low when filament is
+    present; ZMOD's thresholds assume the opposite and are an order of magnitude
+    out besides. Both shapes fit this one class:
 
-    `low_meaning` exists because what the bottom band signifies is a property of
-    the hardware, not of this code. ZMOD treats it as PRESENT. If it is instead
-    the open-circuit reading of a disconnected sensor, FAULT is correct and a
-    runout must not be inferred from it. Set it from measurement, and until
-    measured, `fail_safe` decides which way an unknown reading errs.
+        AnalogFilamentSensor.for_ad5x()   measured, low = present
+        AnalogFilamentSensor.zmod()       bug-compatible with zmod_ifs.py
+
+    The middle band is where a real sensor should never sit. On the AD5X it is
+    the gap between the two measured clusters, so a reading there means
+    something is wrong - a half-inserted strand, or a failing sensor.
     """
 
     def __init__(self, low=ZMOD_LOW, high=ZMOD_HIGH, low_meaning=PRESENT,
-                 fail_safe=True):
+                 mid_meaning=ABSENT, high_meaning=PRESENT, fail_safe=True):
         if low > high:
             raise ValueError("low threshold %r is above high %r" % (low, high))
         self.low = low
         self.high = high
         self.low_meaning = low_meaning
+        self.mid_meaning = mid_meaning
+        self.high_meaning = high_meaning
         self.fail_safe = fail_safe
+
+    @classmethod
+    def for_ad5x(cls):
+        """The measured AD5X toolhead sensor. Low is present."""
+        return cls(low=AD5X_PRESENT_MAX, high=AD5X_ABSENT_MIN,
+                   low_meaning=PRESENT, mid_meaning=FAULT,
+                   high_meaning=ABSENT)
+
+    @classmethod
+    def zmod(cls):
+        """Bug-compatible with zmod_ifs.py, which never reports a runout here."""
+        return cls(low=ZMOD_LOW, high=ZMOD_HIGH, low_meaning=PRESENT,
+                   mid_meaning=ABSENT, high_meaning=PRESENT)
 
     def classify(self, value):
         """PRESENT / ABSENT / FAULT for one reading, or FAULT for no reading."""
@@ -67,16 +98,15 @@ class AnalogFilamentSensor(object):
         if value <= self.low:
             return self.low_meaning
         if value >= self.high:
-            return PRESENT
-        return ABSENT
+            return self.high_meaning
+        return self.mid_meaning
 
     def has_filament(self, value):
         """The boolean klipper's RunoutHelper wants.
 
-        A FAULT is not a runout. With `fail_safe` set, an unreadable sensor
-        reports filament present, so a broken wire cannot pause a running print;
-        the fault is still visible through `classify()` for anything that wants
-        to surface it.
+        A FAULT is not a runout. With `fail_safe` set, an unreadable or
+        ambiguous sensor reports filament present, so a broken wire cannot pause
+        a running print; the fault stays visible through `classify()`.
         """
         state = self.classify(value)
         if state == FAULT:
@@ -84,10 +114,10 @@ class AnalogFilamentSensor(object):
         return state == PRESENT
 
     def describe(self, value):
-        return "%s (adc=%s, bands: <=%.2f %s, >=%.2f present)" % (
+        return "%s (adc=%s, <=%.3f %s, >=%.3f %s)" % (
             self.classify(value),
             "none" if value is None else "%.4f" % value,
-            self.low, self.low_meaning, self.high)
+            self.low, self.low_meaning, self.high, self.high_meaning)
 
 
 class ChannelFilamentSensor(object):
