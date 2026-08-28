@@ -178,6 +178,32 @@ klipper_overlay_clean_links() {
     done < <(find "$target_dir" -type l)
 }
 
+## Tear the overlay back down: every symlink under $target_dir that points into
+## $src_dir goes back to its .bak, or is deleted when it has no backup (those are
+## mod-only additions, so removing them restores the stock tree exactly).
+##
+## The counterpart to klipper_overlay_clean_links, which only drops links that
+## are STALE. This drops all of ours, current ones included, and it is what makes
+## a stood-down mod safe: the overlay outlives the mod that installed it, so
+## stock klippy would otherwise import patched modules whose runtime environment
+## is gone and fail to start.
+klipper_overlay_remove_all() {
+    local src_dir="$1"
+    local target_dir="$2"
+    local link source rc=0
+
+    [ -d "$target_dir" ] || return 0
+
+    while IFS= read -r link; do
+        source=$(readlink "$link") || continue
+        case "$source" in
+            "$src_dir/"*) klipper_overlay_restore_or_remove "$link" || rc=1 ;;
+        esac
+    done < <(find "$target_dir" -type l)
+
+    return "$rc"
+}
+
 klipper_overlay_link_plugins() {
     local src_dir="$1"
     local target_dir="$2"
@@ -309,5 +335,15 @@ apply_klipper_patches() {
     echo "Apply fixes..."
     "$tune_cmd" apply || return 1
 
+    sync
+}
+
+## Undo apply_klipper_patches, against the same defaults so the two can never
+## disagree about which tree they operate on.
+revert_klipper_patches() {
+    local src_dir="${KLIPPER_SRC_DIR:-/opt/config/mod/.py/klipper}"
+    local target_dir="${KLIPPER_TARGET_DIR:-$KLIPPER_DIR/klippy}"
+
+    klipper_overlay_remove_all "$src_dir" "$target_dir" || return 1
     sync
 }

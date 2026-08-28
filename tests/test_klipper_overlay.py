@@ -39,7 +39,7 @@ class OverlayTree:
         self.tune.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
         self.tune.chmod(0o755)
 
-    def run(self, uname_m=None):
+    def run(self, uname_m=None, fn="apply_klipper_patches"):
         env = dict(os.environ)
         env.update({
             "KLIPPER_SRC_DIR": str(self.source),
@@ -54,7 +54,7 @@ class OverlayTree:
             prelude = "uname() { echo %s; }; " % uname_m
         return subprocess.run(
             ["bash", "-c",
-             prelude + 'source "$1"; sync() { :; }; apply_klipper_patches',
+             prelude + 'source "$1"; sync() { :; }; ' + fn,
              "overlay-test", str(OVERLAY)],
             env=env, text=True, stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT, check=False)
@@ -432,6 +432,81 @@ class KlipperOverlayTest(unittest.TestCase):
             self.assertFalse((tree.extras / "ui" / "__init__.py").exists())
             self.assertFalse(
                 (tree.extras / "ui" / "themes" / "default.json").exists())
+
+    def test_revert_removes_every_overlay_and_restores_backups(self):
+        # revert_klipper_patches is what the boot failsafe runs when it stands
+        # the mod down. Unlike the stale-only cleanup above it must drop the
+        # CURRENT overlay too: on the AD5X the overlaid tree is stock klipper,
+        # so a link left behind makes stock klippy import a patched module whose
+        # runtime environment is gone, and the printer never finishes booting.
+        with tempfile.TemporaryDirectory() as directory:
+            tree = OverlayTree(directory)
+            tree.add_standard_overlay()
+            (tree.target / "mcu.py").write_text(
+                "STOCK = True\n", encoding="utf-8")
+            self.assertEqual(tree.run().returncode, 0)
+            self.assertTrue((tree.target / "mcu.py").is_symlink())
+            self.assertTrue((tree.extras / "top_level.py").is_symlink())
+
+            result = tree.run(fn="revert_klipper_patches")
+            self.assertEqual(result.returncode, 0, result.stdout)
+
+            # A patched stock file goes back to the stock content, not a link.
+            self.assertFalse((tree.target / "mcu.py").is_symlink())
+            self.assertEqual(
+                (tree.target / "mcu.py").read_text(encoding="utf-8"),
+                "STOCK = True\n")
+            self.assertFalse((tree.target / "mcu.py.bak").exists())
+
+            # Mod-only additions have no backup, so they are removed outright.
+            self.assertFalse((tree.extras / "top_level.py").exists())
+            self.assertFalse((tree.extras / "ui" / "__init__.py").exists())
+            self.assertFalse(
+                (tree.extras / "ui" / "themes" / "default.json").exists())
+
+            # Nothing of ours is left anywhere under the target tree.
+            remaining = [
+                path for path in tree.target.rglob("*")
+                if path.is_symlink()
+                and str(os.readlink(path)).startswith(str(tree.source))
+            ]
+            self.assertEqual(remaining, [])
+
+    def test_revert_is_idempotent_and_leaves_foreign_links_alone(self):
+        with tempfile.TemporaryDirectory() as directory:
+            tree = OverlayTree(directory)
+            tree.add_standard_overlay()
+            self.assertEqual(tree.run().returncode, 0)
+
+            # A symlink that is not ours must survive: reverting our overlay is
+            # not a licence to tidy the stock tree.
+            foreign_target = tree.root / "elsewhere.py"
+            foreign_target.write_text("EXTERNAL = True\n", encoding="utf-8")
+            foreign = tree.extras / "external.py"
+            foreign.symlink_to(foreign_target)
+
+            self.assertEqual(
+                tree.run(fn="revert_klipper_patches").returncode, 0)
+            second = tree.run(fn="revert_klipper_patches")
+            self.assertEqual(second.returncode, 0, second.stdout)
+
+            self.assertTrue(foreign.is_symlink())
+            self.assertEqual(
+                foreign.resolve().read_text(encoding="utf-8"),
+                "EXTERNAL = True\n")
+
+    def test_revert_on_a_never_overlaid_tree_is_a_no_op(self):
+        with tempfile.TemporaryDirectory() as directory:
+            tree = OverlayTree(directory)
+            (tree.target / "mcu.py").write_text(
+                "STOCK = True\n", encoding="utf-8")
+
+            result = tree.run(fn="revert_klipper_patches")
+            self.assertEqual(result.returncode, 0, result.stdout)
+            self.assertEqual(
+                (tree.target / "mcu.py").read_text(encoding="utf-8"),
+                "STOCK = True\n")
+
 
 
 class McuTuningTest(unittest.TestCase):
