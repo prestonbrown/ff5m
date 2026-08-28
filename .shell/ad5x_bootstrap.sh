@@ -84,9 +84,16 @@ install_hook() {
         return 1
     fi
 
-    # Already injected? idempotent no-op.
-    if grep -Fq -- "$HOOK_MARKER" "$target"; then
-        echo "ad5x_bootstrap: hook already present in $target"
+    # Each hook is checked and injected INDEPENDENTLY. A single "any forge-x
+    # marker present -> return" short-circuit silently skips a hook added in a
+    # later version, which is exactly the upgrade path a printer that already
+    # carries the late hook takes.
+    local have_early have_late did=0
+    grep -Fq -- 'forge-x-early' "$target" && have_early=1 || have_early=0
+    grep -q -- '# forge-x$' "$target" && have_late=1 || have_late=0
+
+    if [ "$have_early" = 1 ] && [ "$have_late" = 1 ]; then
+        echo "ad5x_bootstrap: both hooks already present in $target"
         return 0
     fi
 
@@ -99,36 +106,42 @@ install_hook() {
     local tmp
     tmp="$(mktemp)"
 
-    # The EARLY hook first, so its anchor search runs against the pristine file.
-    if grep -Fq -- "$EARLY_HOOK_ANCHOR" "$target"; then
-        awk -v hook="$EARLY_HOOK_LINE" -v anchor="$EARLY_HOOK_ANCHOR" '
-            { print }
-            (!inserted && index($0, anchor)) { print hook; inserted = 1 }
-        ' "$target" > "$tmp"
+    if [ "$have_early" = 0 ]; then
+        if grep -Fq -- "$EARLY_HOOK_ANCHOR" "$target"; then
+            awk -v hook="$EARLY_HOOK_LINE" -v anchor="$EARLY_HOOK_ANCHOR" '
+                { print }
+                (!inserted && index($0, anchor)) { print hook; inserted = 1 }
+            ' "$target" > "$tmp"
+            cat "$tmp" > "$target"
+            did=1
+            echo "ad5x_bootstrap: early hook installed in $target"
+        else
+            echo "ad5x_bootstrap: WARNING: anchor '$EARLY_HOOK_ANCHOR' not found;" \
+                 "the failsafe will only run late, a boot after it is needed" >&2
+        fi
+    fi
+
+    if [ "$have_late" = 0 ]; then
+        if grep -Fq -- 'klipper/start.sh' "$target"; then
+            # Insert before the first stock klipper launch, so patches and config
+            # land before klippy starts.
+            awk -v hook="$HOOK_LINE" '
+                (!inserted && index($0, "klipper/start.sh")) { print hook; inserted = 1 }
+                { print }
+            ' "$target" > "$tmp"
+        else
+            # No stock klipper launch (the real AD5X shape): append.
+            cat "$target" > "$tmp"
+            printf '%s\n' "$HOOK_LINE" >> "$tmp"
+        fi
+        # "cat >" rewrites in place, preserving mode/inode (a plain mv would not).
         cat "$tmp" > "$target"
-    else
-        echo "ad5x_bootstrap: WARNING: anchor '$EARLY_HOOK_ANCHOR' not found;" \
-             "the failsafe will only run late, a boot after it is needed" >&2
+        did=1
+        echo "ad5x_bootstrap: late hook installed in $target"
     fi
 
-    if grep -Fq -- 'klipper/start.sh' "$target"; then
-        # Insert the hook immediately before the first stock klipper launch, so
-        # patches and config land before klippy starts.
-        awk -v hook="$HOOK_LINE" '
-            (!inserted && index($0, "klipper/start.sh")) { print hook; inserted = 1 }
-            { print }
-        ' "$target" > "$tmp"
-    else
-        # No stock klipper launch found: append at the end.
-        cat "$target" > "$tmp"
-        printf '%s\n' "$HOOK_LINE" >> "$tmp"
-    fi
-    # "cat >" rewrites in place, preserving the target's mode/inode (a plain mv
-    # of the mktemp file would not).
-    cat "$tmp" > "$target"
     rm -f "$tmp"
-
-    echo "ad5x_bootstrap: hook installed in $target"
+    [ "$did" = 1 ] || return 0
 }
 
 uninstall_hook() {

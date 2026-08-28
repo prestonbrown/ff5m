@@ -12,6 +12,7 @@ REPO_DIR=$(cd "$SCRIPT_DIR/.." && pwd)
 
 BOOTSTRAP="$REPO_DIR/.shell/ad5x_bootstrap.sh"
 MARKER='# forge-x'
+HOOK_LATE_ONLY='[ -x /usr/data/config/mod/.shell/ad5x_bootstrap.sh ] && /usr/data/config/mod/.shell/ad5x_bootstrap.sh   # forge-x'
 
 assert_file "bootstrap script exists" "$BOOTSTRAP"
 
@@ -140,6 +141,36 @@ else
 fi
 assert_eq "installing twice injects exactly one early hook" "1" \
     "$(grep -c 'forge-x-early' "$FIX")"
+
+# UPGRADE PATH: a printer already carrying the late hook must still get the early
+# one. A single "any forge-x marker present -> return" check silently skips it,
+# which is precisely the shape a live printer takes on the next install.
+cp "$WORK/stock_shape" "$FIX"
+rm -f "$FIX.orig"
+printf '%s\n' "$HOOK_LATE_ONLY" >> "$FIX"
+assert_eq "precondition: late hook only" "0" "$(grep -c 'forge-x-early' "$FIX")"
+bs install
+assert_eq "upgrade injects the missing early hook" "1" "$(grep -c 'forge-x-early' "$FIX")"
+assert_eq "upgrade does not duplicate the late hook" "1" "$(grep -c '# forge-x$' "$FIX")"
+
+# ...and the mirror case: early present, late missing.
+cp "$WORK/stock_shape" "$FIX"
+rm -f "$FIX.orig"
+bs install
+grep -v '# forge-x$' "$FIX" > "$FIX.tmp" && mv "$FIX.tmp" "$FIX"
+assert_eq "precondition: early hook only" "0" "$(grep -c '# forge-x$' "$FIX")"
+bs install
+assert_eq "upgrade injects the missing late hook" "1" "$(grep -c '# forge-x$' "$FIX")"
+assert_eq "upgrade does not duplicate the early hook" "1" "$(grep -c 'forge-x-early' "$FIX")"
+
+# Both present: a true no-op.
+cp "$FIX" "$WORK/both_before"
+bs install
+if cmp -s "$FIX" "$WORK/both_before"; then
+    _t_pass "install is a no-op when both hooks are present"
+else
+    _t_fail "install is a no-op when both hooks are present" "file changed"
+fi
 
 bs uninstall
 if cmp -s "$FIX" "$WORK/stock_shape"; then
