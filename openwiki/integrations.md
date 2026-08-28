@@ -24,7 +24,9 @@ plus ranges, current values, and menu entries queried from the active V4L2
 driver. The panel renders menus and small discrete ranges as selectors and
 automatically sends bounded temporary updates after each edit. Numeric
 selectors also expose a special zero when the advertised range starts above
-zero, while real V4L2 menus remain limited to their queried entries. Its single
+zero, while real V4L2 menus remain limited to their queried entries. The UI
+combines a short debounce with a one-second maximum wait, so held keys produce
+periodic feedback without flooding the controls endpoint. Its single
 **Save** button atomically updates the known `camera.conf` entries while
 preserving unrelated settings and comments. Persistence must fail when no
 controls-file path was supplied. HTTP client threads never issue V4L2 ioctls

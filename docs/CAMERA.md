@@ -74,7 +74,9 @@ connection and reconnects if camera recovery closes that connection.
 - Every edit is applied to the running camera automatically after a short
   delay, without writing `camera.conf`. Temporary values remain active across
   an in-process camera recovery, but are replaced by the file on
-  `CAMERA_RELOAD` or service restart.
+  `CAMERA_RELOAD` or service restart. While an arrow key is held, intermediate
+  values are applied at least once per second; the final value is applied
+  shortly after the key is released.
 - The panel reads supported ranges, current values, and menu entries from the
   active V4L2 driver. Camera menus and small discrete integer ranges are shown
   as selectors, so invalid intermediate values cannot be entered. A numeric

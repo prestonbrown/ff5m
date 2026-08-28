@@ -494,7 +494,9 @@ HTTP server and MJPEG endpoint; it does not start a second server.
 For numeric selectors whose camera-reported minimum is greater than zero, the
 panel adds `0 (special)` because some drivers still accept zero as an
 undocumented off value (for example, Gain). `Shift` + arrow changes numeric
-controls by ten steps instead of one.
+controls by ten steps instead of one. Holding an arrow key applies an
+intermediate value once per second, then applies the final value shortly after
+the key is released.
 
 ### I adjusted the camera settings, but they are not applied after a reboot
 Make sure `POST_PROCESSING=1` and the desired `E_<parameter>` lines are
