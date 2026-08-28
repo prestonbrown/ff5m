@@ -112,8 +112,14 @@ find "$KLIPPER_DIR" -name '*.bak' 2>/dev/null >> "$REPORT"
 say "  .bak backups found: $(find "$KLIPPER_DIR" -name '*.bak' 2>/dev/null | wc -l)"
 
 # The logs that say WHY stock is stuck. Grab whatever exists.
+# $FF_DATA_MNT/logs is where stock klippy actually logs on this board: stock
+# app_startup.sh opens with `rm /usr/data/logs/printer.log*`, and ZMOD's klippy
+# launcher sets KLIPPER_LOG=/usr/data/logs/printer.log. printer_data/ is the mod
+# compat tree and logFiles/ is the AD5M path; keep both, but they are not where
+# a stock-only boot writes.
 for _log in \
-    "$FF_DATA_MNT"/printer_data/logs/klippy.log \
+    "$FF_DATA_MNT"/logs/printer.log \
+    "$FF_DATA_MNT"/logs/*.log \
     "$FF_DATA_MNT"/printer_data/logs/*.log \
     /usr/prog/printer_data/logs/*.log \
     /tmp/klippy.log /tmp/*.log \
@@ -128,9 +134,16 @@ do
     say "  captured log $_log"
 done
 
+# The AD5X keeps its config in $FF_DATA_MNT/config, and nowhere else. Three
+# independent confirmations: the FlashForge factory installer copies its
+# other/printer.cfg to /usr/data/config/; ZMOD's klipper launcher passes
+# KLIPPER_CONF=/usr/data/config/printer.cfg; and the mod's own fix_config writes
+# /opt/config/printer.cfg, which is the same directory once Step 2 binds
+# $DATA_MNT onto /opt. An earlier probe list guessed printer_data/config and
+# found nothing - that was the probe being wrong, not the config being absent.
 note ""; note "===== printer.cfg candidates ====="
-for _c in "$FF_DATA_MNT"/printer_data/config/printer.cfg /usr/prog/printer.cfg \
-          "$FF_DATA_MNT"/printer.cfg; do
+for _c in "$FF_DATA_MNT"/config/printer.cfg "$FF_DATA_MNT"/config/printer.base.cfg \
+          /opt/config/printer.cfg "$FF_DATA_MNT"/printer_data/config/printer.cfg; do
     [ -f "$_c" ] || continue
     note "--- $_c ---"; head -40 "$_c" >> "$REPORT" 2>/dev/null
     for _d in $OUT_DIRS; do
@@ -196,7 +209,7 @@ sync
 say ""
 say "[ad5x-restore] 2. CONFIG"
 _cfg_done=no
-_c="$FF_DATA_MNT/printer_data/config/printer.cfg"
+_c="$FF_DATA_MNT/config/printer.cfg"
 for _b in "$_c.bak" "$_c.orig" "$_c.backup"; do
     if [ -f "$_b" ] && [ ! -L "$_b" ]; then
         # Keep what the mod left, so a wrong guess here is still reversible.
