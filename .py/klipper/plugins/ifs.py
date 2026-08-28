@@ -8,11 +8,20 @@
 ## the operations live in ifs_link / ifs_status / ifs_operations, which have no
 ## klipper in them and are tested without a printer.
 ##
-## Threading: klipper's reactor is single-threaded and one F13 exchange takes
-## ~165 ms on real hardware. Polling from a reactor timer would stall klipper for
-## that long every second, so the serial work happens on a daemon thread. The
-## only shared state is one snapshot behind a lock, and anything that touches
-## klipper is marshalled back through reactor.register_async_callback.
+## Threading, both directions:
+##
+##   * Klipper's reactor is single-threaded and one F13 exchange takes ~165 ms on
+##     real hardware. Polling from a reactor timer would stall klipper for that
+##     long every second, so the serial work happens on a daemon thread. The only
+##     shared state is one snapshot behind a lock, and anything that touches
+##     klipper is marshalled back with reactor.register_async_callback.
+##
+##   * Commands from klipper go the other way, through a queue. IfsLink is not
+##     thread-safe, and a plain mutex would be worse than useless: the reactor
+##     would block for up to a full exchange while the poller finished one,
+##     repeatedly, during exactly the sequences that matter. So gcode submits a
+##     request, the poll thread runs it between polls, and the caller yields the
+##     reactor with reactor.pause() until the answer lands.
 ##
 ## Copyright (C) 2026, Preston Brown
 ##
@@ -34,6 +43,36 @@ RECONNECT_DELAY = 5.0
 ## Consecutive failed polls before the link is torn down and rebuilt. One bad
 ## read is noise; a run of them means the port is gone.
 MAX_POLL_FAILURES = 3
+
+## How long a queued command may go unanswered before the caller gives up.
+## Generous: the board answers when it accepts the command, not when the motion
+## finishes, but a busy board can take its time.
+DEFAULT_COMMAND_TIMEOUT = 15.0
+
+## How often the reactor-side waiter looks for its answer. Short enough to feel
+## immediate, long enough not to spin.
+COMMAND_POLL_PAUSE = 0.05
+
+
+class IfsBusy(Exception):
+    """A queued command went unanswered, or there was nothing to answer it."""
+
+
+class _Request(object):
+    """One command handed to the poll thread, and the answer coming back."""
+
+    __slots__ = ("command", "done", "response", "error")
+
+    def __init__(self, command):
+        self.command = command
+        self.done = threading.Event()
+        self.response = None
+        self.error = None
+
+    def settle(self, response=None, error=None):
+        self.response = response
+        self.error = error
+        self.done.set()
 
 
 def _open_link(port, send_commit_byte):
@@ -59,6 +98,11 @@ class IFS(object):
 
         self._lock = threading.Lock()
         self._stopping = threading.Event()
+        ## Wakes the poll thread the moment work arrives, so a queued command
+        ## does not wait out the poll interval before it is sent.
+        self._wake = threading.Event()
+        self._queue = []
+        self._queue_lock = threading.Lock()
         self._thread = None
         self._link = None
         self._ops = None
@@ -91,6 +135,8 @@ class IFS(object):
 
     def _stop(self):
         self._stopping.set()
+        self._wake.set()
+        self._fail_queued("the IFS poller is shutting down")
         thread, self._thread = self._thread, None
         if thread is not None:
             thread.join(timeout=2.0)
@@ -101,7 +147,12 @@ class IFS(object):
     def _poll_loop(self):
         while not self._stopping.is_set():
             if self._link is None and not self._connect():
+                self._fail_queued("the IFS is not connected")
                 self._stopping.wait(RECONNECT_DELAY)
+                continue
+            ## Queued commands come first and skip the poll interval: a
+            ## sequence waiting on one should not pay for a status poll.
+            if self._run_queued():
                 continue
             if self._poll_once():
                 self._failures = 0
@@ -110,7 +161,8 @@ class IFS(object):
                 if self._failures >= MAX_POLL_FAILURES:
                     self._drop_link("%d consecutive poll failures"
                                     % self._failures)
-            self._stopping.wait(self.poll_interval)
+            self._wake.wait(self.poll_interval)
+            self._wake.clear()
 
     def _connect(self):
         try:
@@ -170,6 +222,64 @@ class IFS(object):
         with self._lock:
             self._connected = False
             self._error = message
+
+    ## -- commands from klipper ----------------------------------------------
+
+    def _take_queued(self):
+        with self._queue_lock:
+            return self._queue.pop(0) if self._queue else None
+
+    def _run_queued(self):
+        """Run one queued command. True when there was one to run."""
+        request = self._take_queued()
+        if request is None:
+            return False
+        try:
+            request.settle(response=self._link.request(request.command))
+        except Exception as exc:
+            request.settle(error=str(exc))
+            self._note_error("%s failed: %s" % (request.command, exc))
+        return True
+
+    def _fail_queued(self, reason):
+        """Answer everything waiting, so no caller hangs on a dead link."""
+        while True:
+            request = self._take_queued()
+            if request is None:
+                return
+            request.settle(error=reason)
+
+    def _forget(self, request):
+        with self._queue_lock:
+            if request in self._queue:
+                self._queue.remove(request)
+
+    def execute(self, command, timeout=DEFAULT_COMMAND_TIMEOUT):
+        """Run one IFS command from the reactor thread.
+
+        Yields the reactor while waiting rather than blocking it, so klipper
+        keeps servicing its MCUs through a sequence that takes tens of seconds.
+        Raises IfsBusy when nothing answers, RuntimeError when the board or the
+        link did.
+        """
+        thread = self._thread
+        if thread is None or not thread.is_alive():
+            raise IfsBusy("the IFS poller is not running")
+        request = _Request(command)
+        with self._queue_lock:
+            self._queue.append(request)
+        self._wake.set()
+
+        deadline = self.reactor.monotonic() + timeout
+        while not request.done.is_set():
+            if self.reactor.monotonic() > deadline:
+                self._forget(request)
+                raise IfsBusy("no answer to %s within %.1fs"
+                              % (command, timeout))
+            self.reactor.pause(self.reactor.monotonic() + COMMAND_POLL_PAUSE)
+        if request.error is not None:
+            raise RuntimeError(request.error)
+        return request.response
 
     ## -- readers ------------------------------------------------------------
 

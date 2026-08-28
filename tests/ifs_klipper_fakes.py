@@ -19,6 +19,7 @@ class FakeReactor:
     def __init__(self):
         self.timers = []
         self.async_callbacks = []
+        self.pauses = 0
         self._now = 100.0
 
     def monotonic(self):
@@ -30,6 +31,18 @@ class FakeReactor:
 
     def register_async_callback(self, callback, waketime=None):
         self.async_callbacks.append(callback)
+
+    ## Anything yielding the reactor calls pause(). `on_pause` stands in for
+    ## whatever else would have run meanwhile - the poll thread, usually - so a
+    ## test can drive both sides deterministically without real threads.
+    on_pause = None
+
+    def pause(self, waketime):
+        self.pauses += 1
+        self._now = max(self._now, waketime)
+        if self.on_pause is not None:
+            self.on_pause()
+        return self._now
 
     def run_async(self):
         """Drain what the poll thread handed back, as the reactor would."""

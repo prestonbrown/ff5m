@@ -180,6 +180,94 @@ class TestIfsObject(unittest.TestCase):
         obj._drop_link()
 
 
+class AliveThread:
+    """Stands in for the poll thread, which these tests drive by hand."""
+
+    def is_alive(self):
+        return True
+
+    def join(self, timeout=None):
+        return None
+
+
+class TestCommandQueue(unittest.TestCase):
+    """Commands from klipper must not block the reactor.
+
+    IfsLink is not thread-safe and an exchange takes ~165 ms on hardware, so a
+    mutex would stall klipper repeatedly during exactly the sequences that
+    matter. Requests are queued for the poll thread and the caller yields.
+    """
+
+    def setUp(self):
+        self.obj, self.printer, self.link = make_ifs(replies=[f13()])
+        self.obj._connect()
+        self.obj._thread = AliveThread()
+        self.reactor = self.printer.reactor
+        ## Stand in for the poll thread running between reactor pauses.
+        self.reactor.on_pause = self.obj._run_queued
+
+    def test_a_command_is_answered(self):
+        self.link.replies = ["chan 1."]
+        response = self.obj.execute("F24 C1")
+        self.assertEqual(response.payload, "chan 1.")
+        self.assertIn("F24 C1", self.link.asked)
+
+    def test_it_yields_the_reactor_rather_than_blocking(self):
+        ## The whole point. If this ever stops pausing, klipper stalls for the
+        ## length of every IFS exchange during a load.
+        self.link.replies = ["chan 1."]
+        self.obj.execute("F24 C1")
+        self.assertGreater(self.reactor.pauses, 0)
+
+    def test_a_board_error_surfaces(self):
+        self.link.fail = "FFS not ready."
+        with self.assertRaises(RuntimeError) as caught:
+            self.obj.execute("F24 C1")
+        self.assertIn("FFS not ready.", str(caught.exception))
+
+    def test_a_silent_board_times_out_and_the_request_is_dropped(self):
+        ## Nothing runs the queue, so the wait must end by itself and leave
+        ## nothing behind for a later poll to answer into the void.
+        self.reactor.on_pause = None
+        with self.assertRaises(IFS.IfsBusy):
+            self.obj.execute("F24 C1", timeout=0.2)
+        self.assertEqual(self.obj._queue, [])
+
+    def test_no_poller_means_no_command(self):
+        self.obj._thread = None
+        with self.assertRaises(IFS.IfsBusy):
+            self.obj.execute("F13")
+
+    def test_shutdown_releases_a_waiting_caller(self):
+        ## A caller blocked on a command when klippy goes down must not hang.
+        request = IFS._Request("F13")
+        self.obj._queue.append(request)
+        self.obj._stop()
+        self.assertTrue(request.done.is_set())
+        self.assertIn("shutting down", request.error)
+
+    def test_a_disconnected_link_fails_queued_commands(self):
+        obj, printer, _ = make_ifs()
+        obj._open_link = lambda port, commit: (_ for _ in ()).throw(
+            OSError("gone"))
+        request = IFS._Request("F13")
+        obj._queue.append(request)
+        ## One pass of the loop body with no link: connect fails, queue drains.
+        self.assertFalse(obj._connect())
+        obj._fail_queued("the IFS is not connected")
+        self.assertTrue(request.done.is_set())
+        self.assertIn("not connected", request.error)
+
+    def test_queued_commands_run_before_status_polls(self):
+        ## A sequence waiting on a command should not pay for a status poll.
+        self.link.replies = ["chan 1.", f13()]
+        self.assertTrue(self.obj._run_queued() is False)
+        request = IFS._Request("F24 C1")
+        self.obj._queue.append(request)
+        self.assertTrue(self.obj._run_queued())
+        self.assertEqual(self.link.asked[-1], "F24 C1")
+
+
 class TestGcode(unittest.TestCase):
     def test_status_command_when_disconnected(self):
         obj, printer, _ = make_ifs()
