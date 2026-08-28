@@ -180,49 +180,61 @@ class TestChannelSensor(unittest.TestCase):
 
 
 class TestMotionTracker(unittest.TestCase):
-    def test_a_single_stall_sample_is_not_a_runout(self):
-        ## Measured: a clean 20 mm retract sets the stall bit in passing.
-        ## Tripping on one sample would fire on every normal move.
+    """A jam is the ABSENCE of motion during a move we asked for.
+
+    The board's bit is SET while filament moves - measured with an empty
+    channel as the control - so this watches for it going quiet, not for it
+    coming on.
+    """
+
+    def moving(self):
+        return status(stall=0b10)      # channel 2 filament in motion
+
+    def still(self):
+        return status(stall=0)         # nothing moving
+
+    def test_motion_is_not_a_jam(self):
         t = L.MotionTracker(2, required=3)
-        self.assertFalse(t.update(status(stall=0b10)))
-        self.assertFalse(t.update(status(stall=0)))
+        for _ in range(5):
+            self.assertFalse(t.update(self.moving()))
         self.assertFalse(t.tripped)
 
-    def test_consecutive_stalls_trip_it_once(self):
+    def test_sustained_stillness_during_a_move_trips_once(self):
         t = L.MotionTracker(2, required=3)
-        self.assertFalse(t.update(status(stall=0b10)))
-        self.assertFalse(t.update(status(stall=0b10)))
-        self.assertTrue(t.update(status(stall=0b10)))
+        self.assertFalse(t.update(self.still()))
+        self.assertFalse(t.update(self.still()))
+        self.assertTrue(t.update(self.still()))
         self.assertTrue(t.tripped)
-        self.assertFalse(t.update(status(stall=0b10)))   # not again
+        self.assertFalse(t.update(self.still()))   # not again
 
-    def test_a_clear_sample_resets_the_run(self):
+    def test_a_brief_pause_is_not_a_jam(self):
         t = L.MotionTracker(2, required=3)
-        t.update(status(stall=0b10))
-        t.update(status(stall=0b10))
-        t.update(status(stall=0))
-        self.assertFalse(t.update(status(stall=0b10)))
+        t.update(self.still())
+        t.update(self.still())
+        t.update(self.moving())
+        self.assertFalse(t.update(self.still()))
         self.assertFalse(t.tripped)
 
-    def test_a_stall_while_not_moving_does_not_count(self):
+    def test_stillness_while_not_moving_does_not_count(self):
+        ## Nothing was asked to move, so of course nothing is moving.
         t = L.MotionTracker(2, required=2)
         for _ in range(5):
-            self.assertFalse(t.update(status(stall=0b10), moving=False))
+            self.assertFalse(t.update(self.still(), moving=False))
         self.assertFalse(t.tripped)
 
-    def test_another_channels_stall_is_ignored(self):
-        self.assertFalse(L.MotionTracker(2, required=1)
-                         .update(status(stall=0b1000)))
+    def test_another_channels_motion_does_not_excuse_this_one(self):
+        t = L.MotionTracker(2, required=1)
+        self.assertTrue(t.update(status(stall=0b1000)))
 
     def test_missing_status_resets_rather_than_trips(self):
         t = L.MotionTracker(2, required=2)
-        t.update(status(stall=0b10))
+        t.update(self.still())
         self.assertFalse(t.update(None))
-        self.assertFalse(t.update(status(stall=0b10)))
+        self.assertFalse(t.update(self.still()))
 
     def test_reset(self):
         t = L.MotionTracker(2, required=1)
-        t.update(status(stall=0b10))
+        t.update(self.still())
         self.assertTrue(t.tripped)
         t.reset()
         self.assertFalse(t.tripped)

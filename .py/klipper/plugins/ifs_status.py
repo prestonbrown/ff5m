@@ -1,7 +1,7 @@
 ## Status model for the AD5X IFS (4-channel filament system) board.
 ##
 ## Turns one F13 status line into a snapshot: what the board is doing, to which
-## channel, which channels hold filament, which are stalled, and which have just
+## channel, which channels hold filament, which are moving, and which have just
 ## had filament pushed in. Pure parsing - no serial, no klippy - so it is
 ## testable on its own.
 ##
@@ -125,6 +125,12 @@ OPTIONAL_HEX_FIELDS = {"jinsi_GCONF": "feeder_gconf",
 class IfsStatus(object):
     """One F13 reading. Immutable; build a new one per poll."""
 
+    ## The wire field is called `stall_state`, but it reports MOTION: measured
+    ## with an empty channel as a control, the bit is SET while that channel's
+    ## filament is moving and CLEAR when it is not. zmod's wait agrees - it
+    ## declares a jam when the bit goes CLEAR during a commanded move. Naming it
+    ## after what it means, not what the firmware calls it, because a method
+    ## called is_stalled() that returns true for healthy motion is a trap.
     def __init__(self, state, silk_mask, active_channel, insert_mask,
                  stall_mask, channel_count=MAX_CHANNELS,
                  feeder_gconf=None, selector_gconf=None, raw=""):
@@ -132,7 +138,7 @@ class IfsStatus(object):
         self.silk_mask = silk_mask
         self.active_channel = active_channel
         self.insert_mask = insert_mask
-        self.stall_mask = stall_mask
+        self.motion_mask = stall_mask
         self.channel_count = channel_count
         self.feeder_gconf = feeder_gconf
         self.selector_gconf = selector_gconf
@@ -151,8 +157,9 @@ class IfsStatus(object):
         return mask_to_channels(self.silk_mask, self.channel_count)
 
     @property
-    def stalled_channels(self):
-        return mask_to_channels(self.stall_mask, self.channel_count)
+    def moving_channels(self):
+        """Channels whose filament is moving right now."""
+        return mask_to_channels(self.motion_mask, self.channel_count)
 
     @property
     def inserted_channels(self):
@@ -170,18 +177,22 @@ class IfsStatus(object):
     def has_filament(self, channel):
         return channel in self.loaded_channels
 
-    def is_stalled(self, channel=0):
-        """Stall on one channel, or on any channel when asked for 0."""
+    def is_moving(self, channel=0):
+        """Filament moving on one channel, or on any channel when asked for 0.
+
+        A move that was commanded and is NOT moving is the jam - see
+        ifs_sequences.StateWaiter, which is where that decision belongs.
+        """
         if not channel:
-            return self.stall_mask != 0
-        return channel in self.stalled_channels
+            return self.motion_mask != 0
+        return channel in self.moving_channels
 
     def __repr__(self):
-        return ("IfsStatus(%s%s, loaded=%s, stalled=%s)"
+        return ("IfsStatus(%s%s, loaded=%s, moving=%s)"
                 % (self.activity_name,
                    " ch%d" % self.activity_channel if self.activity_channel
                    else "",
-                   self.loaded_channels, self.stalled_channels))
+                   self.loaded_channels, self.moving_channels))
 
 
 def parse_status(text, channel_count=MAX_CHANNELS):
@@ -206,7 +217,7 @@ def parse_status(text, channel_count=MAX_CHANNELS):
         silk_mask=values["silk_state"],
         active_channel=values["chan"],
         insert_mask=values["ffs_channels_insert"],
-        stall_mask=values["stall_state"],
+        stall_mask=values["stall_state"],   # motion, despite the name
         channel_count=channel_count,
         raw=text)
 

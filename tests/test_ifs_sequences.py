@@ -19,9 +19,21 @@ LOADING = S.state_value(S.LOADING, CH)      # 22, confirmed on the rig
 UNLOADING = S.state_value(S.UNLOADING, CH)  # 26
 
 
-def status(state=S.READY, silk=0, stall=0):
+## The board's `stall_state` field reports MOTION - bit set means that
+## channel's filament is moving. So a healthy in-progress move has the bit SET,
+## and its sustained absence is the jam. Defaulting to "moving" keeps every
+## test that is not about jams reading naturally.
+MOVING = 1 << (CH - 1)
+
+
+def status(state=S.READY, silk=0, motion=MOVING):
     return S.IfsStatus(state=state, silk_mask=silk, active_channel=CH,
-                       insert_mask=0, stall_mask=stall)
+                       insert_mask=0, stall_mask=motion)
+
+
+def stuck(state, silk=0):
+    """A commanded move with no filament motion - the jam."""
+    return status(state, silk=silk, motion=0)
 
 
 def feed(waiter, *statuses):
@@ -108,32 +120,43 @@ class TestFilamentCondition(unittest.TestCase):
 
 
 class TestStall(unittest.TestCase):
-    def test_a_sustained_stall_stops_the_move(self):
+    """A jam is motion ABSENT during a move, not a bit coming on.
+
+    Measured with an empty channel as the control: the board sets the bit while
+    filament moves and clears it when it stops. zmod's wait agrees - it
+    declares a jam when the bit reads clear for several polls.
+    """
+
+    def test_sustained_stillness_stops_the_move(self):
         waiter = SEQ.StateWaiter(CH, S.LOADING, confirmations=3)
-        stalled = status(LOADING, stall=0b10)
-        outcome = feed(waiter, stalled, stalled, stalled)
+        outcome = feed(waiter, stuck(LOADING), stuck(LOADING), stuck(LOADING))
         self.assertEqual(outcome.kind, SEQ.STALLED)
         self.assertTrue(outcome.is_problem)
 
-    def test_a_passing_stall_does_not(self):
-        ## Measured: a clean 20 mm retract sets the stall bit in passing.
+    def test_healthy_motion_is_never_a_jam(self):
+        ## The inversion that would have broken every normal load.
+        waiter = SEQ.StateWaiter(CH, S.LOADING, confirmations=2)
+        outcome = feed(waiter, status(LOADING), status(LOADING),
+                       status(LOADING), status(LOADING))
+        self.assertEqual(outcome.kind, SEQ.WAITING)
+
+    def test_a_brief_pause_is_not_a_jam(self):
         waiter = SEQ.StateWaiter(CH, S.LOADING, confirmations=3)
-        outcome = feed(waiter, status(LOADING, stall=0b10),
-                       status(LOADING, stall=0), status(LOADING, stall=0b10))
+        outcome = feed(waiter, stuck(LOADING), stuck(LOADING),
+                       status(LOADING), stuck(LOADING))
         self.assertEqual(outcome.kind, SEQ.WAITING)
 
     def test_stall_watching_can_be_turned_off(self):
         waiter = SEQ.StateWaiter(CH, S.LOADING, watch_stall=False,
                                  confirmations=1)
-        outcome = feed(waiter, status(LOADING, stall=0b10))
+        outcome = feed(waiter, stuck(LOADING), stuck(LOADING))
         self.assertEqual(outcome.kind, SEQ.WAITING)
 
-    def test_filament_beats_a_stall_on_the_same_poll(self):
-        ## Reaching the sensor is the goal; the filament stopping because it
-        ## got there is success, not a fault.
+    def test_filament_beats_a_jam_on_the_same_poll(self):
+        ## Filament stopping because it arrived at the sensor is success.
         waiter = SEQ.StateWaiter(CH, S.LOADING, expect_filament=True,
                                  confirmations=1)
-        outcome = feed(waiter, status(LOADING, silk=0b10, stall=0b10))
+        outcome = feed(waiter, stuck(LOADING, silk=0b10))
         self.assertEqual(outcome.kind, SEQ.FILAMENT)
 
 
@@ -167,3 +190,117 @@ class TestFaults(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+MULTICOLOUR = {
+    "FristESpace": 100, "FristESpeed": 300, "FristFanSpeed": 0,
+    "SecondESpace": 30, "SecondESpeed": 300, "SecondFanSpeed": 255,
+    "UnloadESpace": 60, "UnloadIFSSpace": 70, "UnloadSpeed": 600,
+}
+
+
+def kinds(plan):
+    return [step.kind for step in plan]
+
+
+class TestParameters(unittest.TestCase):
+    def test_it_reads_the_printers_own_numbers(self):
+        ## zmod's "defaults" are these values copied out; read the source.
+        params = SEQ.Parameters.from_multicolour(MULTICOLOUR)
+        self.assertEqual(params.first_purge_mm, 100.0)
+        self.assertEqual(params.unload_ifs_mm, 70.0)
+        self.assertEqual(params.unload_speed, 600.0)
+        self.assertEqual(params.second_fan, 255.0)
+
+    def test_missing_keys_fall_back_to_the_defaults(self):
+        params = SEQ.Parameters.from_multicolour({"UnloadESpace": 42})
+        self.assertEqual(params.unload_extruder_mm, 42.0)
+        self.assertEqual(params.first_purge_mm,
+                         SEQ.Parameters.DEFAULTS["first_purge_mm"])
+
+    def test_a_junk_value_does_not_poison_a_parameter(self):
+        params = SEQ.Parameters.from_multicolour({"UnloadESpace": "sixty"})
+        self.assertEqual(params.unload_extruder_mm,
+                         SEQ.Parameters.DEFAULTS["unload_extruder_mm"])
+
+    def test_an_unknown_parameter_is_refused(self):
+        with self.assertRaises(TypeError):
+            SEQ.Parameters(nonsense=1)
+
+
+class TestLoadPlan(unittest.TestCase):
+    def setUp(self):
+        self.params = SEQ.Parameters.from_multicolour(MULTICOLOUR)
+        self.plan = SEQ.load_plan(CH, self.params, temperature=220)
+
+    def test_the_ifs_feeds_the_whole_way_by_itself(self):
+        ## Regression: an earlier draft had the extruder pulling the filament
+        ## past its own gear mid-feed. That was invented - zmod issues one F10
+        ## for the whole tube and the extruder does not run until the purge.
+        feed_at = kinds(self.plan).index(SEQ.FEED)
+        first_extrude = kinds(self.plan).index(SEQ.EXTRUDE)
+        purge_at = kinds(self.plan).index(SEQ.STOP)
+        self.assertGreater(first_extrude, purge_at,
+                           "the extruder must not run before the purge")
+        self.assertLess(feed_at, purge_at)
+
+    def test_the_feed_ends_on_the_toolhead_sensor(self):
+        ## Distance is an upper bound, not the target: a part-fed lane must not
+        ## overshoot.
+        feed = self.plan[kinds(self.plan).index(SEQ.FEED)]
+        self.assertEqual(feed.until, SEQ.UNTIL_TOOLHEAD_FILAMENT)
+        self.assertEqual(feed.distance, self.params.tube_mm)
+        self.assertEqual(feed.expect, S.LOADING)
+
+    def test_it_clamps_before_feeding_and_releases_after(self):
+        order = kinds(self.plan)
+        self.assertLess(order.index(SEQ.CLAMP), order.index(SEQ.FEED))
+        self.assertEqual(order[-1], SEQ.RELEASE)
+
+    def test_it_heats_first_because_klipper_will_not(self):
+        ## min_extrude_temp is 0 on this printer.
+        self.assertEqual(self.plan[0].kind, SEQ.HEAT)
+        self.assertEqual(self.plan[0].value, 220)
+
+    def test_no_temperature_means_no_heat_step(self):
+        plan = SEQ.load_plan(CH, self.params)
+        self.assertNotIn(SEQ.HEAT, kinds(plan))
+
+    def test_the_purge_uses_the_printers_own_distances(self):
+        extrudes = [s for s in self.plan if s.kind == SEQ.EXTRUDE]
+        self.assertEqual([s.distance for s in extrudes], [100.0, 30.0])
+
+    def test_the_fan_ends_off(self):
+        fans = [s for s in self.plan if s.kind == SEQ.FAN]
+        self.assertEqual(fans[-1].value, 0.0)
+
+    def test_every_step_names_its_channel_where_it_matters(self):
+        for step in self.plan:
+            if step.kind in (SEQ.CLAMP, SEQ.RELEASE, SEQ.FEED, SEQ.RETRACT):
+                self.assertEqual(step.channel, CH, repr(step))
+
+
+class TestUnloadPlan(unittest.TestCase):
+    def setUp(self):
+        self.params = SEQ.Parameters.from_multicolour(MULTICOLOUR)
+        self.plan = SEQ.unload_plan(CH, self.params, temperature=220)
+
+    def test_the_extruder_pulls_it_off_the_sensor_first(self):
+        order = kinds(self.plan)
+        self.assertLess(order.index(SEQ.EXTRUDE), order.index(SEQ.RETRACT))
+
+    def test_the_extruder_move_is_backwards(self):
+        extrude = self.plan[kinds(self.plan).index(SEQ.EXTRUDE)]
+        self.assertLess(extrude.distance, 0)
+        self.assertEqual(extrude.distance, -self.params.unload_extruder_mm)
+
+    def test_the_ifs_retract_ends_when_the_sensor_clears(self):
+        retract = self.plan[kinds(self.plan).index(SEQ.RETRACT)]
+        self.assertEqual(retract.until, SEQ.UNTIL_TOOLHEAD_CLEAR)
+        self.assertEqual(retract.expect, S.UNLOADING)
+
+    def test_it_heats_because_cold_filament_snaps(self):
+        self.assertEqual(self.plan[0].kind, SEQ.HEAT)
+
+    def test_it_releases_last(self):
+        self.assertEqual(kinds(self.plan)[-1], SEQ.RELEASE)

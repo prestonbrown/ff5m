@@ -135,10 +135,11 @@ class ChannelFilamentSensor(object):
 class MotionTracker(object):
     """Detects filament that stopped moving while it was told to move.
 
-    A single set stall bit is not a runout: measured on hardware, a clean 20 mm
-    retract sets and clears it in passing. `required` consecutive stalled
-    samples trip it, and any unstalled sample resets the run, so transients
-    cannot accumulate across a move.
+    The board's motion bit is SET while a channel's filament is moving -
+    measured with an empty channel as a control, and the reason this watches
+    for its ABSENCE. `required` consecutive samples with no motion, while the
+    channel was commanded to move, trip it; any sample showing motion resets
+    the run, so a brief pause mid-move is not a jam.
     """
 
     def __init__(self, channel, required=3):
@@ -155,7 +156,10 @@ class MotionTracker(object):
         `moving` is whether the channel was commanded to move; a stall while
         nothing was asked to move is not interesting.
         """
-        if status is None or not moving or not status.is_stalled(self.channel):
+        if status is None or not moving:
+            self._run = 0
+            return False
+        if status.is_moving(self.channel):
             self._run = 0
             return False
         self._run += 1

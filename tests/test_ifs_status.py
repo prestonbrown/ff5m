@@ -78,7 +78,7 @@ class TestParsing(unittest.TestCase):
         self.assertEqual(result.activity_channel, 2)
         self.assertEqual(result.active_channel, 2)
         self.assertEqual(result.loaded_channels, [1, 3])
-        self.assertEqual(result.stalled_channels, [])
+        self.assertEqual(result.moving_channels, [])
         self.assertEqual(result.feeder_gconf, 0x000001c4)
         self.assertEqual(result.selector_gconf, 0x000000c0)
 
@@ -128,13 +128,16 @@ class TestMasks(unittest.TestCase):
         self.assertFalse(result.has_filament(2))
         self.assertTrue(result.has_filament(3))
 
-    def test_stall_on_a_channel_or_anywhere(self):
+    def test_motion_on_a_channel_or_anywhere(self):
+        ## The wire field is called stall_state but reports MOTION: measured
+        ## with an empty channel as a control, the bit is set while that
+        ## channel's filament moves and clear when it does not.
         result = status(stall_state=0b1000)
-        self.assertEqual(result.stalled_channels, [4])
-        self.assertTrue(result.is_stalled(4))
-        self.assertFalse(result.is_stalled(1))
-        self.assertTrue(result.is_stalled(0))
-        self.assertFalse(status(stall_state=0).is_stalled(0))
+        self.assertEqual(result.moving_channels, [4])
+        self.assertTrue(result.is_moving(4))
+        self.assertFalse(result.is_moving(1))
+        self.assertTrue(result.is_moving(0))
+        self.assertFalse(status(stall_state=0).is_moving(0))
 
     def test_channel_count_bounds_the_mask(self):
         ## A two-channel board must not report channels 3 and 4 because the

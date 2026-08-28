@@ -308,9 +308,10 @@ class IFS(object):
         status = self.latest_status()
         return None if status is None else status.has_filament(channel)
 
-    def is_stalled(self, channel=0):
+    def is_moving(self, channel=0):
+        """Whether filament is moving, or None before the first reading."""
         status = self.latest_status()
-        return None if status is None else status.is_stalled(channel)
+        return None if status is None else status.is_moving(channel)
 
     def get_status(self, eventtime=None):
         with self._lock:
@@ -327,7 +328,7 @@ class IFS(object):
             "activity_channel": None,
             "active_channel": None,
             "loaded_channels": [],
-            "stalled_channels": [],
+            "moving_channels": [],
             "inserted_channels": [],
         }
         if status is not None:
@@ -337,7 +338,7 @@ class IFS(object):
                 "activity_channel": status.activity_channel,
                 "active_channel": status.active_channel,
                 "loaded_channels": status.loaded_channels,
-                "stalled_channels": status.stalled_channels,
+                "moving_channels": status.moving_channels,
                 "inserted_channels": status.inserted_channels,
             })
         return info
@@ -353,10 +354,10 @@ class IFS(object):
         where = (" ch%d" % info["activity_channel"]
                  if info["activity_channel"] else "")
         gcmd.respond_info(
-            "IFS %s, %d channels: %s%s | loaded %s | stalled %s"
+            "IFS %s, %d channels: %s%s | loaded %s | moving %s"
             % (info["version"], info["channel_count"], info["activity"], where,
                info["loaded_channels"] or "none",
-               info["stalled_channels"] or "none"))
+               info["moving_channels"] or "none"))
 
     def cmd_IFS_DIAGNOSTICS(self, gcmd):
         if self._link is None:
