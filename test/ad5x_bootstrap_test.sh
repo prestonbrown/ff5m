@@ -437,4 +437,81 @@ else
 fi
 rm -rf "$LK"
 
+
+# --- bring-up log -----------------------------------------------------------
+#
+# The hook runs inside stock app_startup.sh, whose stdout goes nowhere, and
+# every service that could carry a log starts in Step 8. Without this file a
+# failed boot leaves no evidence at all - which is why the first hang needed a
+# bespoke USB stick to diagnose.
+BL=$(mktemp -d)
+
+_bl_run() {
+    AD5X_BRINGUP_LOG_DIR="$1" AD5X_BRINGUP_LOG_KEEP="${2:-3}" "$BASH_BIN" -c '
+        . "$1"
+        bringup_log_start
+        echo "BODY-$2"
+    ' _ "$BOOTSTRAP" "${3:-x}" 2>&1
+}
+
+_bl_stdout=$(_bl_run "$BL/log" 3 one)
+assert_file "bringup_log_start creates the log" "$BL/log/ad5x_bootstrap.log"
+assert_contains "bring-up output goes to the log" \
+    "$(cat "$BL/log/ad5x_bootstrap.log")" "BODY-one"
+assert_contains "the log is stamped with a start header" \
+    "$(cat "$BL/log/ad5x_bootstrap.log")" "bring-up start"
+case "$_bl_stdout" in
+    *BODY-one*) _t_fail "bring-up output is redirected, not echoed" "BODY-one reached stdout" ;;
+    *)          _t_pass "bring-up output is redirected, not echoed" ;;
+esac
+
+# A second run must rotate, not append: each boot gets its own record.
+_bl_run "$BL/log" 3 two >/dev/null
+assert_contains "previous run rotates to .1" \
+    "$(cat "$BL/log/ad5x_bootstrap.log.1")" "BODY-one"
+assert_contains "current run is the live log" \
+    "$(cat "$BL/log/ad5x_bootstrap.log")" "BODY-two"
+
+# Rotation is bounded, so the log dir cannot grow without limit on a device
+# that boot-loops.
+_bl_run "$BL/log" 3 three >/dev/null
+_bl_run "$BL/log" 3 four >/dev/null
+_bl_count=$(find "$BL/log" -name 'ad5x_bootstrap.log*' | wc -l)
+assert_eq "rotation keeps at most KEEP files" "3" "$_bl_count"
+if [ -e "$BL/log/ad5x_bootstrap.log.3" ]; then
+    _t_fail "rotation does not exceed KEEP" ".3 exists with KEEP=3"
+else
+    _t_pass "rotation does not exceed KEEP"
+fi
+
+# KEEP=1 means no rotation at all, so the log must be truncated each boot
+# rather than appended to - otherwise it grows without bound on a device that
+# reboots often.
+_bl_run "$BL/one" 1 alpha >/dev/null
+_bl_run "$BL/one" 1 beta  >/dev/null
+_bl_one=$(cat "$BL/one/ad5x_bootstrap.log")
+assert_contains "KEEP=1 keeps the latest run" "$_bl_one" "BODY-beta"
+case "$_bl_one" in
+    *BODY-alpha*) _t_fail "KEEP=1 truncates instead of appending" "the previous run is still in the log" ;;
+    *)            _t_pass "KEEP=1 truncates instead of appending" ;;
+esac
+assert_eq "KEEP=1 keeps exactly one file" "1" \
+    "$(find "$BL/one" -name 'ad5x_bootstrap.log*' | wc -l)"
+
+# An unwritable log dir must not take the boot down with it. `exec >>` on a file
+# that cannot be opened is fatal to a non-interactive shell, so the guard has to
+# come first.
+if [ "$(id -u)" = "0" ]; then
+    echo "ok     running as root, skipping the unwritable-log-dir case"
+else
+    mkdir -p "$BL/ro"
+    chmod 555 "$BL/ro"
+    _bl_stdout=$(_bl_run "$BL/ro/nested" 3 five)
+    _bl_rc=$?
+    assert_eq "unwritable log dir is not fatal" "0" "$_bl_rc"
+    assert_contains "bring-up keeps running with no log" "$_bl_stdout" "BODY-five"
+    chmod 755 "$BL/ro"
+fi
+rm -rf "$BL"
+
 finish

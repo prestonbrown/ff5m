@@ -300,6 +300,51 @@ failsafe_disarm() {
     rm -f "$BOOT_FAILURE_F"
 }
 
+# ---------------------------------------------------------------------------
+# bring-up log - the only record a failed boot leaves behind
+# ---------------------------------------------------------------------------
+#
+# Without this a boot failure is invisible. The hook runs inside stock
+# app_startup.sh, whose stdout goes nowhere on this board, and every service
+# that could otherwise carry a log - Moonraker, dropbear - starts in Step 8,
+# after anything that goes wrong. That is why diagnosing the first hang needed a
+# bespoke USB stick. ZMOD keeps the equivalent file at mod_data/log/zmod.log.
+#
+# The path is derived from $DATA_MNT, not from $MOD_DATA: MOD_DATA is a /opt
+# path and /opt is not bound until Step 2, so it does not resolve yet at the
+# point the log needs arming.
+BRINGUP_LOG_KEEP="${AD5X_BRINGUP_LOG_KEEP:-3}"
+
+bringup_log_start() {
+    local dir="${AD5X_BRINGUP_LOG_DIR:-$DATA_MNT/config/mod_data/log}"
+    local log="$dir/ad5x_bootstrap.log"
+    local i
+
+    # Never fatal: a bring-up that cannot open a log must still boot the
+    # printer. `touch`, never `: >` - a redirection failure on the `:` special
+    # builtin exits the shell outright.
+    mkdir -p "$dir" 2>/dev/null || return 0
+    touch "$log" 2>/dev/null || return 0
+
+    # KEEP counts the live log too, so the highest suffix is KEEP-1: KEEP=3
+    # leaves ad5x_bootstrap.log plus .1 and .2. Drop anything above that, which
+    # also cleans up after a larger KEEP on an earlier boot.
+    [ "$BRINGUP_LOG_KEEP" -ge 1 ] 2>/dev/null || BRINGUP_LOG_KEEP=1
+    rm -f "$log.$BRINGUP_LOG_KEEP" 2>/dev/null
+    i=$((BRINGUP_LOG_KEEP - 1))
+    while [ "$i" -gt 1 ]; do
+        mv -f "$log.$((i - 1))" "$log.$i" 2>/dev/null
+        i=$((i - 1))
+    done
+    [ "$BRINGUP_LOG_KEEP" -gt 1 ] && mv -f "$log" "$log.1" 2>/dev/null
+
+    # Truncate, not append: the previous boot's record was just rotated away,
+    # and with KEEP=1 there is no rotation, so appending would grow forever.
+    exec >"$log" 2>&1
+    echo "=== [ad5x] bring-up start $(date '+%Y-%m-%d %H:%M:%S' 2>/dev/null) pid $$ ==="
+    return 0
+}
+
 run_bootstrap() {
     local dry_run=0
     case "${1:-}" in
@@ -317,6 +362,10 @@ run_bootstrap() {
         return 1
     fi
 
+    # Real runs log to a file from here on; the dry-run must keep its stdout so
+    # callers (and the tests) can read the plan.
+    [ "$dry_run" -eq 1 ] || bringup_log_start
+
     if [ "$dry_run" -eq 1 ]; then
         echo "[dry-run] AD5X headless bootstrap plan (PLATFORM=$PLATFORM):"
         echo "[dry-run] failsafe: stand down this boot if BOOT_FLAG_FAILURE/SKIP is set; otherwise arm BOOT_FLAG_FAILURE before step 2 and clear it after step 8"
@@ -329,6 +378,7 @@ run_bootstrap() {
         echo "[dry-run] 7. launch klipper DETACHED (zstart_klipper.sh against the patched /usr/prog/klipper), then wait up to ${KLIPPY_WAIT}s for $KLIPPY_UDS"
         echo "[dry-run] 8. first-run database (migrate_db + restore_ota) then chroot start.sh (ntpd, Moonraker :7125, httpd :80)"
         echo "[dry-run] 9. done; stock app_startup.sh continues (it does not launch klippy)"
+        echo "[dry-run] log: a real run tees steps 1-9 to \$DATA_MNT/config/mod_data/log/ad5x_bootstrap.log (keep ${BRINGUP_LOG_KEEP})"
         return 0
     fi
 
@@ -344,6 +394,17 @@ run_bootstrap() {
     # request, means stand down this boot and let stock come up clean. Otherwise
     # arm the failure flag - only a completed bring-up (below) clears it.
     if failsafe_should_skip; then
+        # Standing the mod down is not enough on its own. apply_klipper_patches
+        # overlays STOCK klippy (KLIPPER_DIR is /usr/prog/klipper on this board),
+        # and those symlinks outlive the mod that made them: stock then imports
+        # patched modules whose runtime environment is gone, fails to start, and
+        # the printer sits on "Initializing..." with the board alarming. A
+        # half-finished bring-up leaves exactly that state behind, so undo it
+        # here - that is what turns a failed bring-up into a clean stock boot
+        # instead of a machine recoverable only over USB.
+        echo "// [ad5x] Reverting the klipper overlay so stock can boot clean..."
+        revert_klipper_patches || \
+            echo "@@ [ad5x] Overlay revert reported an error; stock klippy may not start." >&2
         return 0
     fi
     failsafe_arm
