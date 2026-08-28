@@ -83,6 +83,7 @@ assert_eq "hook is placed before stock klipper/start.sh" "before" "$placement"
 cat > "$FIX" <<'EOF'
 #!/bin/sh
 echo "stock preamble"
+mount /usr/prog/etc /etc
 /usr/prog/PROGRAM/software/firmwareExe -1 -D -qws &
 sleep 10
 count=`ps |grep firmwareExe |grep -v "grep" |wc -l`
@@ -93,19 +94,63 @@ EOF
 cp "$FIX" "$WORK/stock_shape"
 rm -f "$FIX.orig"
 bs install
-assert_eq "stock-shaped file: exactly one hook line" "1" "$(grep -c -F -- "$MARKER" "$FIX")"
+# Count the LATE hook specifically: "# forge-x" is a prefix of "# forge-x-early",
+# so a bare -F count now sees both.
+assert_eq "stock-shaped file: exactly one late hook line" "1" "$(grep -c '# forge-x$' "$FIX")"
+assert_eq "stock-shaped file: exactly one early hook line" "1" "$(grep -c 'forge-x-early' "$FIX")"
 if tail -n 1 "$FIX" | grep -Fq -- "$MARKER"; then
     _t_pass "stock-shaped file: hook is appended as the last line"
 else
     _t_fail "stock-shaped file: hook is appended as the last line" \
             "last line is: $(tail -n 1 "$FIX")"
 fi
+
+# --- the EARLY hook, and why it exists --------------------------------------
+#
+# A stood-down mod still has to undo its klipper overlay, and the late hook is a
+# boot too late: stock starts firmwareExe ~100 lines earlier, the UI launches
+# klipper against the overlaid tree, klippy dies, and the panel sits on
+# "Initializing..." while our revert runs seconds afterwards and helps only the
+# NEXT boot. Observed on the rig. So the failsafe gets its own hook near the top.
+early_line=$(grep -n 'forge-x-early' "$FIX" | cut -d: -f1)
+anchor_line=$(grep -n 'mount /usr/prog/etc /etc' "$FIX" | head -1 | cut -d: -f1)
+ui_line=$(grep -n 'firmwareExe' "$FIX" | head -1 | cut -d: -f1)
+late_line=$(grep -n '# forge-x$' "$FIX" | tail -1 | cut -d: -f1)
+
+if [ -n "$early_line" ]; then
+    _t_pass "an early hook is injected"
+else
+    _t_fail "an early hook is injected" "no forge-x-early line in the file"
+fi
+if [ -n "$early_line" ] && [ -n "$ui_line" ] && [ "$early_line" -lt "$ui_line" ]; then
+    _t_pass "the early hook runs BEFORE the stock UI starts"
+else
+    _t_fail "the early hook runs BEFORE the stock UI starts" \
+            "early=$early_line ui=$ui_line"
+fi
+if [ -n "$early_line" ] && [ -n "$anchor_line" ] && [ "$early_line" -gt "$anchor_line" ]; then
+    _t_pass "the early hook sits just after its anchor"
+else
+    _t_fail "the early hook sits just after its anchor" "early=$early_line anchor=$anchor_line"
+fi
+if [ -n "$late_line" ] && [ -n "$early_line" ] && [ "$late_line" -gt "$early_line" ]; then
+    _t_pass "the late hook still comes after the early one"
+else
+    _t_fail "the late hook still comes after the early one" "late=$late_line early=$early_line"
+fi
+assert_eq "installing twice injects exactly one early hook" "1" \
+    "$(grep -c 'forge-x-early' "$FIX")"
+
 bs uninstall
 if cmp -s "$FIX" "$WORK/stock_shape"; then
     _t_pass "stock-shaped file: uninstall restores it byte-identically"
 else
     _t_fail "stock-shaped file: uninstall restores it byte-identically" "differs"
 fi
+case "$(cat "$FIX")" in
+    *forge-x*) _t_fail "uninstall removes BOTH hooks" "a forge-x line survived" ;;
+    *)         _t_pass "uninstall removes BOTH hooks" ;;
+esac
 
 # --- .orig preservation ------------------------------------------------------
 make_fixture
@@ -256,6 +301,33 @@ if fs_call failsafe_should_skip; then
     _t_fail "failsafe does not skip a clean boot" "gate skipped with no flag set"
 else
     _t_pass "failsafe does not skip a clean boot"
+fi
+
+# failsafe_peek must NOT consume the flag. The early hook peeks; if it cleared
+# the flag, the late hook on the SAME boot would see a clean slate and run the
+# bring-up we had just decided to stand down.
+: > "$FS_FAIL"
+if fs_call failsafe_peek; then
+    _t_pass "failsafe_peek sees a stand-down request"
+else
+    _t_fail "failsafe_peek sees a stand-down request" "peek returned false"
+fi
+assert_file "failsafe_peek does NOT consume the flag" "$FS_FAIL"
+if fs_call failsafe_should_skip; then
+    _t_pass "the late hook still consumes it afterwards"
+else
+    _t_fail "the late hook still consumes it afterwards" "should_skip returned false"
+fi
+if [ -e "$FS_FAIL" ]; then
+    _t_fail "failsafe_should_skip consumes the flag" "flag survived"
+else
+    _t_pass "failsafe_should_skip consumes the flag"
+fi
+rm -f "$FS_FAIL" "$FS_SKIP"
+if fs_call failsafe_peek; then
+    _t_fail "failsafe_peek is false on a clean boot" "peek returned true"
+else
+    _t_pass "failsafe_peek is false on a clean boot"
 fi
 
 # The dry-run plan documents the failsafe.
@@ -646,5 +718,62 @@ assert_eq "a missing cmd_pwm is not fatal" "0" "$_bz_rc"
 assert_contains "a missing cmd_pwm is reported" "$out" "not available"
 
 rm -f "$NET_TRACE"
+
+# --- progress bar -----------------------------------------------------------
+#
+# From step 2 the stock UI is dead and HEADLESS never repaints, so the panel
+# freezes for the 2-3 minutes the rest of the bring-up takes. Every run then
+# looks like a hang - and a user who power-cycles mid-bring-up leaves a PARTIAL
+# klipper overlay (49 of 151 links, on the rig), which stock genuinely cannot
+# boot from. The bar existing is what stops the printer teaching people to break
+# it, so these assertions are about a safety property, not decoration.
+PB=$(mktemp)
+pb_call() {  # step, rows  -> paints into $PB
+    : > "$PB"
+    AD5X_FB="$PB" AD5X_FB_STRIDE=4 AD5X_FB_ROWS="$2" "$BASH_BIN" -c '
+        . "$1"; progress "$2"
+    ' _ "$BOOTSTRAP" "$1" >/dev/null 2>&1
+}
+
+pb_call 9 9
+assert_eq "a full bar fills the framebuffer" "36" "$(wc -c < "$PB")"
+assert_eq "a full bar is entirely lit" "36" "$(tr -dc '\377' < "$PB" | wc -c)"
+
+pb_call 0 9
+assert_eq "an empty bar still paints a full frame" "36" "$(wc -c < "$PB")"
+assert_eq "an empty bar has nothing lit" "0" "$(tr -dc '\377' < "$PB" | wc -c)"
+
+# Partial: step 3 of 9 = one third of the rows lit, and the lit rows come FIRST
+# (it fills downward, so motion is visible).
+pb_call 3 9
+assert_eq "a third-way bar lights a third of the frame" "12" "$(tr -dc '\377' < "$PB" | wc -c)"
+assert_eq "the lit rows are at the top" "12" "$(od -An -c "$PB" | tr -s ' ' '\n' | grep -c '^377$' || true)"
+head -c 12 "$PB" | tr -dc '\377' | wc -c | grep -q '^12$' \
+    && _t_pass "the bar fills downward from the top" \
+    || _t_fail "the bar fills downward from the top" "leading bytes are not all lit"
+
+# Escape hatch, same shape as the watchdog and the socket wait.
+: > "$PB"
+AD5X_PROGRESS=0 AD5X_FB="$PB" AD5X_FB_STRIDE=4 AD5X_FB_ROWS=9 "$BASH_BIN" -c '
+    . "$1"; progress 5
+' _ "$BOOTSTRAP" >/dev/null 2>&1
+assert_eq "AD5X_PROGRESS=0 paints nothing" "0" "$(wc -c < "$PB")"
+
+# A framebuffer that cannot be written must never take the bring-up down.
+AD5X_FB=/definitely/not/a/device "$BASH_BIN" -c '
+    . "$1"; progress 4
+' _ "$BOOTSTRAP" >/dev/null 2>&1
+assert_eq "a missing framebuffer is not fatal" "0" "$?"
+rm -f "$PB"
+
+# And the bring-up must actually paint - a bar nothing calls is the same bug as
+# a network takeover nothing calls.
+body=$(awk '/^run_bootstrap\(\)/,/^}/' "$BOOTSTRAP")
+pb_calls=$(printf '%s\n' "$body" | grep -c '^ *progress [0-9]')
+if [ "$pb_calls" -ge 8 ]; then
+    _t_pass "run_bootstrap paints progress at every step ($pb_calls calls)"
+else
+    _t_fail "run_bootstrap paints progress at every step" "only $pb_calls progress calls"
+fi
 
 finish

@@ -54,6 +54,22 @@ APP_STARTUP="${AD5X_APP_STARTUP:-/usr/prog/app_startup.sh}"
 # baked into a STOCK file that cannot source our platform descriptor. The
 # trailing "# forge-x" is the idempotency sentinel.
 HOOK_LINE='[ -x /usr/data/config/mod/.shell/ad5x_bootstrap.sh ] && /usr/data/config/mod/.shell/ad5x_bootstrap.sh   # forge-x'
+
+## The EARLY hook. A stood-down mod still has to undo its klipper overlay, and
+## doing that from the late hook is a boot too late to help: stock app_startup.sh
+## starts firmwareExe ~100 lines earlier, the UI launches klipper against the
+## overlaid tree, klippy dies on modules whose runtime is gone, and the panel sits
+## on "Initializing..." with the board alarming - while our revert runs a few
+## seconds afterwards and fixes it only for the NEXT boot. Observed exactly that
+## on the rig 2026-08-28.
+##
+## So the failsafe gets its own hook near the top, before the UI starts. It only
+## ever reverts and returns; it never brings anything up. ZMOD has the same shape
+## for the same reason: app_startup_mcu.sh early, prepare.sh late.
+EARLY_HOOK_LINE='[ -x /usr/data/config/mod/.shell/ad5x_bootstrap.sh ] && /usr/data/config/mod/.shell/ad5x_bootstrap.sh early   # forge-x-early'
+## Injected immediately after this stock line, which exists in every AD5X
+## app_startup.sh we have seen and sits before the UI launch.
+EARLY_HOOK_ANCHOR='mount /usr/prog/etc /etc'
 HOOK_MARKER='# forge-x'
 
 # ---------------------------------------------------------------------------
@@ -82,6 +98,19 @@ install_hook() {
 
     local tmp
     tmp="$(mktemp)"
+
+    # The EARLY hook first, so its anchor search runs against the pristine file.
+    if grep -Fq -- "$EARLY_HOOK_ANCHOR" "$target"; then
+        awk -v hook="$EARLY_HOOK_LINE" -v anchor="$EARLY_HOOK_ANCHOR" '
+            { print }
+            (!inserted && index($0, anchor)) { print hook; inserted = 1 }
+        ' "$target" > "$tmp"
+        cat "$tmp" > "$target"
+    else
+        echo "ad5x_bootstrap: WARNING: anchor '$EARLY_HOOK_ANCHOR' not found;" \
+             "the failsafe will only run late, a boot after it is needed" >&2
+    fi
+
     if grep -Fq -- 'klipper/start.sh' "$target"; then
         # Insert the hook immediately before the first stock klipper launch, so
         # patches and config land before klippy starts.
@@ -177,6 +206,13 @@ _ensure_var() {
 # they survive the power cycle that recovers from a bad boot.
 
 # Return 0 (and clear the offending flag) when the mod should be skipped.
+## Is a stand-down requested? Does NOT consume the flag - the early hook needs to
+## look without clearing, or the late hook on the same boot would see a clean slate
+## and run the bring-up we just decided to skip.
+failsafe_peek() {
+    [ -f "$BOOT_FAILURE_F" ] || [ -f "$BOOT_SKIP_F" ]
+}
+
 failsafe_should_skip() {
     if [ -f "$BOOT_FAILURE_F" ]; then
         echo "// [ad5x] previous boot did not complete - skipping the mod once"
@@ -241,6 +277,52 @@ watchdog_disarm() {
     [ -n "$WATCHDOG_PID" ] || return 0
     kill "$WATCHDOG_PID" 2>/dev/null
     WATCHDOG_PID=""
+}
+
+# ---------------------------------------------------------------------------
+# progress - the panel is the only thing the user can see
+# ---------------------------------------------------------------------------
+#
+# Step 2 kills the stock UI and HEADLESS never repaints, so from that moment the
+# panel holds whatever firmwareExe last drew - frozen, for the two to three
+# minutes the rest of the bring-up takes. Every run therefore looks exactly like
+# a hang, and a first run (which links ~151 klipper files) looks like a long one.
+#
+# That is not cosmetic. A user who power-cycles mid-bring-up leaves a PARTIAL
+# overlay - 49 of 151 links was the real case - which stock cannot boot from, so
+# the next boot genuinely is broken. The panel has to show that something is
+# happening, or the printer teaches people to break it.
+#
+# No assets: the mod payload ships no images, and adding some to solve this would
+# be a new build-time dependency for a progress bar. Fill rows directly instead -
+# white from the top, proportional to the step, dark below. The bar growing is
+# the whole message.
+FB_DEV="${AD5X_FB:-/dev/fb0}"
+PROGRESS_TOTAL=9
+PROGRESS_ON="${AD5X_PROGRESS:-1}"
+
+progress() {
+    _step="$1"
+    [ "$PROGRESS_ON" = "1" ] || return 0
+    [ -w "$FB_DEV" ] || return 0
+
+    # Overridable so this is testable off-rig, and so a board with odd sysfs can
+    # still be driven by hand.
+    _stride="${AD5X_FB_STRIDE:-$(cat /sys/class/graphics/fb0/stride 2>/dev/null)}"
+    _rows="${AD5X_FB_ROWS:-$(cut -d, -f2 /sys/class/graphics/fb0/virtual_size 2>/dev/null)}"
+    # Sane AD5X defaults when sysfs is not there: 800x480 BGRA, two stacked pages.
+    case "$_stride" in ''|*[!0-9]*) _stride=3200 ;; esac
+    case "$_rows"   in ''|*[!0-9]*) _rows=960 ;; esac
+
+    _fill=$(( _rows * _step / PROGRESS_TOTAL ))
+    [ "$_fill" -gt "$_rows" ] && _fill="$_rows"
+    _rest=$(( _rows - _fill ))
+
+    {
+        [ "$_fill" -gt 0 ] && dd if=/dev/zero bs="$_stride" count="$_fill" 2>/dev/null | tr '\000' '\377'
+        [ "$_rest" -gt 0 ] && dd if=/dev/zero bs="$_stride" count="$_rest" 2>/dev/null | tr '\000' '\021'
+    } > "$FB_DEV" 2>/dev/null
+    return 0
 }
 
 # ---------------------------------------------------------------------------
@@ -467,6 +549,28 @@ bringup_log_start() {
     return 0
 }
 
+## Early hook body: revert and get out of the way. Deliberately does the minimum -
+## it runs before the stock UI and must never be the thing that breaks a boot.
+run_early() {
+    # shellcheck disable=SC1090,SC1091
+    . "$SELF_DIR/platform.sh"
+    [ "${PLATFORM:-}" = "ad5x" ] || return 0
+
+    # shellcheck disable=SC1090,SC1091
+    . "$SELF_DIR/common.sh"
+
+    failsafe_peek || return 0
+
+    # shellcheck disable=SC1090,SC1091
+    . "$SELF_DIR/klipper_overlay.sh"
+
+    echo "// [ad5x-early] stand-down flagged; reverting the klipper overlay" \
+         "before the stock UI starts"
+    revert_klipper_patches \
+        || echo "@@ [ad5x-early] overlay revert failed; stock klippy may not start" >&2
+    return 0
+}
+
 run_bootstrap() {
     local dry_run=0
     case "${1:-}" in
@@ -500,6 +604,7 @@ run_bootstrap() {
         echo "[dry-run] 7. launch klipper DETACHED (zstart_klipper.sh against the patched /usr/prog/klipper), then wait up to ${KLIPPY_WAIT}s for $KLIPPY_UDS"
         echo "[dry-run] 8. first-run database (migrate_db + restore_ota) then chroot start.sh (ntpd, Moonraker :7125, httpd :80)"
         echo "[dry-run] 9. done; stock app_startup.sh continues (it does not launch klippy)"
+        echo "[dry-run] progress: a real run paints a growing bar to $FB_DEV at steps 2-9 (AD5X_PROGRESS=0 disables)"
         echo "[dry-run] log: a real run tees steps 1-9 to \$DATA_MNT/config/mod_data/log/ad5x_bootstrap.log (keep ${BRINGUP_LOG_KEEP})"
         return 0
     fi
@@ -569,17 +674,21 @@ run_bootstrap() {
     # Stock app_startup.sh launches the Qt UI (firmwareExe) before our hook runs,
     # and that UI is also this board's network manager. stop_stock_ui() does both
     # halves - see its comment for why they are inseparable.
+    progress 2
     stop_stock_ui
 
     # Step 3. No-op on AD5X (/usr/data is already mounted); parity with S00init.
+    progress 3
     echo "// [ad5x] Mounting data partition..."
     mount_data_partition
 
     # Step 4. chroot mounts + binds + printer_data compat tree + www + zhttp apply.
+    progress 4
     echo "// [ad5x] Buildroot initialization..."
     init_buildroot
 
     # Step 5. Overlay Forge-X's klipper extras/patches BEFORE stock launches klippy.
+    progress 5
     echo "// [ad5x] Applying klipper patches..."
     if ! apply_klipper_patches; then
         echo "@@ [ad5x] Failed to apply klipper patches." >&2
@@ -588,6 +697,7 @@ run_bootstrap() {
     fi
 
     # Step 6. Write printer.cfg (display resolves to init.display.headless.cfg).
+    progress 6
     echo "// [ad5x] Restoring config..."
     fix_config
 
@@ -597,6 +707,7 @@ run_bootstrap() {
     # same MIPS-safe launcher, run against the just-patched /usr/prog/klipper
     # through the host Python env in its start.sh. See launch_klipper() for why
     # it must not be called in the foreground.
+    progress 7
     echo "// [ad5x] Launching klipper..."
     launch_klipper
     wait_for_klippy_socket
@@ -609,6 +720,7 @@ run_bootstrap() {
         "$SCRIPTS"/migrate_db.sh
         chroot "$MOD" /opt/config/mod/.root/restore_ota.sh
     fi
+    progress 8
     echo "// [ad5x] Starting Buildroot services..."
     chroot "$MOD" /opt/config/mod/.root/start.sh
 
@@ -619,6 +731,7 @@ run_bootstrap() {
 
     # Step 9. Done: klippy (Step 7) and the chroot services (Step 8) are up. Stock
     # app_startup.sh continues; it does not launch klippy itself.
+    progress 9
     echo "// [ad5x] Bootstrap complete."
     return 0
 }
@@ -631,10 +744,11 @@ main() {
     case "${1:-}" in
         install)      shift; install_hook "$@" ;;
         uninstall)    shift; uninstall_hook "$@" ;;
+        early)        shift; run_early "$@" ;;
         run)          shift; run_bootstrap "$@" ;;
         ""|--dry-run) run_bootstrap "$@" ;;
         *)
-            echo "Usage: ${0##*/} {install|uninstall|run [--dry-run]}" >&2
+            echo "Usage: ${0##*/} {install|uninstall|early|run [--dry-run]}" >&2
             return 1
         ;;
     esac
