@@ -204,6 +204,35 @@ klipper_overlay_remove_all() {
     return "$rc"
 }
 
+## Drop every compiled-bytecode cache under the klipper tree.
+##
+## Both halves of the overlay swap .py files in place, and CPython decides
+## whether a cached .pyc is still good from the source's mtime and size. That
+## check is not trustworthy here: the AD5X has no RTC, so its clock walks from
+## 1970 to a restored time to ntp within a single boot, and the data partition
+## is mounted `sync` with coarse timestamps. A stale .pyc that wins the check is
+## silent and total - klippy imports the OTHER version of the module, and the
+## first symptom is a config option the loaded module has never heard of.
+##
+## Seen for real: a stand-down boot ran stock klippy, which compiled the stock
+## extras into the shared __pycache__; the next mod boot relinked all 151
+## symlinks correctly and klippy still imported stock gcode_shell_command, which
+## does not know `mode:`. The printer halted with no heaters and no motion, and
+## nothing in the bring-up log looked wrong.
+##
+## So purge after linking AND after reverting - a swap in either direction
+## leaves bytecode compiled from the file that is no longer there.
+klipper_overlay_purge_bytecode() {
+    local target_dir="$1"
+
+    [ -d "$target_dir" ] || return 0
+
+    find "$target_dir" -name __pycache__ -type d -exec rm -rf {} + 2>/dev/null
+    find "$target_dir" -name '*.pyc' -delete 2>/dev/null
+
+    return 0
+}
+
 klipper_overlay_link_plugins() {
     local src_dir="$1"
     local target_dir="$2"
@@ -335,6 +364,8 @@ apply_klipper_patches() {
     echo "Apply fixes..."
     "$tune_cmd" apply || return 1
 
+    klipper_overlay_purge_bytecode "$target_dir"
+
     sync
 }
 
@@ -345,5 +376,6 @@ revert_klipper_patches() {
     local target_dir="${KLIPPER_TARGET_DIR:-$KLIPPER_DIR/klippy}"
 
     klipper_overlay_remove_all "$src_dir" "$target_dir" || return 1
+    klipper_overlay_purge_bytecode "$target_dir"
     sync
 }

@@ -535,6 +535,77 @@ class KlipperOverlayTest(unittest.TestCase):
 
 
 
+    ## Bytecode caches outlive the file swap that invalidated them.
+    ##
+    ## Regression for a real halt: a stood-down boot ran stock klippy, which
+    ## compiled the stock extras into the target tree's __pycache__. The next
+    ## mod boot relinked every symlink correctly and klippy still imported the
+    ## stock module, because CPython trusted a .pyc whose mtime/size check
+    ## passed on a box with no RTC. The printer came up with no heaters and
+    ## nothing in the bring-up log looked wrong.
+
+    def test_apply_purges_stale_bytecode_in_the_target(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tree = OverlayTree(tmp)
+            tree.add_standard_overlay()
+            cache = tree.extras / "__pycache__"
+            cache.mkdir(parents=True, exist_ok=True)
+            stale = cache / "gcode_shell_command.cpython-38.pyc"
+            stale.write_bytes(b"stock bytecode")
+            loose = tree.target / "kinematics.pyc"
+            loose.write_bytes(b"stock bytecode")
+
+            result = tree.run()
+
+            self.assertEqual(result.returncode, 0, result.stdout)
+            self.assertFalse(stale.exists(),
+                             "stale .pyc survived apply_klipper_patches")
+            self.assertFalse(cache.exists(), "__pycache__ dir survived")
+            self.assertFalse(loose.exists(), "loose .pyc survived")
+
+    def test_revert_purges_bytecode_too(self):
+        ## The other direction matters just as much: standing the mod down
+        ## leaves MOD-compiled bytecode for stock klippy to import.
+        with tempfile.TemporaryDirectory() as tmp:
+            tree = OverlayTree(tmp)
+            tree.add_standard_overlay()
+            tree.run()
+
+            cache = tree.extras / "__pycache__"
+            cache.mkdir(parents=True, exist_ok=True)
+            stale = cache / "mcu.cpython-38.pyc"
+            stale.write_bytes(b"mod bytecode")
+
+            result = tree.run(fn="revert_klipper_patches")
+
+            self.assertEqual(result.returncode, 0, result.stdout)
+            self.assertFalse(stale.exists(),
+                             "mod bytecode survived the stand-down")
+
+    def test_purge_leaves_the_source_tree_alone(self):
+        ## The mod's own __pycache__ under .py/klipper is not ours to delete -
+        ## only the klipper tree we linked into.
+        with tempfile.TemporaryDirectory() as tmp:
+            tree = OverlayTree(tmp)
+            tree.add_standard_overlay()
+            source_cache = tree.plugins / "__pycache__"
+            keeper = source_cache / "top_level.cpython-314.pyc"
+            self.assertTrue(keeper.exists())
+
+            result = tree.run()
+
+            self.assertEqual(result.returncode, 0, result.stdout)
+            self.assertTrue(keeper.exists(),
+                            "purge reached into the mod source tree")
+
+    def test_purge_is_safe_when_there_is_no_cache(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tree = OverlayTree(tmp)
+            tree.add_standard_overlay()
+            result = tree.run()
+            self.assertEqual(result.returncode, 0, result.stdout)
+
+
 class McuTuningTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
