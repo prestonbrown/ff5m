@@ -215,7 +215,7 @@ run_bootstrap() {
         echo "[dry-run] AD5X headless bootstrap plan (PLATFORM=$PLATFORM):"
         echo "[dry-run] failsafe: stand down this boot if BOOT_FLAG_FAILURE/SKIP is set; otherwise arm BOOT_FLAG_FAILURE before step 2 and clear it after step 8"
         echo "[dry-run] 1. source platform.sh, common.sh, klipper_overlay.sh, init_lib.sh"
-        echo "[dry-run] 2. preconditions: bind /opt->$DATA_MNT; move aside \$MOD/ZMOD marker; ensure variables.cfg display=HEADLESS, use_swap=OFF; stop stock UI ($STOCK_UI_PROCS)"
+        echo "[dry-run] 2. preconditions: bind /opt->$DATA_MNT; provide /bin/bash (faithful /bin superset bound over /bin, no mod script modified); move aside \$MOD/ZMOD marker; ensure variables.cfg display=HEADLESS, use_swap=OFF; stop stock UI ($STOCK_UI_PROCS)"
         echo "[dry-run] 3. mount_data_partition"
         echo "[dry-run] 4. init_buildroot"
         echo "[dry-run] 5. apply_klipper_patches"
@@ -250,6 +250,11 @@ run_bootstrap() {
     # AD5X host / is a read-only squashfs on which a /data mountpoint cannot be
     # created anyway.
     _ensure_bind "$DATA_MNT" /opt
+    # The AD5X host squashfs ships no /bin/bash and the kernel has no overlayfs,
+    # so klippy's #!/bin/bash gcode_shell_command targets cannot start. Provide
+    # /bin/bash by binding a faithful /bin superset (provide_host_bash); no mod
+    # script is modified. Must precede the klippy launch (Step 7).
+    provide_host_bash
     # A $MOD/ZMOD marker triggers a 30s zversion stall plus ARM tone.py. Move it
     # aside (reversible) rather than deleting it.
     if [ -e "$MOD/ZMOD" ] && [ ! -e "$MOD/ZMOD.forge-x-disabled" ]; then

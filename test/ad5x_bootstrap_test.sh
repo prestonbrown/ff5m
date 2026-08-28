@@ -149,6 +149,12 @@ case "$out" in
     *)                 _t_fail "dry-run stops the stock UI (firmwareExe)" "absent" ;;
 esac
 
+# The host has no /bin/bash; the plan must document providing it (Step 2).
+case "$out" in
+    *"provide /bin/bash"*) _t_pass "dry-run documents providing /bin/bash" ;;
+    *)                     _t_fail "dry-run documents providing /bin/bash" "absent" ;;
+esac
+
 # --- failsafe: arm / disarm / one-shot skip gate ----------------------------
 # The failsafe functions read the two flag paths that common.sh derives from
 # $MOD_ROOT. Off-rig we source the bootstrap and point those globals at fixture

@@ -83,6 +83,32 @@ apply_platform_macros() {
     done
 }
 
+# The AD5X host ships no /bin/bash: its / is a read-only squashfs (BusyBox only)
+# and the kernel has no overlayfs, so a #!/bin/bash mod script - the Forge-X
+# gcode_shell_command targets klippy runs on the host - cannot start. Provide
+# /bin/bash without editing a single mod script: build a faithful superset of
+# the host /bin (a byte-for-byte copy, plus the .shell/host-bin/bash trampoline
+# that re-execs the mod's own bash via the rootfs loader) and bind it over /bin.
+# Every mod script then runs unmodified with its pristine #!/bin/bash. The AD5M
+# host already has /bin/bash, so this is a no-op there. Idempotent: a second
+# call this boot - or a future host that ships bash - sees /bin/bash and returns
+# before touching anything. HOST_BASH_PROBE lets the test suite force the build
+# path; it is /bin/bash in every real run.
+provide_host_bash() {
+    [ "$PLATFORM" = ad5x ] || return 0
+    [ -x "${HOST_BASH_PROBE:-/bin/bash}" ] && return 0
+
+    rm -rf "$HOST_BIN_DIR"
+    mkdir -p "$HOST_BIN_DIR"
+    # cp -a preserves the setuid busybox binary and every applet symlink, so the
+    # superset is functionally identical to the host /bin it stands in for.
+    cp -a /bin/. "$HOST_BIN_DIR"/
+    cp "$SCRIPTS"/host-bin/bash "$HOST_BIN_DIR"/bash
+    chmod 0755 "$HOST_BIN_DIR"/bash
+
+    mount --bind "$HOST_BIN_DIR" /bin
+}
+
 init_buildroot() {
     init_chroot
 

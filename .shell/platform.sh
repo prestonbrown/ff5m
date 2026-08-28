@@ -97,3 +97,10 @@ MOD=$DATA_MNT/.mod/.forge-x
 FORGEX_BASH_LD=$MOD/lib/$ROOTFS_LD
 FORGEX_BASH_LIBPATH=$MOD/lib:$MOD/usr/lib
 FORGEX_BASH_BIN=$MOD/bin/bash
+
+## Faithful superset of the host /bin (a byte copy plus the .shell/host-bin/bash
+## trampoline) that init_lib.sh's provide_host_bash bind-mounts over /bin, so the
+## AD5X - BusyBox on a read-only squashfs, no /bin/bash, no overlayfs - can run
+## the mod's #!/bin/bash scripts unmodified. A single derivation off DATA_MNT.
+## Unused on the AD5M, whose host already provides /bin/bash.
+HOST_BIN_DIR=$DATA_MNT/.mod/host-bin

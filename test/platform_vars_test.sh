@@ -33,6 +33,7 @@ assert_eq "ad5m MOD_ROOT"       "/opt/config/mod"            "$MOD_ROOT"
 assert_eq "ad5m MOD"            "/data/.mod/.forge-x"        "$MOD"
 assert_eq "ad5m STOCK_UI_PROCS" "ffstartup-arm firmwareExe"  "$STOCK_UI_PROCS"
 assert_eq "ad5m ROOTFS_LD"      "ld-linux-armhf.so.3"        "$ROOTFS_LD"
+assert_eq "ad5m HOST_BIN_DIR"   "/data/.mod/host-bin"        "$HOST_BIN_DIR"
 
 # --- AD5X (mips) ------------------------------------------------------------
 uname() { echo mips; }
@@ -51,6 +52,7 @@ assert_eq "ad5x MOD_ROOT"       "/usr/data/config/mod"       "$MOD_ROOT"
 assert_eq "ad5x MOD"            "/usr/data/.mod/.forge-x"    "$MOD"
 assert_eq "ad5x STOCK_UI_PROCS" "firmwareExe"                "$STOCK_UI_PROCS"
 assert_eq "ad5x ROOTFS_LD"      "ld-linux-mipsn8.so.1"       "$ROOTFS_LD"
+assert_eq "ad5x HOST_BIN_DIR"   "/usr/data/.mod/host-bin"    "$HOST_BIN_DIR"
 
 # mipsel must select the same block as mips (the mips* glob).
 uname() { echo mipsel; }

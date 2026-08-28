@@ -113,4 +113,83 @@ assert_eq "ad5m leaves hw_base.cfg default (no .ad5m override to select)" \
     "AD5M-DEFAULT" "$(cat "$FXM/macros/hw_base.cfg")"
 rm -rf "$FXM"
 
+# --- provide_host_bash: AD5X /bin/bash provider ------------------------------
+# The AD5X host has no /bin/bash; provide_host_bash builds a faithful /bin
+# superset (a copy of /bin plus the host-bin/bash trampoline) and binds it over
+# /bin. Exercised with a shadowed uname and HOST_BASH_PROBE forced at a missing
+# path, so the guard does not short-circuit on the dev host's own /bin/bash;
+# cp/mount/mkdir/rm/chmod are faked to record their arguments.
+run_provide_bash() {
+    ARCH="$1" PROBE="$2" "$BASH_BIN" -c '
+        uname() { echo "$ARCH"; }
+        . "$1"
+        HOST_BASH_PROBE="$PROBE"
+        rm() { echo "rm $*"; }
+        mkdir() { echo "mkdir $*"; }
+        cp() { echo "cp $*"; }
+        chmod() { echo "chmod $*"; }
+        mount() { echo "mount $*"; }
+        provide_host_bash
+    ' _ "$INIT_LIB" 2>&1
+}
+
+# ad5x, no host bash: copy the real /bin, install the trampoline, bind over /bin.
+ad5x_bash=$(run_provide_bash mips /does/not/exist)
+assert_contains "ad5x copies the real /bin into the superset" \
+    "$ad5x_bash" "cp -a /bin/. /usr/data/.mod/host-bin/"
+assert_contains "ad5x installs the bash trampoline into the superset" \
+    "$ad5x_bash" "cp /usr/data/config/mod/.shell/host-bin/bash /usr/data/.mod/host-bin/bash"
+assert_contains "ad5x binds the superset over /bin" \
+    "$ad5x_bash" "mount --bind /usr/data/.mod/host-bin /bin"
+
+# ad5x, host already provides bash: the guard short-circuits, nothing is built.
+ad5x_have=$(run_provide_bash mips /bin/sh)   # /bin/sh exists on the dev host
+case "$ad5x_have" in
+    *mount*|*"cp -a"*) _t_fail "ad5x no-ops when /bin/bash already exists" "built/bound anyway: $ad5x_have" ;;
+    *)                 _t_pass "ad5x no-ops when /bin/bash already exists" ;;
+esac
+
+# ad5m: never provides bash (host has it); returns before any work.
+ad5m_bash=$(run_provide_bash armv7l /does/not/exist)
+case "$ad5m_bash" in
+    *mount*|*"cp -a"*) _t_fail "ad5m no-ops (host already has /bin/bash)" "did work: $ad5m_bash" ;;
+    *)                 _t_pass "ad5m no-ops (host already has /bin/bash)" ;;
+esac
+
+# --- host-bin/bash trampoline: forwards through the rootfs loader ------------
+SHIM="$REPO_DIR/.shell/host-bin/bash"
+assert_file "host-bin/bash trampoline exists" "$SHIM"
+
+# Behavioral: copy the shim, repoint its hardcoded descriptor path at a fixture
+# platform.sh, and run it through a fake loader that drops `--library-path <p>`
+# and execs the bash it was handed - exactly the shape the shim invokes. Proves
+# the shim runs the rootfs bash with the script's arguments intact. Skipped
+# when there is no bash to re-exec to (BASH_BIN empty -> handled by the skip at
+# the top of this file).
+SB=$(mktemp -d)
+mkdir -p "$SB/root/lib" "$SB/root/bin"
+cat > "$SB/platform.sh" <<EOF
+FORGEX_BASH_LD=$SB/root/lib/fake-ld.so
+FORGEX_BASH_LIBPATH=$SB/root/lib
+FORGEX_BASH_BIN=$SB/root/bin/bash
+EOF
+cat > "$SB/root/lib/fake-ld.so" <<'EOF'
+#!/bin/sh
+# emulate: LD --library-path <path> <bash> <script> <args...>
+shift 2
+exec "$@"
+EOF
+chmod +x "$SB/root/lib/fake-ld.so"
+ln -s "$BASH_BIN" "$SB/root/bin/bash"
+sed "s#/usr/data/config/mod/.shell/platform.sh#$SB/platform.sh#" "$SHIM" > "$SB/bash"
+chmod +x "$SB/bash"
+printf '#!/bin/bash\necho SHIM_RAN under=${BASH_VERSION:+bash} arg=$1\n' > "$SB/script.sh"
+chmod +x "$SB/script.sh"
+shimout=$("$SB/bash" "$SB/script.sh" hello 2>/dev/null)
+case "$shimout" in
+    *"under=bash"*"arg=hello"*) _t_pass "shim runs the rootfs bash with args intact" ;;
+    *)                          _t_fail "shim runs the rootfs bash with args intact" "got: $shimout" ;;
+esac
+rm -rf "$SB"
+
 finish
