@@ -49,34 +49,60 @@ FAULT = "fault"
 ##   it was taken with filament still sitting in the path, which is the middle
 ##   row above. A genuinely empty toolhead - cut, purged and retracted - reads
 ##   0.398, and the true span is therefore 50x, not 6x.
+##
+##   SWEPT 2026-08-29, loaded lane retracted 1 mm at a time off the sensor and
+##   pushed back, n=4 per step. This is the shape the rows above only sampled:
+##
+##     0 - 8 mm back    0.0074 - 0.0085     flat; the sensor saturates
+##         9 mm back    0.0094 - 0.0158     the knee, in one millimetre
+##        10 mm back    0.0170 - 0.0179
+##     resting after a
+##       completed load 0.0225 - 0.0236     stable, reproducible
+##
+##   The reading is a PROXIMITY CURVE, not two clusters: flat while the strand
+##   covers the sensor, then climbing steeply once it clears. So "at the sensor"
+##   and "in the path" are the same physical thing at different distances, and
+##   there is no gap between them to put a fault band in. The only real gap is
+##   the 8x span from 0.050 to 0.398 - filament anywhere near the extruder
+##   against nothing there at all - and that is the only place a threshold
+##   belongs.
 def toolhead_bands(present_max, absent_min):
-    """The AD5X toolhead sensor's shape, given where its clusters sit.
+    """The AD5X toolhead sensor's shape, given where its thresholds sit.
 
-    Between the clusters is FAULT rather than a state: a reading in the gap is
-    a half-inserted strand or a failing sensor. Config-supplied thresholds build
-    the table through this same function, so a tuned sensor cannot end up a
-    different shape.
+    PRESENT below, ABSENT above, and FAULT only above `absent_min`, which is
+    higher than an empty toolhead ever reads - a disconnected or shorted sensor
+    rails, and that is the one reading no filament position can produce.
+    Config-supplied thresholds build the table through this same function, so a
+    tuned sensor cannot end up a different shape.
     """
-    return ((present_max, PRESENT), (absent_min, FAULT), (None, ABSENT))
+    return ((present_max, PRESENT), (absent_min, ABSENT), (None, FAULT))
 
 
-AD5X_PRESENT_MAX = 0.015
-AD5X_ABSENT_MIN = 0.020
+## ZMOD's own thresholds, which are stock firmware's: `value >= 0.72 if value >
+## 0.3 else True`. They are the defaults here because the sweep showed the
+## narrow table this used to carry was WRONG ON HARDWARE, twice over:
+##
+##   - A completed load rests at 0.023, which that table called ABSENT. The next
+##     load then read "extruder already empty", skipped the cut and the 60 mm
+##     withdraw, and drove the incoming lane into a strand still gripped by the
+##     gear. That is the stall that looked like broken hardware.
+##   - Its FAULT band, 0.015 to 0.020, sat squarely on the knee of the curve, so
+##     an ordinary tip 10 mm off the sensor read as a failing sensor.
+##
+## 0.30 sits in the empty 8x span between "filament somewhere near the extruder"
+## and "nothing in the path", six times above the highest present reading and a
+## quarter below the lowest absent one. The narrow thresholds had 0.005 of
+## margin against a 0.001 spread and were chosen from cluster endpoints before
+## anything had swept between them.
+AD5X_PRESENT_MAX = 0.30
+AD5X_ABSENT_MIN = 0.72
 AD5X_TOOLHEAD = toolhead_bands(AD5X_PRESENT_MAX, AD5X_ABSENT_MIN)
 
-## ZMOD's `value >= 0.72 if value > 0.3 else True`, as data.
-##
-## This was previously commented as unable to fire on this printer, on the
-## grounds that every reading is below 0.055. That was a consequence of the
-## wrong empty figure above, and it is not true: against the real measurements
-## zmod's table classifies BOTH endpoints correctly - 0.0077 present, 0.398
-## absent. Its thresholds work here.
-##
-## The two tables still differ on the middle row, filament in the path but not
-## at the sensor: zmod calls 0.045 present, this calls it absent. Which is right
-## depends on what the caller is asking, and neither has been shown wrong on
-## hardware. Kept so the two can be compared, and so a test can pin the
-## difference.
+## zmod's table as data, for a test that pins where the two still differ: above
+## 0.72 zmod says PRESENT and this says FAULT. Same call either way with
+## `fail_safe` on - a railed sensor must not pause a running print - but ours
+## keeps the fault visible through classify() instead of reporting filament
+## that is not there.
 ZMOD_TOOLHEAD = ((0.30, PRESENT), (0.72, ABSENT), (None, PRESENT))
 
 

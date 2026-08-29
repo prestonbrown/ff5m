@@ -15,9 +15,20 @@ L = ifs_modules.load("ifs_sensor_logic")
 S = ifs_modules.load("ifs_status")
 
 
-## Measured. Engaged in the sensor, and not.
-ENGAGED = (0.0075, 0.0081, 0.0082, 0.008089)
-DISENGAGED = (0.0249, 0.0432, 0.0484, 0.053205)
+## Measured, and the labels matter more than the numbers.
+##
+## AT is the tip covering the sensor. NEAR is the tip off the sensor but still
+## in the extruder - a completed load rests at 0.023, and a strand ten
+## millimetres back reads 0.017. Those used to be called "disengaged" and the
+## table called them ABSENT, which is how a load came to skip the cut and drive
+## the next lane into filament the gear was still holding.
+##
+## EMPTY is the only state with no filament near the extruder at all: cut,
+## purged and retracted, n=14, spread 0.0007. The gap from NEAR to EMPTY is 8x
+## and there is nothing in it.
+AT = (0.0074, 0.0077, 0.0082, 0.008089, 0.0085)
+NEAR = (0.0158, 0.0174, 0.0227, 0.0249, 0.0432, 0.0484, 0.053205)
+EMPTY = (0.3979, 0.3983, 0.3986)
 
 
 def status(silk=0, stall=0):
@@ -63,65 +74,100 @@ class TestBandTable(unittest.TestCase):
         text = sensor().describe(0.008)
         self.assertIn("present", text)
         self.assertIn("0.008", text)
-        self.assertIn("0.015", text)
+        self.assertIn("0.300", text)
 
 
 class TestMeasuredAD5X(unittest.TestCase):
-    def test_engaged_readings_are_present(self):
+    def test_a_tip_on_the_sensor_is_present(self):
         s = sensor()
-        for v in ENGAGED:
+        for v in AT:
             self.assertEqual(s.classify(v), L.PRESENT, "adc=%s" % v)
             self.assertTrue(s.has_filament(v), "adc=%s" % v)
 
-    def test_disengaged_readings_are_absent(self):
+    def test_a_tip_off_the_sensor_but_still_in_the_extruder_is_present(self):
+        """The regression that cost an evening, and the reason for this table.
+
+        A completed load rests at 0.023. Reading that as ABSENT makes the next
+        load say "extruder already empty", skip the cut and the 60 mm withdraw,
+        and feed the incoming lane into a strand the gear is still gripping -
+        which stalls, and looks exactly like broken hardware.
+        """
         s = sensor()
-        for v in DISENGAGED:
+        for v in NEAR:
+            self.assertEqual(s.classify(v), L.PRESENT, "adc=%s" % v)
+            self.assertTrue(s.has_filament(v), "adc=%s" % v)
+
+    def test_an_empty_toolhead_is_absent(self):
+        s = sensor()
+        for v in EMPTY:
             self.assertEqual(s.classify(v), L.ABSENT, "adc=%s" % v)
             self.assertFalse(s.has_filament(v), "adc=%s" % v)
 
-    def test_the_thresholds_sit_between_the_measured_clusters(self):
-        ## If they do not, the sensor is being asked to resolve something that
-        ## was never measured.
-        present_max, absent_min = L.AD5X_TOOLHEAD[0][0], L.AD5X_TOOLHEAD[1][0]
-        self.assertLess(max(ENGAGED), present_max)
-        self.assertGreater(min(DISENGAGED), absent_min)
-        self.assertLess(present_max, absent_min)
+    def test_the_threshold_sits_in_the_one_real_gap(self):
+        ## Everything with filament near the extruder on one side, an empty
+        ## toolhead on the other, and nothing measured in between. A threshold
+        ## anywhere else is resolving a difference that was never observed.
+        present_max = L.AD5X_TOOLHEAD[0][0]
+        self.assertGreater(present_max, max(AT + NEAR) * 5)
+        self.assertLess(present_max, min(EMPTY))
 
-    def test_the_gap_between_clusters_is_a_fault(self):
-        ## Nothing was ever observed here: a half-inserted strand or a failing
-        ## sensor, not a clean state.
+    def test_the_curve_has_no_gap_to_put_a_fault_band_in(self):
+        """Swept 1mm at a time: flat to 8mm, then a knee, then a climb.
+
+        The old table called 0.015-0.020 a fault, on the theory that the
+        readings formed two clusters with nothing between. They do not - it is
+        one continuous proximity curve, and 0.017 is an ordinary tip ten
+        millimetres back.
+        """
         s = sensor()
-        self.assertEqual(s.classify(0.017), L.FAULT)
-        self.assertTrue(s.has_filament(0.017))   # fail-safe: no false runout
+        for v in (0.0085, 0.0094, 0.0158, 0.0174, 0.0227):
+            self.assertEqual(s.classify(v), L.PRESENT, "adc=%s" % v)
+
+    def test_only_an_impossible_reading_is_a_fault(self):
+        ## Above every filament position AND above an empty toolhead: the
+        ## sensor is disconnected or shorted, not reporting a strand.
+        s = sensor()
+        self.assertEqual(s.classify(0.9), L.FAULT)
+        self.assertTrue(s.has_filament(0.9))   # fail-safe: no false runout
 
     def test_polarity_is_inverted(self):
         ## Low means PRESENT. Backwards inverts every runout on the machine.
         s = sensor()
         self.assertTrue(s.has_filament(0.008))
-        self.assertFalse(s.has_filament(0.048))
+        self.assertFalse(s.has_filament(0.398))
 
 
-class TestZmodCannotDetectRunout(unittest.TestCase):
-    """The finding this exercise produced, pinned so it cannot drift."""
+class TestZmodAgrees(unittest.TestCase):
+    """Stock's thresholds against ours, now that ours ARE stock's.
 
-    def test_zmod_reports_present_in_every_measured_state(self):
-        ## Every reading on this printer is below 0.055, so zmod's table puts
-        ## them all in its first band - loaded, empty, or disconnected.
+    This class used to be called TestZmodCannotDetectRunout and asserted the
+    opposite. That claim came from an empty-toolhead figure taken with filament
+    still in the path; once the real one was measured, and once the curve
+    between them was swept, zmod's thresholds turned out to be the right ones
+    and the narrow table was the mistake.
+    """
+
+    def test_it_agrees_with_us_in_every_measured_state(self):
         z = sensor(L.ZMOD_TOOLHEAD)
-        for v in ENGAGED + DISENGAGED:
-            self.assertTrue(z.has_filament(v), "adc=%s" % v)
+        ours = sensor()
+        for v in AT + NEAR + EMPTY:
+            self.assertEqual(z.has_filament(v), ours.has_filament(v),
+                             "adc=%s" % v)
 
-    def test_the_two_tables_disagree_where_it_matters(self):
-        empty = 0.0432
-        self.assertFalse(sensor().has_filament(empty))
-        self.assertTrue(sensor(L.ZMOD_TOOLHEAD).has_filament(empty))
-
-    def test_zmod_needs_a_reading_this_printer_never_produces(self):
-        ## For zmod's table to report absent, the sensor would have to land
-        ## between 0.30 and 0.72. The measured range tops out near 0.05.
+    def test_it_detects_a_real_runout(self):
+        ## The claim that it could not was the wrong-measurement artefact.
         z = sensor(L.ZMOD_TOOLHEAD)
-        self.assertFalse(z.has_filament(0.5))
-        self.assertGreater(L.ZMOD_TOOLHEAD[0][0], max(DISENGAGED) * 5)
+        for v in EMPTY:
+            self.assertFalse(z.has_filament(v), "adc=%s" % v)
+
+    def test_the_two_tables_differ_only_on_an_impossible_reading(self):
+        ## Above 0.72 no filament position can produce a reading, so zmod calls
+        ## it present and we call it a fault. Same runout decision either way
+        ## while fail_safe is on; ours keeps the fault visible.
+        self.assertTrue(sensor(L.ZMOD_TOOLHEAD).has_filament(0.9))
+        self.assertTrue(sensor().has_filament(0.9))
+        self.assertEqual(sensor(L.ZMOD_TOOLHEAD).classify(0.9), L.PRESENT)
+        self.assertEqual(sensor().classify(0.9), L.FAULT)
 
     def test_zmod_reproduces_the_original_expression(self):
         ## Band bounds here are uniformly inclusive; zmod's expression is not
@@ -158,8 +204,8 @@ class TestFailSafe(unittest.TestCase):
     def test_a_fault_is_still_visible_when_failing_safe(self):
         ## has_filament() hides it deliberately; classify() must not.
         s = sensor()
-        self.assertTrue(s.has_filament(0.017))
-        self.assertEqual(s.classify(0.017), L.FAULT)
+        self.assertTrue(s.has_filament(0.9))
+        self.assertEqual(s.classify(0.9), L.FAULT)
 
 
 class TestChannelSensor(unittest.TestCase):

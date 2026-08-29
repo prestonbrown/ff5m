@@ -802,9 +802,17 @@ class TestToolheadSensor(unittest.TestCase):
         self.assertEqual(sensor.last_state, LOGIC.PRESENT)
 
     def test_empty_reads_absent(self):
-        sensor, _ = make_toolhead(adc={self.ADC: 0.0432})
+        ## A genuinely empty toolhead - cut, purged, retracted. 0.043 is NOT
+        ## this: it is a tip still in the extruder, a few centimetres off the
+        ## sensor, and reading it as absent is what made a load skip the cut.
+        sensor, _ = make_toolhead(adc={self.ADC: 0.3983})
         self.assertFalse(sensor.read_present())
         self.assertEqual(sensor.last_state, LOGIC.ABSENT)
+
+    def test_a_tip_off_the_sensor_still_reads_present(self):
+        sensor, _ = make_toolhead(adc={self.ADC: 0.0227})
+        self.assertTrue(sensor.read_present())
+        self.assertEqual(sensor.last_state, LOGIC.PRESENT)
 
     def test_no_query_adc_is_no_reading_not_a_runout(self):
         sensor, _ = make_toolhead()
