@@ -374,6 +374,45 @@ class TestCommandQueue(unittest.TestCase):
             self.obj.cmd_IFS_FEED(gcmd)
         self.assertEqual(self.obj._poll_delay(), self.obj.poll_interval)
 
+    def test_sleep_fires_the_opcode_without_watching_state(self):
+        """zmod's SLEEP=1, used where the extruder drives the same filament.
+
+        There the lane's motion bit is not a stall signal - something else is
+        pulling - and at the extruder's 300 mm/min it reads as stopped within
+        seconds. Watching it failed a co-push that was physically working.
+        """
+        ## Only LOADING is ever reported, never READY. A state-watching feed
+        ## could not finish against this; SLEEP does not look, so it returns.
+        self.link.replies = (["FFS channel 1 feeding."]
+                             + [f13(state=STATUS.LOADING)] * 60)
+        gcmd = fakes.FakeGcmd({"CHANNEL": 1, "UNTIL": "done", "SLEEP": 1,
+                               "LENGTH": 100, "SPEED": 300})
+        self.obj.cmd_IFS_FEED(gcmd)          # must not raise
+        self.assertIn("F10 C1 L100 S300", self.link.asked)
+
+    def test_without_sleep_that_same_board_fails_the_move(self):
+        ## The contrast that makes the test above mean something.
+        self.link.replies = (["FFS channel 1 feeding."]
+                             + [f13(state=STATUS.LOADING)] * 60)
+        gcmd = fakes.FakeGcmd({"CHANNEL": 1, "UNTIL": "done",
+                               "LENGTH": 100, "SPEED": 300, "TIMEOUT": 0.3})
+        with self.assertRaises(gcmd.error):
+            self.obj.cmd_IFS_FEED(gcmd)
+
+    def test_sleep_waits_in_proportion_to_the_move(self):
+        ## zmod: (leng * 20) // speed + 1. A move must not return instantly.
+        waited = []
+        self.reactor.on_pause = lambda: waited.append(self.reactor.monotonic())
+        self.link.replies = ["FFS channel 1 feeding."]
+        before = self.reactor.monotonic()
+        gcmd = fakes.FakeGcmd({"CHANNEL": 1, "UNTIL": "done", "SLEEP": 1,
+                               "LENGTH": 100, "SPEED": 300})
+        ## _run needs the queue serviced, so service it then let the sleep run.
+        self.reactor.on_pause = self.obj._run_queued
+        self.obj.cmd_IFS_FEED(gcmd)
+        self.assertGreaterEqual(self.reactor.monotonic() - before,
+                                (100 * 20) // 300 + 1)
+
     def test_shutdown_releases_a_waiting_caller(self):
         ## A caller blocked on a command when klippy goes down must not hang.
         request = IFS._Request("F13")

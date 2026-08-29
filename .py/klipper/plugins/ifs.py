@@ -598,6 +598,18 @@ class IFS(object):
         operation = self.MOVE_OPERATIONS[opcode]
         self._run(gcmd, label,
                   lambda ops: getattr(ops, operation)(channel, length, speed))
+
+        if gcmd.get_int("SLEEP", 0):
+            ## zmod's SLEEP=1: fire the opcode and pause for a fixed fraction of
+            ## the move rather than watching state at all. It is used where the
+            ## EXTRUDER is driving the same filament, and there the lane's
+            ## motion bit is not a stall signal - something else is pulling, and
+            ## at the extruder's 300 mm/min the bit reads as stopped within
+            ## seconds. Watching it there failed a co-push that was working.
+            self.reactor.pause(self.reactor.monotonic()
+                               + (length * 20) // speed + 1)
+            return None
+
         waiter = ifs_sequences.StateWaiter(channel, activity)
         outcome = self._await(gcmd, waiter, timeout, until=until)
         return self._finish(gcmd, outcome,
