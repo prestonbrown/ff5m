@@ -298,9 +298,27 @@ class TestCommandQueue(unittest.TestCase):
         """
         self.link.replies = ["FFS not ready."]
         gcmd = fakes.FakeGcmd({"CHANNEL": 1, "UNTIL": "done"})
-        with self.assertRaises(Exception) as caught:
+        with self.assertRaises(gcmd.error) as caught:
             self.obj.cmd_IFS_FEED(gcmd)
         self.assertIn("not ready", str(caught.exception).lower())
+
+    def test_a_refusal_is_a_command_error_not_an_internal_one(self):
+        """A refused opcode must fail the command, never the printer.
+
+        Klipper turns any non-gcode exception into "Internal error on command",
+        which puts klippy into SHUTDOWN and takes the MCUs with it. A refused
+        F10 did exactly that on the printer and needed a FIRMWARE_RESTART; a
+        board declining an opcode is an ordinary answer, not a fault.
+        """
+        for command, params in (
+                (self.obj.cmd_IFS_FEED, {"CHANNEL": 1, "UNTIL": "done"}),
+                (self.obj.cmd_IFS_CLAMP, {"CHANNEL": 1}),
+                (self.obj.cmd_IFS_RELEASE, {"CHANNEL": 1}),
+                (self.obj.cmd_IFS_RELEASE_ALL, {})):
+            self.link.replies = ["FFS not ready."]
+            gcmd = fakes.FakeGcmd(params)
+            with self.assertRaises(gcmd.error):
+                command(gcmd)
 
     def test_an_accepted_feed_sends_the_length_and_speed_asked_for(self):
         self.link.replies = ["FFS channel 1 feeding."] + [f13(state=STATUS.READY)] * 4

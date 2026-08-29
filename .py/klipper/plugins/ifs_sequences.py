@@ -174,10 +174,14 @@ class Parameters(object):
     """Load and unload distances, from the printer's own settings.
 
     `tube_mm` and `ifs_speed` have no home in `Multicolour`, so they are ours:
-    an upper bound on how far a lane is from the toolhead, and how fast the IFS
-    pushes. They follow zmod's tube length and stock's observed insert, which
-    used 1200 mm/min. `tube_mm` is a bound rather than a target - a feed ends
-    when the toolhead sensor sees filament, so a part-fed lane cannot overshoot.
+    how far a lane is from the toolhead, and how fast the IFS pushes. The speed
+    follows stock's observed insert of 1200 mm/min.
+
+    A load does NOT feed `tube_mm`: the board refuses an over-long feed outright
+    ("F10 C1 L1000 S1200 refused: FFS not ready."), so `load_empty_mm` and
+    `load_full_mm` carry zmod's proven autoinsert distances instead. The feed
+    still ends early when the toolhead sensor sees filament, so a part-fed lane
+    cannot overshoot; the distance is the board's limit, not the target.
     """
 
     DEFAULTS = {
@@ -186,6 +190,11 @@ class Parameters(object):
         "second_fan": 255.0,
         "unload_extruder_mm": 60.0, "unload_ifs_mm": 70.0,
         "unload_speed": 600.0,
+        ## How far a load feeds, straight from zmod's defaults
+        ## (filament_autoinsert_empty_length / _full_length). The board REFUSES
+        ## a longer feed - "F10 C1 L1000 S1200 refused: FFS not ready." - so
+        ## this is not a bound that can be raised to the tube length.
+        "load_empty_mm": 600.0, "load_full_mm": 550.0,
     }
     ## Multicolour key -> our name. FlashForge spells it "Frist".
     FROM_MULTICOLOUR = {

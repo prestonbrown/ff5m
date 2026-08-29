@@ -478,17 +478,17 @@ class IFS(object):
         ## timed out every time while the clamp itself had already happened.
         ## zmod's cmd_IFS_F24 waits on the same acknowledgement.
         channel = self._channel(gcmd)
-        self.run_operation("F24 C%d" % channel, lambda ops: ops.clamp(channel))
+        self._run(gcmd, "F24 C%d" % channel, lambda ops: ops.clamp(channel))
         gcmd.respond_info("clamped channel %d" % channel)
 
     def cmd_IFS_RELEASE(self, gcmd):
         channel = self._channel(gcmd)
-        self.run_operation("F39 C%d" % channel,
-                           lambda ops: ops.release(channel))
+        self._run(gcmd, "F39 C%d" % channel,
+                  lambda ops: ops.release(channel))
         gcmd.respond_info("released channel %d" % channel)
 
     def cmd_IFS_RELEASE_ALL(self, gcmd):
-        self.run_operation("F18", lambda ops: ops.release_all())
+        self._run(gcmd, "F18", lambda ops: ops.release_all())
         gcmd.respond_info("released every channel")
 
     def cmd_IFS_STOP(self, gcmd):
@@ -499,6 +499,22 @@ class IFS(object):
         ## The literal C is what the firmware expects; it is not a channel.
         self.execute("F15 C")
         gcmd.respond_info("driver reset")
+
+    def _run(self, gcmd, label, action, timeout=DEFAULT_COMMAND_TIMEOUT):
+        """run_operation, reporting board and link failures as command errors.
+
+        Anything that is not a gcode error reaches klipper as "Internal error on
+        command", which puts klippy into SHUTDOWN and takes the MCUs down with
+        it. A board that refuses an opcode is an ordinary, expected answer - it
+        must fail the command, not the printer. Observed the hard way: a refused
+        F10 shut the printer down and needed a FIRMWARE_RESTART.
+        """
+        try:
+            return self.run_operation(label, action, timeout)
+        except gcmd.error:
+            raise
+        except Exception as exc:
+            raise gcmd.error(str(exc))
 
     ## Which IfsOperations call each move opcode is. Going through operations
     ## rather than writing the opcode to the link is what checks the reply: the
@@ -525,9 +541,8 @@ class IFS(object):
 
         label = "%s C%d L%d S%d" % (opcode, channel, length, speed)
         operation = self.MOVE_OPERATIONS[opcode]
-        self.run_operation(
-            label,
-            lambda ops: getattr(ops, operation)(channel, length, speed))
+        self._run(gcmd, label,
+                  lambda ops: getattr(ops, operation)(channel, length, speed))
         waiter = ifs_sequences.StateWaiter(channel, activity)
         outcome = self._await(gcmd, waiter, timeout, until=until)
         return self._finish(gcmd, outcome,
