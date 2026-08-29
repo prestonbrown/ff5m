@@ -1092,13 +1092,13 @@ class ClearExtruderTest(unittest.TestCase):
     PARAMS = {"cut_before_mm": 0.0, "cut_after_mm": 5.0, "unload_speed": 600.0,
               "unload_extruder_mm": 60.0}
 
-    def render(self, detected, slot=None):
+    def render(self, detected, slot=None, temperature=30.0):
         params = {"TEMP": 220}
         if slot is not None:
             params["SLOT"] = slot
         return render_macro(HW, "_IFS_CLEAR_EXTRUDER", printer={
             "ifs": {"params": self.PARAMS},
-            "extruder": {"target": 220.0},
+            "extruder": {"target": 220.0, "temperature": temperature},
             "filament_switch_sensor toolhead": {"filament_detected": detected},
             "gcode_macro _IFS_SENSOR_HOLD": {"was_enabled": 1},
         }, params=params).commands
@@ -1124,6 +1124,17 @@ class ClearExtruderTest(unittest.TestCase):
                         index_of(commands, r"TEMPERATURE_WAIT"))
         self.assertLess(index_of(commands, r"TEMPERATURE_WAIT"),
                         index_of(commands, r"_IFS_CUT"))
+
+    def test_a_hot_nozzle_skips_the_heat_soak_park(self):
+        ## The chute-side park exists to catch what a heat-up oozes. An
+        ## already-hot nozzle would cross the whole machine to wait for a
+        ## temperature it has - so it goes straight to the cutter.
+        commands = self.render(True, temperature=220.0)
+        cut = index_of(commands, r"_IFS_CUT")
+        self.assertFalse(
+            [c for c in commands[:cut] if c.startswith("_IFS_PARK_FOR_PURGE")],
+            commands)
+        self.assertNotIn("TEMPERATURE_WAIT", commands, commands)
 
     def test_the_lane_pulls_with_the_extruder(self):
         """Both ends move the SAME strand, so they move together or they fight.
