@@ -1209,25 +1209,22 @@ class EndPrintParkTest(unittest.TestCase):
 
     A nozzle at temperature keeps dripping after the last move; over the bed
     that lands on the print surface or the part. Over the chute it lands in
-    the bin.
+    the bin. The base END_PRINT parks at _CLIENT_VARIABLE's custom park
+    position, so the retarget writes the chute there once at startup - this
+    file loads before END_PRINT's own macro exists, which makes
+    rename_existing impossible and a delayed gcode the right hook.
     """
 
-    def render(self, loaded):
-        return render_macro(HW, "END_PRINT", printer={
-            "save_variables": {"variables": {"ifs_loaded": loaded}},
+    def test_the_park_is_retargeted_to_the_chute(self):
+        commands = render_macro(HW, "_IFS_RETARGET_END_PARK", printer={
             "gcode_macro _IFS_GEOMETRY": GEOMETRY,
-            "toolhead": {"homed_axes": "xyz"},
-            "gcode_move": {"gcode_position": {"x": 105.0, "y": 105.0, "z": 10.0}},
         }).commands
-
-    def test_a_loaded_machine_finishes_over_the_chute(self):
-        commands = self.render(4)
-        self.assertEqual(commands[0], "_END_PRINT_BASE", commands)
-        self.assertIn("_IFS_GOTO_STATION X=%s" % GEOMETRY["chute_x"],
-                      commands)
-
-    def test_no_lane_loaded_means_no_station_visit(self):
-        self.assertEqual(self.render(0), ("_END_PRINT_BASE",))
+        self.assertIn(
+            "SET_GCODE_VARIABLE MACRO=_CLIENT_VARIABLE VARIABLE=custom_park_x"
+            " VALUE=%s" % GEOMETRY["chute_x"], commands)
+        self.assertIn(
+            "SET_GCODE_VARIABLE MACRO=_CLIENT_VARIABLE VARIABLE=custom_park_y"
+            " VALUE=%s" % GEOMETRY["station_y"], commands)
 
 
 class ChangeLiftTest(unittest.TestCase):
