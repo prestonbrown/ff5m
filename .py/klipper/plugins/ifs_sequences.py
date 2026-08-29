@@ -162,10 +162,16 @@ class StateWaiter(object):
         return None
 
     def timed_out(self, status=None, elapsed=0.0):
+        ## What ran out is the wait for the board to come back to READY - not
+        ## for it to reach the activity, which is only the window conditions are
+        ## judged in. Saying "never reached loading" sent one investigation
+        ## after a transition that had happened and been polled straight past.
+        if self.activity is None:
+            return Outcome(TIMED_OUT, status, elapsed,
+                           "the board never came back to ready")
         return Outcome(TIMED_OUT, status, elapsed,
-                       "board never reached %s"
-                       % ifs_status.activity_name(self.activity)
-                       if self.activity is not None else "board never finished")
+                       "the board never came back to ready from %s"
+                       % ifs_status.activity_name(self.activity))
 
 
 ## ---------------------------------------------------------------------------

@@ -202,6 +202,25 @@ class TestFaults(unittest.TestCase):
         self.assertTrue(outcome.is_problem)
         self.assertIn("F15", outcome.detail)
 
+    def test_a_timeout_says_what_actually_ran_out(self):
+        """The wording sent one investigation down a hole.
+
+        What times out is the wait for the board to come back to READY. The
+        activity is only the window conditions are judged in, and it can be
+        entered and left between two polls, so "never reached loading" sent
+        somebody looking for a transition that had already happened.
+        """
+        outcome = SEQ.StateWaiter(CH, S.LOADING).timed_out(status())
+        self.assertEqual(outcome.kind, SEQ.TIMED_OUT)
+        self.assertTrue(outcome.is_problem)
+        self.assertIn("came back to ready", outcome.detail)
+        self.assertNotIn("never reached", outcome.detail)
+
+    def test_a_timeout_with_no_activity_still_reads(self):
+        ## A settle wait has no activity to name.
+        outcome = SEQ.StateWaiter(CH).timed_out(status())
+        self.assertIn("came back to ready", outcome.detail)
+
     def test_a_missing_reading_is_not_a_fault(self):
         ## A dropped poll must not abort a load.
         outcome = SEQ.StateWaiter(CH, S.LOADING).update(None)
