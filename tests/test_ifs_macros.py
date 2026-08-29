@@ -746,6 +746,31 @@ class CutTest(unittest.TestCase):
                 self.assertTrue(held, "unbracketed %r" % command)
         self.assertFalse(held, "sensor left muted")
 
+    def test_the_blade_moves_are_bracketed_too(self):
+        """Severing the filament is the biggest present-to-absent step there is.
+
+        zmod brackets only its two G1 E moves and runs the shear itself with the
+        sensor live. On a sensor declared pause_on_runout that fires a runout:
+        measured, a soak run paused itself mid-cut with nothing wrong. The hold
+        has to span the blade moves, not just the extruder ones.
+        """
+        commands = self.render()
+        held = False
+        for command in commands:
+            if command == "_IFS_SENSOR_HOLD":
+                held = True
+            elif command == "_IFS_SENSOR_RESUME":
+                held = False
+            elif command.startswith("G1 Y-") or command.startswith("G1 X-"):
+                self.assertTrue(held, "cut move with a live sensor: %r"
+                                % command)
+
+    def test_the_sensor_is_muted_exactly_once(self):
+        ## Not hold/resume/hold: the gap between them is the shear.
+        commands = self.render()
+        self.assertEqual(commands.count("_IFS_SENSOR_HOLD"), 1, commands)
+        self.assertEqual(commands.count("_IFS_SENSOR_RESUME"), 1, commands)
+
 
 class ClearExtruderTest(unittest.TestCase):
     PARAMS = {"cut_before_mm": 0.0, "cut_after_mm": 5.0, "unload_speed": 600.0,
