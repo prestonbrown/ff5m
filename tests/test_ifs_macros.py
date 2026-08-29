@@ -306,7 +306,8 @@ class LoadedLaneTest(unittest.TestCase):
               "second_purge_mm": 30.0, "second_purge_speed": 300.0,
               "second_fan": 255.0, "hub_clear_mm": 300.0}
 
-    def printer(self, recorded=0, selector=0, occupied=False, at_hub=0):
+    def printer(self, recorded=0, selector=0, occupied=False, at_hub=0,
+                printing=True):
         return {
             "ifs": {"connected": True, "error": None,
                     "loaded_channels": [1, 2, 4],
@@ -315,6 +316,7 @@ class LoadedLaneTest(unittest.TestCase):
             "filament_switch_sensor toolhead": {"filament_detected": occupied},
             "save_variables": {"variables": {"ifs_loaded": recorded,
                                             "ifs_at_hub": at_hub}},
+            "print_stats": {"state": printing and "printing" or "standby"},
         }
 
     def render(self, macro, params, **kwargs):
@@ -453,6 +455,13 @@ class LoadedLaneTest(unittest.TestCase):
         commands = self.render("IFS_MOTION", {}, recorded=2)
         self.assertTrue(any("jam" in c for c in commands), commands)
         self.assertIn("PAUSE", commands)
+
+    def test_motion_does_not_pause_a_printer_that_is_not_printing(self):
+        ## Run from the console it is a question, not an emergency. Pausing an
+        ## idle printer just leaves a paused state for somebody to find.
+        commands = self.render("IFS_MOTION", {}, recorded=2, printing=False)
+        self.assertTrue(any("jam" in c for c in commands), commands)
+        self.assertNotIn("PAUSE", commands)
 
     def test_motion_calls_an_empty_lane_a_runout_and_does_not_pause(self):
         ## Lane 3 is not in loaded_channels, so its filament is gone.
