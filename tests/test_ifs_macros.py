@@ -197,7 +197,7 @@ class LoadTest(unittest.TestCase):
     empty string - so asserting the rendered *value* is what catches it.
     """
 
-    def printer(self, loaded=False, connected=True, target=0.0):
+    def printer(self, loaded=False, connected=True, target=0.0, recorded=0):
         return {
             "ifs": {
                 "connected": connected, "error": None,
@@ -209,6 +209,7 @@ class LoadTest(unittest.TestCase):
             },
             "extruder": {"target": target},
             "filament_switch_sensor toolhead": {"filament_detected": loaded},
+            "save_variables": {"variables": {"ifs_loaded": recorded}},
         }
 
     def render(self, **kwargs):
@@ -317,6 +318,32 @@ class LoadedLaneTest(unittest.TestCase):
             self.render("IFS_UNLOAD", {"TEMP": 220}, recorded=0, selector=3,
                         occupied=True)
         self.assertIn("nothing is currently active", str(caught.exception))
+
+    def test_a_load_fully_unloads_the_lane_it_is_replacing(self):
+        """Clearing the extruder is not enough when the lane is known.
+
+        zmod's load opens with IFS_REMOVE_CURRENT_PRUTOK, which runs a full
+        IFS_REMOVE_PRUTOK and pulls the old strand back into its own lane.
+        Clearing only the extruder leaves it sitting at the hub - which, on an
+        AD5X, is mounted on the toolhead and is exactly where the incoming lane
+        arrives.
+        """
+        commands = self.render("IFS_LOAD", {"SLOT": 1, "TEMP": 220},
+                               recorded=4, occupied=True)
+        unload = [c for c in commands if c.startswith("IFS_UNLOAD")]
+        self.assertEqual(len(unload), 1, commands)
+        self.assertIn("SLOT=4", unload[0])
+        self.assertLess(index_of(commands, r"IFS_UNLOAD\b"),
+                        index_of(commands, r"IFS_CLAMP\b"))
+
+    def test_a_load_with_no_lane_on_record_just_clears_the_extruder(self):
+        ## Nothing to retract, and guessing a lane would drag the wrong one.
+        commands = self.render("IFS_LOAD", {"SLOT": 1, "TEMP": 220},
+                               recorded=0, occupied=True)
+        self.assertEqual([c for c in commands if c.startswith("IFS_UNLOAD")],
+                         [])
+        self.assertTrue(any(c.startswith("_IFS_CLEAR_EXTRUDER")
+                            for c in commands), commands)
 
     def test_select_unloads_the_recorded_lane_before_loading(self):
         commands = self.render("IFS_SELECT", {"SLOT": 1, "TEMP": 220},
