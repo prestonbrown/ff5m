@@ -137,6 +137,21 @@ class AutoinsertTest(unittest.TestCase):
         self.assertIn("SPEED=1200", feed[0])
         self.assertIn("UNTIL=toolhead", feed[0])
 
+    def test_threading_claims_the_shared_path_before_feeding(self):
+        ## Same rule as IFS_LOAD: a threading feed that stalls leaves the lane
+        ## in the path, and it has to be on record for the next load to clear.
+        commands = self.render()
+        claim = index_of(commands, r"SAVE_VARIABLE VARIABLE=ifs_at_hub VALUE=2")
+        self.assertLess(claim, index_of(commands, r"IFS_FEED CHANNEL=2"))
+
+    def test_a_lane_left_at_its_entrance_claims_nothing(self):
+        ## It never enters the path, so recording it as the holder would make
+        ## the next load retract a lane that is already parked.
+        commands = self.render(occupied=True)
+        self.assertFalse([c for c in commands
+                          if c.startswith("SAVE_VARIABLE VARIABLE=ifs_at_hub")],
+                         commands)
+
     def test_an_occupied_extruder_leaves_the_lane_at_its_entrance(self):
         """Only one lane fits in the shared path, so the rest do not move.
 
@@ -339,6 +354,29 @@ class LoadedLaneTest(unittest.TestCase):
         commands = self.render("IFS_LOAD", {"SLOT": 2, "TEMP": 220})
         self.assertEqual(self.saved(commands),
                          {"ifs_loaded": "2", "ifs_at_hub": "2"})
+
+    def test_the_shared_path_is_claimed_before_it_is_entered(self):
+        """A feed that stalls part-way still leaves the lane in the path.
+
+        Recorded only on success, ifs_at_hub reads 0 with a lane sitting in the
+        tube, and the next load of a DIFFERENT lane feeds straight into it -
+        the hub collision, reached by a different road. Claiming first is
+        pessimistic and safe, and needs no recovery path of its own: the next
+        load already retracts whoever holds the hub.
+        """
+        commands = self.render("IFS_LOAD", {"SLOT": 2, "TEMP": 220})
+        claim = index_of(commands, r"SAVE_VARIABLE VARIABLE=ifs_at_hub VALUE=2")
+        self.assertLess(claim, index_of(commands, r"IFS_FEED CHANNEL=2"))
+        self.assertLess(claim, index_of(commands, r"IFS_CLAMP CHANNEL=2"))
+
+    def test_the_nozzle_record_still_waits_for_success(self):
+        ## "in the shared path" is true the moment we push; "in the nozzle" is
+        ## not true until the whole load worked. They are different claims and
+        ## must not be written at the same moment.
+        commands = self.render("IFS_LOAD", {"SLOT": 2, "TEMP": 220})
+        self.assertGreater(
+            index_of(commands, r"SAVE_VARIABLE VARIABLE=ifs_loaded VALUE=2"),
+            index_of(commands, r"_IFS_PURGE"))
 
     def test_an_unload_clears_both_records(self):
         ## The retract takes it out of the nozzle AND out of the shared path.
