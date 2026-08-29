@@ -101,6 +101,21 @@ class FakeGcmd:
             raise self.error("%s above %s" % (key, maxval))
         return value
 
+    def get_float(self, key, default=Ellipsis, above=None, minval=None,
+                  maxval=None):
+        if key not in self.params:
+            if default is Ellipsis:
+                raise self.error("missing %s" % key)
+            return default
+        value = float(self.params[key])
+        if above is not None and value <= above:
+            raise self.error("%s not above %s" % (key, above))
+        if minval is not None and value < minval:
+            raise self.error("%s below %s" % (key, minval))
+        if maxval is not None and value > maxval:
+            raise self.error("%s above %s" % (key, maxval))
+        return value
+
     def respond_info(self, message):
         self.gcode.respond_info(message)
 

@@ -500,6 +500,13 @@ class IFS(object):
         self.execute("F15 C")
         gcmd.respond_info("driver reset")
 
+    ## Which IfsOperations call each move opcode is. Going through operations
+    ## rather than writing the opcode to the link is what checks the reply: the
+    ## board prefixes a refusal with "ok." exactly as it prefixes a success, so
+    ## an unvalidated send turns "F10 ok. FFS not ready." into a silent
+    ## two-minute wait for a state that was never coming.
+    MOVE_OPERATIONS = {"F10": "feed", "F11": "retract"}
+
     def _move(self, gcmd, opcode, activity, default_until, what):
         channel = self._channel(gcmd)
         length = gcmd.get_float("LENGTH", self.params.tube_mm, above=0.)
@@ -516,7 +523,11 @@ class IFS(object):
             raise gcmd.error("UNTIL must be %s, %s or %s"
                              % (UNTIL_TOOLHEAD, UNTIL_CLEAR, UNTIL_DONE))
 
-        self.execute("%s C%d L%d S%d" % (opcode, channel, length, speed))
+        label = "%s C%d L%d S%d" % (opcode, channel, length, speed)
+        operation = self.MOVE_OPERATIONS[opcode]
+        self.run_operation(
+            label,
+            lambda ops: getattr(ops, operation)(channel, length, speed))
         waiter = ifs_sequences.StateWaiter(channel, activity)
         outcome = self._await(gcmd, waiter, timeout, until=until)
         return self._finish(gcmd, outcome,

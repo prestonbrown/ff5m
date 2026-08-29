@@ -287,6 +287,31 @@ class TestCommandQueue(unittest.TestCase):
         self.obj.cmd_IFS_RELEASE(gcmd)
         self.assertIn("F39 C1", self.link.asked)
 
+    def test_a_refused_feed_fails_fast_instead_of_waiting_it_out(self):
+        """The second hardware failure, and the same root cause as the clamp.
+
+        F10 answers "F10 ok. FFS channel N feeding." on success and
+        "F10 ok. FFS not ready." on refusal - both prefixed "ok.". Writing the
+        opcode straight to the link accepted either, then waited 120s for a
+        LOADING state the board was never going to report, so a refusal read as
+        a timeout with no clue in it.
+        """
+        self.link.replies = ["FFS not ready."]
+        gcmd = fakes.FakeGcmd({"CHANNEL": 1, "UNTIL": "done"})
+        with self.assertRaises(Exception) as caught:
+            self.obj.cmd_IFS_FEED(gcmd)
+        self.assertIn("not ready", str(caught.exception).lower())
+
+    def test_an_accepted_feed_sends_the_length_and_speed_asked_for(self):
+        self.link.replies = ["FFS channel 1 feeding."] + [f13(state=STATUS.READY)] * 4
+        gcmd = fakes.FakeGcmd({"CHANNEL": 1, "UNTIL": "done",
+                               "LENGTH": 600, "SPEED": 1200, "TIMEOUT": 0.3})
+        try:
+            self.obj.cmd_IFS_FEED(gcmd)
+        except Exception:
+            pass  # the state wait may still time out; the send is what matters
+        self.assertIn("F10 C1 L600 S1200", self.link.asked)
+
     def test_shutdown_releases_a_waiting_caller(self):
         ## A caller blocked on a command when klippy goes down must not hang.
         request = IFS._Request("F13")
