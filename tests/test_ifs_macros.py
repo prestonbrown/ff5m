@@ -252,6 +252,92 @@ class LoadTest(unittest.TestCase):
         self.assertEqual(assert_order, sorted(assert_order), commands)
 
 
+class LoadedLaneTest(unittest.TestCase):
+    """Which lane is in the nozzle has to survive a restart.
+
+    The board cannot answer it: `ifs.active_channel` is the SELECTOR position,
+    and it reads 0 after a power cycle with filament still loaded. Trusting it
+    meant IFS_SELECT would load a second lane on top of the first. zmod reads
+    the same fact out of FlashForge's config and writes it back with
+    SET_CURRENT_PRUTOK; on Forge-X there is no stock config, so it lives in
+    save_variables.
+
+    These assert the rendered VALUE, not just that a command appeared: the
+    harness renders leniently, so a name that does not exist becomes an empty
+    string and "SLOT=" reads as a passing test.
+    """
+
+    PARAMS = {"tube_mm": 1000.0, "ifs_speed": 1200.0,
+              "unload_extruder_mm": 60.0, "unload_ifs_mm": 70.0,
+              "unload_speed": 600.0, "first_purge_mm": 100.0,
+              "first_purge_speed": 300.0, "first_fan": 0.0,
+              "second_purge_mm": 30.0, "second_purge_speed": 300.0,
+              "second_fan": 255.0}
+
+    def printer(self, recorded=0, selector=0, occupied=False):
+        return {
+            "ifs": {"connected": True, "error": None,
+                    "loaded_channels": [1, 2, 4],
+                    "active_channel": selector, "params": self.PARAMS},
+            "extruder": {"target": 220.0},
+            "filament_switch_sensor toolhead": {"filament_detected": occupied},
+            "save_variables": {"variables": {"ifs_loaded": recorded}},
+        }
+
+    def render(self, macro, params, **kwargs):
+        return render_macro(HW, macro, printer=self.printer(**kwargs),
+                            params=params).commands
+
+    def test_a_load_records_the_lane_it_loaded(self):
+        commands = self.render("IFS_LOAD", {"SLOT": 2, "TEMP": 220})
+        saves = [c for c in commands if c.startswith("SAVE_VARIABLE")]
+        self.assertEqual(len(saves), 1, commands)
+        self.assertIn("VARIABLE=ifs_loaded", saves[0])
+        self.assertIn("VALUE=2", saves[0])
+
+    def test_an_unload_clears_the_record(self):
+        commands = self.render("IFS_UNLOAD", {"SLOT": 2, "TEMP": 220},
+                               recorded=2, occupied=True)
+        saves = [c for c in commands if c.startswith("SAVE_VARIABLE")]
+        self.assertEqual(len(saves), 1, commands)
+        self.assertIn("VALUE=0", saves[0])
+
+    def test_an_unload_with_no_slot_uses_the_recorded_lane(self):
+        commands = self.render("IFS_UNLOAD", {"TEMP": 220}, recorded=4,
+                               occupied=True)
+        clamp = [c for c in commands if c.startswith("IFS_CLAMP")]
+        self.assertEqual(len(clamp), 1, commands)
+        self.assertIn("CHANNEL=4", clamp[0])
+
+    def test_the_selector_position_is_not_mistaken_for_the_loaded_lane(self):
+        ## The regression this replaces: nothing recorded, but the board
+        ## happens to be parked at lane 3. Unloading lane 3 would drag a lane
+        ## that is not in the nozzle.
+        with self.assertRaises(Exception) as caught:
+            self.render("IFS_UNLOAD", {"TEMP": 220}, recorded=0, selector=3,
+                        occupied=True)
+        self.assertIn("nothing is currently active", str(caught.exception))
+
+    def test_select_unloads_the_recorded_lane_before_loading(self):
+        commands = self.render("IFS_SELECT", {"SLOT": 1, "TEMP": 220},
+                               recorded=4)
+        unload = index_of(commands, r"IFS_UNLOAD\b")
+        self.assertIn("SLOT=4", commands[unload])
+        self.assertLess(unload, index_of(commands, r"IFS_LOAD\b"))
+
+    def test_select_skips_the_unload_when_nothing_is_loaded(self):
+        commands = self.render("IFS_SELECT", {"SLOT": 1, "TEMP": 220},
+                               recorded=0)
+        self.assertEqual([c for c in commands if c.startswith("IFS_UNLOAD")],
+                         [])
+
+    def test_select_does_nothing_when_the_lane_is_already_loaded(self):
+        commands = self.render("IFS_SELECT", {"SLOT": 4, "TEMP": 220},
+                               recorded=4)
+        self.assertEqual([c for c in commands
+                          if c.startswith(("IFS_LOAD", "IFS_UNLOAD"))], [])
+
+
 class WipeTest(unittest.TestCase):
     def setUp(self):
         self.commands = render_macro(
