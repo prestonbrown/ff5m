@@ -74,12 +74,13 @@ and reported the board as disconnected.
 | `IFS_STATUS` | report state | `IFS_STATUS` |
 | `IFS_AUTOINSERT` | pull filament in at the IFS | `IFS_AUTOINSERT`, fired on the board's insert report |
 | `IFS_EXTRUDER_SENSOR` | read the toolhead sensor | `IFS_SENSOR_VALUE` |
-| `IFS_MOTION` | has it stopped / run out | **missing** |
+| `IFS_MOTION` | has it stopped / run out | `IFS_MOTION` |
 | `INSERT_PRUTOK_IFS` | load to nozzle | `IFS_LOAD` |
-| `REMOVE_PRUTOK_IFS` | unload from nozzle | `IFS_UNLOAD` |
-| `PURGE_PRUTOK_IFS` | purge only | **missing** |
-| `IFS_REMOVE_CURRENT_PRUTOK` | unload whatever is active | folded into `IFS_SELECT` |
-| `SET_CURRENT_PRUTOK` / `SET_EXTRUDER_SLOT` | record the active lane | **missing** |
+| `_IFS_REMOVE_PRUTOK` | out of the nozzle (70 mm) | `IFS_UNLOAD` |
+| `_REMOVE_PRUTOK_IFS` | out of the IFS (1000 mm) | `IFS_EJECT` |
+| `PURGE_PRUTOK_IFS` | purge only | **missing** (`_IFS_PURGE` is not standalone) |
+| `IFS_REMOVE_CURRENT_PRUTOK` | unload whatever is active | folded into `IFS_LOAD` |
+| `SET_CURRENT_PRUTOK` / `SET_EXTRUDER_SLOT` | record the active lane | `save_variables` `ifs_loaded` / `ifs_at_hub` |
 | `ANALOG_PRUTOK` | load an equivalent lane | out of scope |
 
 ## The flows
@@ -205,73 +206,40 @@ Everything else should copy zmod. These do not, for stated reasons:
 - **`stall_state` is named for what it reports.** It carries MOTION, and zmod's
   name inverts that. Ours is `moving_channels` / `is_moving()`.
 
-## Measured: feed and retract are not symmetric
+## What the "it will not feed" night actually was
 
-Sampled from the board at 0.2 s during cold, isolated moves, with the plugin in
-its move cadence. The board stays in its activity state for the whole commanded
-duration whatever happens, so the *motion bit* is the only thing that says
-whether filament actually moved.
+Every lane appeared to stall on a feed while retracting perfectly, hot or cold,
+and each retry moved less than the last (110 mm, 230, 40, 25, 30). That reads
+exactly like a ground-flat filament or a spool that will not pay out, and it was
+called both. It was neither. **Preston pulled a lane and its tip was perfectly
+blunt.**
 
-| move | commanded | motion |
-|---|---|---|
-| feed lane 1 | 200 mm / 10.0 s | 5.5 s, then nothing |
-| retract lane 1 | 200 mm / 10.0 s | **10.3 s, continuous** |
-| feed lane 1 | 300 mm / 15.0 s | 11.5 s |
-| feed lane 1 | 400 mm / 20.0 s | 2.0 s |
-| retract lane 4 | 150 mm / 7.5 s | **7.8 s, continuous** |
-| feed lane 2 | 150 mm / 7.5 s | 5.0 s |
-| lane 1 via `IFS_AUTOINSERT` | 600 mm / 30.0 s | 1.3 s |
-| lane 1 via `IFS_LOAD`, nozzle at 220 | 1000 mm / 50.0 s | 1.5 s |
+Two causes, both ours:
 
-**Heat changes nothing.** The last row is a full `IFS_LOAD`: home, park, heat to
-220, clamp, feed. It stalled in the same place and after the same distance as
-the cold probes, which rules out a cold plug in the extruder.
+**The hub can only hold one lane.** Auto-insert threaded lane 4 to the toolhead
+sensor and parked it 90 mm back, then threaded lanes 2 and 1 straight into it.
+Lane 4's next load stalled after exactly the 90 mm it had backed off - against
+them. Retracting the other two 200 mm each and it went straight through with
+40 mm to spare. The toolhead sensor cannot see this, because a lane threaded but
+not loaded sits SHORT of the sensor: the sensor says empty while the path is
+taken. That is why the lane holding it is recorded rather than inferred.
 
-Every retract runs its full length. Every feed dies early, on every lane tried,
-and repeated feeds on one lane get *worse* - which is what grinding a flat on
-the filament looks like. Two different lanes behaving the same way rules out one
-lane's tip, and the drive, the driver and the motion sensor are all evidently
-working because the retract uses all three.
+**A feed that finished without the sensor was being failed.** zmod returns
+`RET_OK` there and its macro carries straight on to the co-push, where the
+EXTRUDER gear pulls the filament the last stretch in. Ours aborted instead, so a
+load whose filament was already at the toolhead entry - "stuck at the toolhead
+entry, the filament isn't gripped by the gears yet" - never reached the step
+that would have grabbed it. Running the co-push by hand finished it immediately.
 
-### The distances look like slack, not an obstruction
+**The diagnostic lesson.** Feed-stalls-while-retract-works is not by itself a
+verdict on the drive. On a system where several lanes converge on one point,
+check what else is parked in that point first. Two independent lanes failing the
+same way was read as "therefore the hardware", when it was really "therefore
+something they share".
 
-Read in order, the feed distances track what had just been pushed back up the
-tube rather than any fixed point:
-
-- feed 1 moved 110 mm and stopped
-- a 200 mm retract then ran its full length
-- feed 2 moved 230 mm - roughly the 200 mm the retract had just returned
-- feed 3, immediately after, managed 40 mm
-- and the auto-insert, later still, managed 25 mm
-
-A fixed obstruction does not move when you retract, and it does not grant you
-exactly as much travel as you just gave back. Slack does.
-
-The asymmetry says the same thing. Feeding has to **draw filament off the
-spool**; retracting only has to push slack back toward it, which needs nothing
-of the spool at all. So a lane whose spool will not pay out feeds until the
-slack between spool and drive is used up, then stalls, and retracts perfectly
-every time. Lanes 1, 2 and 4 all behave this way, which points at something
-common to the spool side rather than at three separate jams.
-
-This is a hypothesis with a one-minute physical test: pull filament off each
-spool by hand at the IFS input. It has not been run.
-
-**The board has been stalling for a long time.** `IFS_DIAGNOSTICS` reports a
-per-lane stall counter, and on a clean read it says `[9, 58, 0, 119]`. Lane 3,
-which has never held filament, is 0 - so the counter is real and per-lane. Lane
-2 reads 58 and we have fed it exactly once. Whatever this is, it predates the
-port and is not something our flow introduced.
-
-The one thing the numbers say without ambiguity is **stop feeding**. Each
-attempt on lane 1 moved less than the one before, which is what grinding a flat
-on the filament at the drive gear looks like, and every retry makes recovery
-harder. The board's own reports have ruled the software out; this needs hands.
-
-`IFS_AUTOINSERT` has since been run on lane 1 and behaved exactly as intended:
-clamp, feed, stall detected at three consecutive still polls, F112, a clean
-`gcode.error` naming the channel, and no klippy shutdown. It found the same
-mechanical wall. The flow is not what is broken.
+The board's per-lane stall counter (`IFS_DIAGNOSTICS`) is a genuine signal:
+lane 3, which has never held filament, reads 0, and a lane whose commanded feed
+did not move gains hundreds.
 
 ## Drivers
 
