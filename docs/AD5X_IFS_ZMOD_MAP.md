@@ -32,6 +32,15 @@ them, so every opcode must be checked against its expected reply.
 **Poll at 0.2s while judging motion** (`HOST_REPORT_TIME`). The motion bit
 toggles; sampling it at 1s reads a running motor as stalled.
 
+**Only the load feed judges stalls.** zmod passes `CHECK=1` on exactly one call.
+Everywhere else - notably the unload retract - it waits for READY and nothing
+more, because motion stopping is how a retract *ends*.
+
+**A co-driven feed is not watched at all.** Where the extruder drives the same
+filament, zmod uses `SLEEP=1`: fire the opcode, pause `(len*20)//speed+1`, never
+look at state. The lane's motion bit says nothing about a jam when something
+else is pulling, and at 300 mm/min it reads as stopped within seconds.
+
 **Counts:** `stall_count` 3, `silk_count` 1, `retry_count` 3.
 
 ## Opcodes
@@ -87,18 +96,23 @@ SET_CURRENT_PRUTOK
 
 Ours does: park, heat, clamp, feed, purge, wipe. **Gaps, in order of severity:**
 
-1. **No co-push.** `_SBROS_TRASH_DAVIM` issues `G1 E90 F300` and then
-   `IFS_F10 LEN=90 SPEED=300 SLEEP=1`. The `G1` is queued and returns at once,
-   so gear and IFS drive the filament together. The IFS cannot push past a
-   gripping extruder gear alone - observed as `stalled (channel 1 stopped
-   moving)` with the filament held fast at the gear.
-2. **No `_DISABLE_SENSOR` around extruder moves.** zmod brackets every
-   `G1 E...` in a load or unload. Ours declares the toolhead sensor with
-   `pause_on_runout: True`, so an extruder move can trip a runout pause.
-3. **No F23** after a load, so the board is never told the lane is inserted.
-4. **No unload-first step** - a load onto an occupied nozzle is not handled.
-5. **No retry.** zmod retries a failed opcode up to `retry_count` (3), and
-   resets the driver (F15) on `DRV_ERROR`.
+1. ~~No co-push~~ - **done**. `_IFS_PURGE` issues `G1 E<n>` and then the lane's
+   feed at the same length and speed; the `G1` is queued and returns, so both
+   drive the filament together. The IFS cannot push past a gripping extruder
+   gear alone.
+2. ~~No `_DISABLE_SENSOR`~~ - **done**, as `_IFS_SENSOR_HOLD` /
+   `_IFS_SENSOR_RESUME`. Save-and-restore, so a sensor the operator had off
+   stays off. Klipper macros have no `finally`, so an error between the two
+   still leaks the mute; `_IFS_PURGE` resumes on entry to heal that. zmod has
+   the same hole.
+3. ~~No F23~~ - **done**, `IFS_MARK_INSERTED`, and the load ends with it.
+4. ~~No unload-first~~ - **done**, `_IFS_CLEAR_EXTRUDER`, which both the load and
+   the unload begin with. A lane cannot be fed while another lane's filament
+   occupies the combiner; the incoming filament simply pushes against it.
+5. **No retry.** Still open, and the largest remaining gap. zmod retries a
+   failed opcode up to `retry_count` (3), and calls F15 the moment the board
+   reports `DRV_ERROR`. Ours fails the command instead, which is why a driver
+   that dropped out ended the evening rather than being recovered from.
 
 ### Unload - `_REMOVE_PRUTOK_IFS` ("Unloading filament Extruder + IFS")
 
@@ -110,8 +124,10 @@ G1 E-<nozzle_cleaning_length>      retract, sensors disabled
 ```
 
 **The AD5X has a filament cutter** (`_CUT_PRUTOK`, and a `cutValue` ADC beside
-`filamentValue`). Ours models none of it. An unload that does not cut is not
-this printer's unload.
+`filamentValue`) - now modelled as `_IFS_CUT`, and verified on hardware: the
+toolhead drives into a fixed blade at X -2.5, Y -7.5, Y first at F1800 then X at
+F600, because the slow X move IS the cut. Reversing them would drag the head
+across the front of the bed at the blade's depth.
 
 ### Purge - `_PURGE_PRUTOK_IFS`
 
@@ -137,3 +153,28 @@ Everything else should copy zmod. These do not, for stated reasons:
   than avoided by polling quickly. Stronger than a timing assumption.
 - **`stall_state` is named for what it reports.** It carries MOTION, and zmod's
   name inverts that. Ours is `moving_channels` / `is_moving()`.
+
+## Drivers
+
+The board carries two TMC drivers, reported by `IFS_DIAGNOSTICS` as `feeder` and
+`selector`. Which is which was settled by watching the standstill bit: `F24`
+drops standstill on the **selector**, so that is the motor positioning the IFS
+to a lane, and the feeder is the one that moves filament.
+
+Both can end up flagged `reset` - GSTAT bit 0, "driver was reset" - after a run
+of stalls. In that state opcodes are accepted and motors are commanded, but no
+fault is reported, so it can read like a mechanical jam. `IFS_DIAGNOSTICS` is
+the only thing that distinguishes them, and it is worth reading BEFORE
+concluding anything about filament.
+
+`F15 C` clears the **feeder** flag, observed directly. It did not clear the
+**selector** flag, and there is no selector reset in the opcode set - zmod has
+none either.
+
+What is NOT established: whether a flagged driver actually stops driving. The
+test that looked like proof - feeding a second lane and seeing it stall too -
+was invalid, because that lane's filament had been retracted clear out of the
+IFS and there was nothing in the drive to move. A stall against an empty drive
+proves nothing. Treat the `reset` flag as a signal worth reading, not as a
+diagnosis, until something moves or fails to move with filament known to be
+engaged.

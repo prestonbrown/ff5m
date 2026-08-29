@@ -25,25 +25,37 @@ ABSENT = "absent"
 FAULT = "fault"
 
 
-## A sensor's calibration is a table of ascending upper bounds. Reading it top to
-## bottom is reading the measurement that produced it, which is the point:
+## A sensor's calibration is a table of ascending upper bounds. Reading it top
+## to bottom is reading the measurement that produced it, which is the point.
 ##
-##   MEASURED on an AD5X toolhead, twice, in both directions -
-##       filament engaged    0.0075 - 0.0082
-##       no filament         0.025  - 0.049
+## THE MEASUREMENT, and the only place it is written down. Anything else that
+## needs these numbers refers here rather than restating them - an earlier
+## version had them copied into three files and a doc, and they all went stale
+## together the moment the measurement was redone.
 ##
-##   so low means PRESENT, inverted from the intuitive reading and matching the
+##   MEASURED on an AD5X toolhead, via query_adc on `temperature_sensor
+##   filamentValue` (eboard:PA3):
+##
+##     filament at the sensor          0.0075 - 0.0082
+##     filament in the path, but not
+##       at the sensor                 0.045  - 0.050
+##     nothing in the path at all      0.3979 - 0.3986   (n=14, spread 0.0007)
+##
+##   Low means PRESENT, inverted from the intuitive reading and matching the
 ##   inversion the IFS channel sensors show. It saturates within 3 mm of travel
-##   and is fully reversible. The middle band is the gap between those two
-##   clusters, where nothing was ever observed: a reading there is a
-##   half-inserted strand or a failing sensor, not a clean state.
+##   and is fully reversible.
+##
+##   The empty figure was originally recorded as 0.025-0.049 and that was wrong:
+##   it was taken with filament still sitting in the path, which is the middle
+##   row above. A genuinely empty toolhead - cut, purged and retracted - reads
+##   0.398, and the true span is therefore 50x, not 6x.
 def toolhead_bands(present_max, absent_min):
-    """The AD5X toolhead sensor's shape, given where its two clusters sit.
+    """The AD5X toolhead sensor's shape, given where its clusters sit.
 
-    Between the clusters is FAULT rather than a state: nothing was ever
-    observed there, so a reading in the gap is a half-inserted strand or a
-    failing sensor. Config-supplied thresholds build the table through this
-    same function, so a tuned sensor cannot end up a different shape.
+    Between the clusters is FAULT rather than a state: a reading in the gap is
+    a half-inserted strand or a failing sensor. Config-supplied thresholds build
+    the table through this same function, so a tuned sensor cannot end up a
+    different shape.
     """
     return ((present_max, PRESENT), (absent_min, FAULT), (None, ABSENT))
 
@@ -52,11 +64,19 @@ AD5X_PRESENT_MAX = 0.015
 AD5X_ABSENT_MIN = 0.020
 AD5X_TOOLHEAD = toolhead_bands(AD5X_PRESENT_MAX, AD5X_ABSENT_MIN)
 
-##   ZMOD's `value >= 0.72 if value > 0.3 else True`, as data. Every reading this
-##   printer produces is below 0.055, so it lands in the first band always and
-##   reports filament present whether the toolhead is loaded, empty, or the
-##   sensor is unplugged - its runout detection cannot fire here. Kept so the
-##   two can be compared, and so a test can pin the difference.
+## ZMOD's `value >= 0.72 if value > 0.3 else True`, as data.
+##
+## This was previously commented as unable to fire on this printer, on the
+## grounds that every reading is below 0.055. That was a consequence of the
+## wrong empty figure above, and it is not true: against the real measurements
+## zmod's table classifies BOTH endpoints correctly - 0.0077 present, 0.398
+## absent. Its thresholds work here.
+##
+## The two tables still differ on the middle row, filament in the path but not
+## at the sensor: zmod calls 0.045 present, this calls it absent. Which is right
+## depends on what the caller is asking, and neither has been shown wrong on
+## hardware. Kept so the two can be compared, and so a test can pin the
+## difference.
 ZMOD_TOOLHEAD = ((0.30, PRESENT), (0.72, ABSENT), (None, PRESENT))
 
 

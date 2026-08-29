@@ -9,8 +9,9 @@
 ## sample the ADC. The AD5M's equivalent is a plain digital microswitch, which
 ## is why that printer needs no code here.
 ##
-## Measured on the rig: engaged 0.0075-0.0082, empty 0.025-0.049. LOW means
-## filament PRESENT. See ifs_sensor_logic for why zmod's thresholds never fire.
+## LOW means filament PRESENT. The measurement itself - all three states, and
+## why the empty figure was once recorded wrong - lives in ifs_sensor_logic
+## beside the constants derived from it, and is deliberately not repeated here.
 ##
 ## Copyright (C) 2026, Preston Brown
 ##
@@ -30,9 +31,9 @@ class IfsToolheadSensor(ifs_sensor_base.IfsSensorBase):
         ifs_sensor_base.IfsSensorBase.__init__(self, config)
         self.adc_name = config.get("adc_name", DEFAULT_ADC)
 
-        ## Defaults are the measured AD5X values. They are config options
-        ## because they describe one printer's hardware - the only other driver
-        ## ships thresholds an order of magnitude out for this board.
+        ## Defaults are the measured AD5X values (see ifs_sensor_logic). They
+        ## are config options because they describe one printer's hardware, and
+        ## a rebuilt toolhead can move them.
         bands = ifs_sensor_logic.toolhead_bands(
             config.getfloat("present_max",
                             ifs_sensor_logic.AD5X_PRESENT_MAX, above=0.),
