@@ -25,12 +25,48 @@ from . import flashforge_config
 ## #RGB or #RRGGBB, which is what the stock UI writes.
 COLOUR = re.compile(r"^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6})$")
 
+## What each material wants the nozzle at to be pushed through it, from zmod's
+## `temp_defaults`. This is the ONLY thing zmod varies by material: every other
+## number - purge lengths, feed speeds, tube length - is one global set, and its
+## per-material override file ships with no overrides in it.
+##
+## These are handling temperatures, not print temperatures. They only have to
+## melt the filament enough to move; the slicer still owns what a print runs at.
+TEMPERATURES = {
+    "PLA": 220.0,
+    "PLA-CF": 220.0,
+    "SILK": 230.0,
+    "TPU": 230.0,
+    "ABS": 250.0,
+    "PETG": 250.0,
+    "PETG-CF": 250.0,
+}
+## Prefix for adding or overriding one, mirroring zmod's `filament_<TYPE>:`:
+##
+##     [ifs_materials]
+##     temp_ASA: 260
+##     temp_PLA: 215
+TEMPERATURE_PREFIX = "temp_"
+
+
+def _at(temp):
+    """Suffix for a report line: the handling temperature, or nothing."""
+    return "" if temp is None else " @ %.0fC" % temp
+
 
 class IfsMaterials(object):
     def __init__(self, config):
         self.printer = config.get_printer()
         self.path = config.get("path", flashforge_config.PATH)
         self.config_file = flashforge_config.FlashForgeConfig(self.path)
+
+        self.temperatures = dict(TEMPERATURES)
+        for option in config.get_prefix_options(TEMPERATURE_PREFIX):
+            name = option[len(TEMPERATURE_PREFIX):].upper()
+            ## above=0 rather than a hot-end range: this is a lookup table, and
+            ## the macros refuse to move filament below 150 anyway. A user with
+            ## a hotter hot end should not have to argue with us about it.
+            self.temperatures[name] = config.getfloat(option, above=0.)
 
         self._cache = None
         self._cache_stamp = None
@@ -73,6 +109,18 @@ class IfsMaterials(object):
     def material(self, slot):
         return self.slots().get(slot)
 
+    def temperature(self, material):
+        """What to heat the nozzle to in order to move this material.
+
+        None for a material we have no number for, INCLUDING an empty slot.
+        zmod silently substitutes PLA there, which quietly runs ABS at 220 and
+        snaps it off in the heatbreak; saying "I do not know" lets the caller
+        insist on a TEMP= instead of guessing on the user's behalf.
+        """
+        if not material:
+            return None
+        return self.temperatures.get(material.upper())
+
     def _recorded_lane(self):
         """The lane WE know is loaded, if anything is keeping that record.
 
@@ -96,7 +144,8 @@ class IfsMaterials(object):
         document = self._document()
         if document is None:
             return {"available": False, "channel_count": None,
-                    "enabled": False, "slots": {}, "loaded": None}
+                    "enabled": False, "slots": {}, "loaded": None,
+                    "temperatures": dict(self.temperatures)}
         slots = self.config_file.materials(document)
         recorded = self._recorded_lane()
         loaded = (slots.get(recorded) if recorded is not None
@@ -107,8 +156,14 @@ class IfsMaterials(object):
             "enabled": self.config_file.is_enabled(document),
             ## Moonraker serialises dict keys as strings; be explicit about it
             ## rather than leaving consumers to discover it.
-            "slots": {str(slot): value for slot, value in slots.items()},
-            "loaded": loaded,
+            ## Each slot carries its handling temperature so a macro can ask one
+            ## question instead of doing the lookup in Jinja.
+            "slots": {str(slot): dict(value,
+                                      temp=self.temperature(value.get("type")))
+                      for slot, value in slots.items()},
+            "loaded": None if loaded is None else dict(
+                loaded, temp=self.temperature(loaded.get("type"))),
+            "temperatures": dict(self.temperatures),
         }
 
     ## -- gcode --------------------------------------------------------------
@@ -127,12 +182,14 @@ class IfsMaterials(object):
                              "enabled" if info["enabled"] else "disabled"))
         for slot in sorted(info["slots"], key=int):
             entry = info["slots"][slot]
-            gcmd.respond_info("  slot %s: %s %s"
+            gcmd.respond_info("  slot %s: %s %s%s"
                               % (slot, entry["type"] or "empty",
-                                 entry["color"] or ""))
-        gcmd.respond_info("  loaded: %s %s"
+                                 entry["color"] or "",
+                                 _at(entry["temp"])))
+        gcmd.respond_info("  loaded: %s %s%s"
                           % (loaded.get("type") or "none",
-                             loaded.get("color") or ""))
+                             loaded.get("color") or "",
+                             _at(loaded.get("temp"))))
 
     def cmd_IFS_SET_MATERIAL(self, gcmd):
         slot = gcmd.get_int("SLOT", minval=0)

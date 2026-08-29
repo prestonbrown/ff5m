@@ -219,6 +219,24 @@ pass and then onto the wiper, which smears it rather than removing it.
 | `_SBROS_TRASH` (shake off, no extrusion) | `_IFS_SHAKE` |
 | `_MOVE_TO_CUT_PREPARE_POSITION` | **missing** (no cutter) |
 
+## Where copying zmod turned out to be right
+
+- **The toolhead sensor's thresholds are stock's**, 0.30 and 0.72. They were
+  briefly replaced with a much narrower pair, 0.015 and 0.020, chosen from the
+  endpoints of two measured clusters. Sweeping between those endpoints - the tip
+  retracted a millimetre at a time and pushed back - showed there are no
+  clusters: it is one proximity curve, flat near 0.008 while a strand covers the
+  sensor, through a knee at 9 mm, resting at 0.023 after a completed load, and
+  only reaching 0.398 with the toolhead genuinely empty.
+
+  The narrow table was wrong on hardware twice over. It called a resting load
+  ABSENT, so the next load said "extruder already empty", skipped the cut and
+  the 60 mm withdraw, and drove the incoming lane into a strand the gear was
+  still gripping - the stall that looked like broken hardware. And its FAULT
+  band sat on the knee, so an ordinary tip 10 mm back read as a failing sensor.
+  0.30 sits in the only real gap, six times above the highest present reading
+  and a quarter below the lowest absent one.
+
 ## Deliberate deviations
 
 Everything else should copy zmod. These do not, for stated reasons:
@@ -257,6 +275,19 @@ Everything else should copy zmod. These do not, for stated reasons:
   it, which would mean driving three lanes at once on every klippy restart.
 - **`stall_state` is named for what it reports.** It carries MOTION, and zmod's
   name inverts that. Ours is `moving_channels` / `is_moving()`.
+- **The cut is muted, blade moves included.** zmod brackets only the two `G1 E`
+  moves of `_CUT_PRUTOK` with `_DISABLE_SENSOR`/`_ENABLE_SENSOR` and runs the
+  shear itself with the sensor live. Severing the filament is the largest
+  present-to-absent step there is; on a sensor declared `pause_on_runout` it
+  fires a runout, and a soak run paused itself mid-cut on an idle machine.
+- **A sensor fault is not filament.** zmod's table reports PRESENT above 0.72,
+  which is the reading a disconnected sensor rails to. Same runout decision as
+  ours while `fail_safe` is on, but ours calls it FAULT so `IFS_SENSOR_VALUE`
+  and `classify()` say what is actually wrong.
+- **Per-material temperatures refuse rather than guess.** zmod silently
+  substitutes PLA for a material it has no entry for, which runs an unknown
+  filament at 220 and snaps it off in the heatbreak. Ours reports no temperature
+  and the load insists on an explicit `TEMP=`.
 
 ## What the "it will not feed" night actually was
 

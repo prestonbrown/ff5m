@@ -195,13 +195,13 @@ class TestIfsMaterialsObject(ConfigFileTest):
         self.printer.add_object("save_variables", FakeSaveVariables())
         ## The file says lane 4 (white); we know it is lane 2 (grey ABS).
         self.assertEqual(self.obj.get_status()["loaded"],
-                         {"type": "ABS", "color": "#898989"})
+                         {"type": "ABS", "color": "#898989", "temp": 250.0})
 
     def test_with_no_record_it_falls_back_to_the_file(self):
         ## An IFS that has never been driven, or a machine with no
         ## save_variables at all, still gets FlashForge's answer.
         self.assertEqual(self.obj.get_status()["loaded"],
-                         {"type": "PLA", "color": "#FFFFFF"})
+                         {"type": "PLA", "color": "#FFFFFF", "temp": 220.0})
 
     def test_a_record_of_nothing_loaded_is_not_mistaken_for_a_lane(self):
         class FakeSaveVariables:
@@ -209,7 +209,7 @@ class TestIfsMaterialsObject(ConfigFileTest):
 
         self.printer.add_object("save_variables", FakeSaveVariables())
         self.assertEqual(self.obj.get_status()["loaded"],
-                         {"type": "PLA", "color": "#FFFFFF"})
+                         {"type": "PLA", "color": "#FFFFFF", "temp": 220.0})
 
     def test_status_shape(self):
         info = self.obj.get_status()
@@ -278,6 +278,105 @@ class TestIfsMaterialsObject(ConfigFileTest):
         gcode = self.printer.lookup_object("gcode")
         self.assertIn("IFS_MATERIALS", gcode.commands)
         self.assertIn("IFS_SET_MATERIAL", gcode.commands)
+
+
+class TestHandlingTemperatures(ConfigFileTest):
+    """The one thing zmod varies by material: what to heat to in order to move it.
+
+    Everything else - purge lengths, feed speeds, tube length - is one global
+    set in zmod too, so this table is the whole of per-material behaviour.
+    """
+
+    def setUp(self):
+        ConfigFileTest.setUp(self)
+        self.obj, self.printer = make_materials(self.path)
+
+    def test_each_material_gets_its_own_number(self):
+        self.assertEqual(self.obj.temperature("PLA"), 220.0)
+        self.assertEqual(self.obj.temperature("PETG"), 250.0)
+        self.assertEqual(self.obj.temperature("ABS"), 250.0)
+        self.assertEqual(self.obj.temperature("TPU"), 230.0)
+
+    def test_the_lookup_is_case_insensitive(self):
+        ## The stock UI writes "PLA"; a human typing IFS_SET_MATERIAL TYPE=pla
+        ## should not silently lose the temperature.
+        self.assertEqual(self.obj.temperature("pla"), 220.0)
+        self.assertEqual(self.obj.temperature("PeTg-Cf"), 250.0)
+
+    def test_an_unknown_material_is_unknown_not_pla(self):
+        """zmod substitutes PLA here, which runs ABS at 220 and snaps it off.
+
+        Answering None instead makes the caller insist on an explicit TEMP=,
+        which is the difference between a refusal and a broken heatbreak.
+        """
+        self.assertIsNone(self.obj.temperature("ASA"))
+        self.assertIsNone(self.obj.temperature(None))
+        self.assertIsNone(self.obj.temperature(""))
+
+    def test_a_slot_carries_its_materials_temperature(self):
+        slots = self.obj.get_status()["slots"]
+        self.assertEqual(slots["1"]["temp"], 220.0)     # PLA
+        self.assertEqual(slots["2"]["temp"], 250.0)     # ABS
+        self.assertIsNone(slots["3"]["temp"])           # empty
+
+    def test_the_whole_table_is_published(self):
+        ## So a UI can offer the list, and so IFS_MATERIALS is not the only way
+        ## to find out what this printer will accept.
+        table = self.obj.get_status()["temperatures"]
+        self.assertEqual(table["SILK"], 230.0)
+        self.assertEqual(sorted(table), sorted(MATERIALS.TEMPERATURES))
+
+    def test_the_table_survives_an_unreadable_config_file(self):
+        ## The materials file and the temperature table are independent: losing
+        ## the printer's own JSON must not also lose the lookup.
+        obj, _ = make_materials(self.path + ".nope")
+        info = obj.get_status()
+        self.assertFalse(info["available"])
+        self.assertEqual(info["temperatures"]["PLA"], 220.0)
+
+    def test_config_can_add_a_material(self):
+        printer = fakes.FakePrinter()
+        config = fakes.FakeConfig("ifs_materials",
+                                  {"path": self.path, "temp_ASA": 260},
+                                  printer)
+        obj = MATERIALS.IfsMaterials(config)
+        self.assertEqual(obj.temperature("ASA"), 260.0)
+        ## and the built-ins are still there
+        self.assertEqual(obj.temperature("PLA"), 220.0)
+
+    def test_config_can_override_a_built_in(self):
+        printer = fakes.FakePrinter()
+        config = fakes.FakeConfig("ifs_materials",
+                                  {"path": self.path, "temp_PLA": 205},
+                                  printer)
+        obj = MATERIALS.IfsMaterials(config)
+        self.assertEqual(obj.temperature("PLA"), 205.0)
+
+    def test_a_lowercase_config_key_still_matches(self):
+        ## Klipper lowercases option names, so `temp_PLA:` arrives as `temp_pla`
+        ## and an override that only matched the written case would never fire.
+        printer = fakes.FakePrinter()
+        config = fakes.FakeConfig("ifs_materials",
+                                  {"path": self.path, "temp_pla": 205},
+                                  printer)
+        obj = MATERIALS.IfsMaterials(config)
+        self.assertEqual(obj.temperature("PLA"), 205.0)
+
+    def test_the_report_names_the_temperature(self):
+        gcmd = fakes.FakeGcmd({})
+        self.obj.cmd_IFS_MATERIALS(gcmd)
+        text = "\n".join(gcmd.responses)
+        self.assertIn("@ 220C", text)
+        self.assertIn("@ 250C", text)
+
+    def test_the_report_says_nothing_for_an_unlabelled_slot(self):
+        ## Slot 3 is empty; "empty @ 220C" would be a lie about a lane that has
+        ## no filament in it at all.
+        gcmd = fakes.FakeGcmd({})
+        self.obj.cmd_IFS_MATERIALS(gcmd)
+        line = [r for r in gcmd.responses if r.strip().startswith("slot 3")]
+        self.assertEqual(len(line), 1, gcmd.responses)
+        self.assertNotIn("@", line[0])
 
 
 if __name__ == "__main__":

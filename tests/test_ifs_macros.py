@@ -14,7 +14,8 @@ import pathlib
 import re
 import unittest
 
-from tests.gcode_macro_harness import load_macro, render_macro
+from tests.gcode_macro_harness import (MacroActionError, load_macro,
+                                       render_macro)
 
 
 ROOT = pathlib.Path(__file__).parents[1]
@@ -271,7 +272,7 @@ class LoadTest(unittest.TestCase):
         ## Without SLOT the purge cannot drive the lane, and the co-push is the
         ## whole point. IFS_MARK_INSERTED is zmod's F23, the last IFS step.
         commands = self.render()
-        self.assertIn("_IFS_PURGE SLOT=1", commands)
+        self.assertIn("_IFS_PURGE SLOT=1 EXTRA=0.0", commands)
         self.assertIn("IFS_MARK_INSERTED CHANNEL=1", commands)
         self.assertLess(index_of(commands, r"_IFS_PURGE"),
                         index_of(commands, r"IFS_MARK_INSERTED"))
@@ -770,6 +771,122 @@ class CutTest(unittest.TestCase):
         commands = self.render()
         self.assertEqual(commands.count("_IFS_SENSOR_HOLD"), 1, commands)
         self.assertEqual(commands.count("_IFS_SENSOR_RESUME"), 1, commands)
+
+
+class MaterialTest(unittest.TestCase):
+    """What the slot holds decides the temperature and the purge volume.
+
+    The one axis zmod varies by material is the handling temperature; the other
+    is a flat bonus when the TYPE changes, not merely the colour. Both live in
+    [ifs_materials] and are only read here.
+    """
+
+    PARAMS = {"tube_mm": 1000.0, "ifs_speed": 1200.0, "purge_extra_mm": 90.0,
+              "first_purge_mm": 100.0, "first_purge_speed": 300.0,
+              "first_fan": 0.0, "second_purge_mm": 30.0,
+              "second_purge_speed": 300.0, "second_fan": 255.0,
+              "hub_clear_mm": 300.0, "unload_ifs_mm": 70.0,
+              "unload_extruder_mm": 60.0, "unload_speed": 600.0,
+              "cut_before_mm": 0.0, "cut_after_mm": 5.0}
+
+    def printer(self, slots, recorded=0, target=0.0):
+        return {
+            "ifs": {"connected": True, "error": None,
+                    "loaded_channels": [1, 2, 4], "params": self.PARAMS},
+            "ifs_materials": {"slots": slots},
+            "extruder": {"target": target},
+            "filament_switch_sensor toolhead": {"filament_detected": False},
+            "save_variables": {"variables": {"ifs_loaded": recorded,
+                                             "ifs_at_hub": 0}},
+            "gcode_macro _IFS_SENSOR_HOLD": {"was_enabled": 1},
+        }
+
+    def render(self, slots, params=None, **kwargs):
+        return render_macro(
+            HW, "IFS_LOAD", printer=self.printer(slots, **kwargs),
+            params=params if params is not None else {"SLOT": 1}).commands
+
+    PLA = {"type": "PLA", "color": "#FFFFFF", "temp": 220.0}
+    ABS = {"type": "ABS", "color": "#898989", "temp": 250.0}
+    RED_PLA = {"type": "PLA", "color": "#FF0000", "temp": 220.0}
+    UNLABELLED = {"type": None, "color": None, "temp": None}
+
+    def test_a_load_with_no_temp_uses_the_materials_own(self):
+        ## The whole point: IFS_SELECT SLOT=1 on a cold machine has to work.
+        commands = self.render({"1": self.ABS})
+        self.assertIn("M104 S250", commands)
+
+    def test_an_explicit_temp_still_wins(self):
+        ## A user who types 240 means 240, whatever the slot is labelled.
+        commands = self.render({"1": self.PLA},
+                               params={"SLOT": 1, "TEMP": 240})
+        self.assertIn("M104 S240", commands)
+
+    def test_an_unlabelled_slot_falls_back_to_the_nozzle(self):
+        ## Not to PLA. zmod substitutes PLA here, which runs an unknown
+        ## material at 220 and snaps it off in the heatbreak.
+        commands = self.render({"1": self.UNLABELLED}, target=245.0)
+        self.assertIn("M104 S245", commands)
+
+    def test_an_unlabelled_slot_on_a_cold_nozzle_is_refused(self):
+        ## Nothing below this macro enforces a temperature: min_extrude_temp is
+        ## 0 on this printer, so klipper will happily extrude cold.
+        with self.assertRaises(MacroActionError) as caught:
+            self.render({"1": self.UNLABELLED}, target=0.0)
+        self.assertIn("TEMP", str(caught.exception))
+
+    def test_a_material_change_purges_more(self):
+        commands = self.render({"1": self.PLA, "4": self.ABS}, recorded=4)
+        purge = [c for c in commands if c.startswith("_IFS_PURGE")]
+        self.assertEqual(len(purge), 1, commands)
+        self.assertIn("EXTRA=90.0", purge[0])
+
+    def test_a_colour_change_does_not(self):
+        ## Same material, different colour: stock's own purge volume already
+        ## covers it, and 90mm a swap adds up fast on a multicolour print.
+        commands = self.render({"1": self.PLA, "4": self.RED_PLA}, recorded=4)
+        purge = [c for c in commands if c.startswith("_IFS_PURGE")]
+        self.assertIn("EXTRA=0.0", purge[0])
+
+    def test_an_unknown_outgoing_type_is_not_a_change(self):
+        ## Otherwise every load on a machine with unlabelled slots pays the
+        ## bonus, which is a guess dressed up as a measurement.
+        commands = self.render({"1": self.PLA, "4": self.UNLABELLED},
+                               recorded=4, target=220.0)
+        purge = [c for c in commands if c.startswith("_IFS_PURGE")]
+        self.assertIn("EXTRA=0.0", purge[0])
+
+    def test_the_bonus_lands_on_both_passes(self):
+        ## zmod passes filament_drop_length_add to both of its purge calls.
+        commands = render_macro(
+            HW, "_IFS_PURGE",
+            printer={"ifs": {"params": self.PARAMS},
+                     "gcode_macro _IFS_SENSOR_HOLD": {"was_enabled": 1}},
+            params={"SLOT": 1, "EXTRA": 90.0}).commands
+        extrudes = [c for c in commands if c.startswith("G1 E")]
+        self.assertIn("G1 E190.0 F300.0", extrudes)
+        self.assertIn("G1 E120.0 F300.0", extrudes)
+
+    def test_the_lane_co_push_matches_the_longer_first_pass(self):
+        ## The IFS cannot push past a gripping gear - it has to drive the same
+        ## distance as the extruder or it stalls against it.
+        commands = render_macro(
+            HW, "_IFS_PURGE",
+            printer={"ifs": {"params": self.PARAMS},
+                     "gcode_macro _IFS_SENSOR_HOLD": {"was_enabled": 1}},
+            params={"SLOT": 1, "EXTRA": 90.0}).commands
+        feed = [c for c in commands if c.startswith("IFS_FEED")]
+        self.assertEqual(len(feed), 1, commands)
+        self.assertIn("LENGTH=190.0", feed[0])
+
+    def test_a_printer_without_the_materials_object_still_loads(self):
+        ## [ifs_materials] is optional; a template that raises on its absence
+        ## takes the whole load down with it.
+        printer = self.printer({"1": self.PLA}, target=220.0)
+        del printer["ifs_materials"]
+        commands = render_macro(HW, "IFS_LOAD", printer=printer,
+                                params={"SLOT": 1}).commands
+        self.assertIn("M104 S220", commands)
 
 
 class ClearExtruderTest(unittest.TestCase):

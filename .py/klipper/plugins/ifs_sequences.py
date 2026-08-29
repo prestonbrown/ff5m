@@ -234,6 +234,15 @@ class Parameters(object):
         ## well under load_empty_mm, or the retreat pushes the lane back out of
         ## the IFS entirely.
         "hub_clear_mm": 300.0,
+        ## Extra purge when the incoming material is a DIFFERENT TYPE from the
+        ## one coming out, on top of each pass's normal length - zmod's
+        ## filament_drop_length_add, which it passes to both of its passes.
+        ## A colour change flushes in the volume stock allows for; a material
+        ## change also has to flush a melt that behaves differently, and PETG
+        ## ghosting through the next PLA is the failure it exists to stop.
+        ## It is a flat addition, not a matrix: zmod compares the type strings
+        ## and nothing more, so PLA -> PLA-CF costs the same as PLA -> ABS.
+        "purge_extra_mm": 90.0,
         ## The shear either side of the cut, from zmod's _CUT_PRUTOK
         ## (FILAMENT_UNLOAD_BEFORE_CUTTING / _AFTER_CUTTING). The AD5X cuts
         ## filament by driving the toolhead into a fixed blade, and the stub

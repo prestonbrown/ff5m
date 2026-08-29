@@ -200,6 +200,14 @@ class FakeConfig:
     def getboolean(self, key, default=Ellipsis, **kwargs):
         return self._typed(key, default, bool)
 
+    def get_prefix_options(self, prefix):
+        """Every option name starting with prefix, klipper's own signature.
+
+        Sorted, which klipper's is not - a test that asserts on the order of a
+        set of overrides should not be at the mercy of dict insertion order.
+        """
+        return sorted(key for key in self._values if key.startswith(prefix))
+
 
 class FakeRunoutHelper:
     """Stands in for klipper's RunoutHelper, recording what it was told."""

@@ -128,19 +128,22 @@ see it: a lane threaded but not loaded sits short of the sensor.
     lane out of the way, and loads the new one.
   - **Parameters**:
     - `SLOT` (int): The lane to change to.
-    - `TEMP` (optional): Nozzle temperature. Defaults to the current target;
-      must be at least 150.
-  - **Notes**: Does nothing if that lane is already loaded.
+    - `TEMP` (optional): Nozzle temperature. Defaults to the incoming
+      material's handling temperature, and to the current target if the slot is
+      unlabelled; must be at least 150 either way.
+  - **Notes**: Does nothing if that lane is already loaded. Purges more when the
+    material type changes, not merely the colour.
 
 - **IFS_LOAD**
   - **Description**: Load a lane into the nozzle, purging and wiping at the end.
     Removes whatever is already loaded first, so `IFS_SELECT` is simply this.
-  - **Parameters**: `SLOT` (int), `TEMP` (optional).
+  - **Parameters**: `SLOT` (int), `TEMP` (optional, as above).
 
 - **IFS_UNLOAD**
   - **Description**: Take filament out of the NOZZLE. Cuts, wipes, withdraws
     the stub, and retracts the lane 70 mm. **The lane stays threaded and ready.**
-  - **Parameters**: `SLOT` (optional, defaults to the loaded lane), `TEMP`.
+  - **Parameters**: `SLOT` (optional, defaults to the loaded lane), `TEMP`
+    (optional, the lane's own material temperature).
 
 - **IFS_EJECT**
   - **Description**: Take filament out of the IFS entirely, so a spool can be
@@ -161,7 +164,8 @@ see it: a lane threaded but not loaded sits short of the sensor.
 - **IFS_PURGE**
   - **Description**: Purge the loaded lane through the nozzle over the chute,
     then shake and wipe. For a colour that has not fully changed over.
-  - **Parameters**: `TEMP` (optional).
+  - **Parameters**: `TEMP` (optional; defaults to the loaded material's
+    handling temperature).
 
 - **IFS_MOTION**
   - **Description**: Say whether the loaded lane has jammed or simply run out -
@@ -195,13 +199,37 @@ zmod's, so a machine that works under zmod works here without tuning.
 | `poll_interval` | 1.0 | Idle status cadence. Drops to 0.2 s automatically while a move is being watched. |
 | `port` | `/dev/ttyS4` | Where the board is. |
 
-`[ifs_toolhead_sensor toolhead]` takes `present_max` and `absent_min`, the ADC
-thresholds either side of the gap. The measured values live in
+`[ifs_toolhead_sensor toolhead]` takes `present_max` (0.30) and `absent_min`
+(0.72), the ADC thresholds. These are stock's own numbers. The sensor is a
+proximity curve, not a switch: it reads about 0.008 with a strand covering it,
+climbs through 0.023 as the tip backs off, and only reaches 0.398 when the
+toolhead is genuinely empty. `present_max` therefore sits in the one real gap,
+between "filament somewhere near the extruder" and "nothing there at all";
+anything above `absent_min` is higher than any filament position can produce and
+is reported as a sensor fault rather than a runout. The measurements live in
 `.py/klipper/plugins/ifs_sensor_logic.py` and are not repeated in the config,
 because when they were, correcting the measurement left three copies disagreeing.
 
 `[ifs_materials]` takes `path`, defaulting to FlashForge's own
-`Adventurer5M.json`.
+`Adventurer5M.json`, and a `temp_<TYPE>` for each material's handling
+temperature - what the nozzle is heated to in order to move that filament, not
+what a print runs at. Built in: PLA and PLA-CF 220, SILK and TPU 230, ABS, PETG
+and PETG-CF 250, which are zmod's. Add or override one by name:
+
+```ini
+[ifs_materials]
+temp_ASA: 260
+temp_PLA: 215
+```
+
+A slot whose material is not in the table has no temperature, and a load of it
+insists on an explicit `TEMP=` rather than guessing. zmod substitutes PLA there,
+which runs ABS at 220 and snaps it off in the heatbreak.
+
+Changing material also purges more: `purge_extra_mm` (90, zmod's
+`filament_drop_length_add`) is added to **each** purge pass when the incoming
+slot's type differs from the outgoing one. A different colour of the same
+material does not pay it - stock's own purge volume already covers that.
 
 Lower-level commands, for when something has gone wrong: `IFS_CLAMP`,
 `IFS_RELEASE`, `IFS_RELEASE_ALL`, `IFS_FEED`, `IFS_RETRACT`, `IFS_STOP`,
