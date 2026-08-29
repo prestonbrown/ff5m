@@ -78,7 +78,7 @@ and reported the board as disconnected.
 | `INSERT_PRUTOK_IFS` | load to nozzle | `IFS_LOAD` |
 | `_IFS_REMOVE_PRUTOK` | out of the nozzle (70 mm) | `IFS_UNLOAD` |
 | `_REMOVE_PRUTOK_IFS` | out of the IFS (1000 mm) | `IFS_EJECT` |
-| `PURGE_PRUTOK_IFS` | purge only | **missing** (`_IFS_PURGE` is not standalone) |
+| `PURGE_PRUTOK_IFS` | purge only | `IFS_PURGE` |
 | `IFS_REMOVE_CURRENT_PRUTOK` | unload whatever is active | folded into `IFS_LOAD` |
 | `SET_CURRENT_PRUTOK` / `SET_EXTRUDER_SLOT` | record the active lane | `save_variables` `ifs_loaded` / `ifs_at_hub` |
 | `ANALOG_PRUTOK` | load an equivalent lane | out of scope |
@@ -148,9 +148,11 @@ Ours does: park, heat, clamp, feed, purge, wipe. **Gaps, in order of severity:**
    recorded in `save_variables` - the load writes it, the unload clears it, and
    both `IFS_UNLOAD` and `IFS_SELECT` read it.
 
-**Still open:** `IFS_MOTION` (jam vs runout for the loaded lane, and what its
-`_PRINT_IFS_MOTION PAUSE=` argument actually drives), a standalone
-`PURGE_PRUTOK_IFS`, and `_SBROS_TRASH`'s shake-off move.
+**Nothing on zmod's command surface is missing now.** What is left is the
+behaviour it never had: `IFS_EJECT` for taking a lane out of the machine, hub
+ownership so two lanes cannot be threaded into the same place, and a gate
+(`tools/lint/check_gcode_safety.py`) against the exception that shuts klippy
+down - which bit us through zmod's own code path as well as ours.
 
 ### Unload - `_REMOVE_PRUTOK_IFS` ("Unloading filament Extruder + IFS")
 
@@ -169,8 +171,10 @@ across the front of the bed at the blade's depth.
 
 ### Purge - `_PURGE_PRUTOK_IFS`
 
-`_SBROS_TRASH_DAVIM PRUTOK=0` then `_SBROS_TRASH` then `_CLEAR_REZINA`. Ours
-folds purging into `IFS_LOAD` with no standalone command.
+`_SBROS_TRASH_DAVIM PRUTOK=0` then `_SBROS_TRASH` then `_CLEAR_REZINA`, and
+`IFS_PURGE` is ours. Note that zmod shakes and wipes after **every** purge pass,
+not only the last: leaving the first blob attached carries it into the second
+pass and then onto the wiper, which smears it rather than removing it.
 
 ### Positions
 
@@ -178,7 +182,7 @@ folds purging into `IFS_LOAD` with no standalone command.
 |---|---|
 | `_GOTO_TRASH` / `_GOTO_TRASH_STANDARD` | `_IFS_PARK_FOR_PURGE` via `_IFS_GOTO_STATION` |
 | `_CLEAR_REZINA` | `_IFS_WIPE` |
-| `_SBROS_TRASH` (shake off, no extrusion) | **missing** |
+| `_SBROS_TRASH` (shake off, no extrusion) | `_IFS_SHAKE` |
 | `_MOVE_TO_CUT_PREPARE_POSITION` | **missing** (no cutter) |
 
 ## Deliberate deviations
