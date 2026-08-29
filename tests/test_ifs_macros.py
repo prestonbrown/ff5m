@@ -1029,6 +1029,74 @@ class ClearExtruderTest(unittest.TestCase):
                          commands)
 
 
+class SensorHealTest(unittest.TestCase):
+    """A leaked mute must not survive into the next command.
+
+    Klipper macros have no finally, so an error between _IFS_SENSOR_HOLD and
+    its resume leaves the toolhead sensor muted - and the printer then runs
+    with no runout detection at all, silently, because a muted sensor looks
+    exactly like a sensor with filament in front of it. Every public entry
+    point heals it before it moves anything. zmod has the same hole and no
+    heal.
+    """
+
+    PARAMS = {"tube_mm": 1000.0, "ifs_speed": 1200.0, "purge_extra_mm": 90.0,
+              "first_purge_mm": 100.0, "first_purge_speed": 300.0,
+              "first_fan": 0.0, "second_purge_mm": 30.0,
+              "second_purge_speed": 300.0, "second_fan": 255.0,
+              "hub_clear_mm": 300.0, "unload_ifs_mm": 70.0,
+              "unload_extruder_mm": 60.0, "unload_speed": 600.0,
+              "cut_before_mm": 0.0, "cut_after_mm": 5.0,
+              "load_empty_mm": 600.0, "autoinsert_ret_mm": 90.0}
+
+    ## macro -> params that reach its first moving command
+    ENTRY_POINTS = {
+        "IFS_LOAD": {"SLOT": 1, "TEMP": 220},
+        "IFS_UNLOAD": {"SLOT": 1, "TEMP": 220},
+        "IFS_EJECT": {"SLOT": 1, "TEMP": 220},
+        "IFS_PURGE": {"TEMP": 220},
+        "IFS_AUTOINSERT": {"CHANNEL": 1},
+    }
+
+    def printer(self):
+        return {
+            "ifs": {"connected": True, "error": None,
+                    "loaded_channels": [1, 2, 4], "active_channel": 0,
+                    "params": self.PARAMS},
+            "extruder": {"target": 220.0},
+            "filament_switch_sensor toolhead": {"filament_detected": True},
+            "save_variables": {"variables": {"ifs_loaded": 1,
+                                             "ifs_at_hub": 1}},
+            "gcode_macro _IFS_SENSOR_HOLD": {"was_enabled": 1},
+        }
+
+    def test_every_public_entry_point_heals_first(self):
+        for macro, params in sorted(self.ENTRY_POINTS.items()):
+            commands = render_macro(HW, macro, printer=self.printer(),
+                                    params=params).commands
+            self.assertIn("_IFS_SENSOR_RESUME", commands,
+                          "%s never heals a leaked mute" % macro)
+            heal = commands.index("_IFS_SENSOR_RESUME")
+            movers = [i for i, c in enumerate(commands)
+                      if c.startswith(("G1 ", "IFS_FEED", "IFS_RETRACT",
+                                       "IFS_CLAMP", "_IFS_CUT"))]
+            if movers:
+                self.assertLess(heal, movers[0],
+                                "%s moves before healing: %r"
+                                % (macro, commands[:movers[0] + 1]))
+
+    def test_the_heal_is_the_idempotent_restore_not_a_forced_enable(self):
+        ## SET_FILAMENT_SENSOR ENABLE=1 here would turn on a sensor the
+        ## operator had deliberately switched off. _IFS_SENSOR_RESUME only
+        ## restores what a hold actually took.
+        for macro, params in sorted(self.ENTRY_POINTS.items()):
+            commands = render_macro(HW, macro, printer=self.printer(),
+                                    params=params).commands
+            self.assertFalse(
+                [c for c in commands if c.startswith("SET_FILAMENT_SENSOR")],
+                "%s forces the sensor on" % macro)
+
+
 class LeavePurgeTest(unittest.TestCase):
     def test_comes_forward_to_safe_y_only(self):
         commands = render_macro(HW, "_IFS_LEAVE_PURGE",

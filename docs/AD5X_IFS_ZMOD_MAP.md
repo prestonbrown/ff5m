@@ -292,6 +292,17 @@ Everything else should copy zmod. These do not, for stated reasons:
   which is the reading a disconnected sensor rails to. Same runout decision as
   ours while `fail_safe` is on, but ours calls it FAULT so `IFS_SENSOR_VALUE`
   and `classify()` say what is actually wrong.
+- **A leaked sensor mute is healed, not inherited.** Klipper macros have no
+  `finally`, so an error between `_IFS_SENSOR_HOLD` and its resume leaves the
+  toolhead sensor muted - and the printer then runs with no runout detection at
+  all, silently, because a muted sensor is indistinguishable from a sensor with
+  filament in front of it. Every public entry point restores it before it moves
+  anything. zmod has the same hole and no heal.
+- **The shared path is claimed before it is entered.** zmod records the loaded
+  lane only once the load has worked. A feed that stalls part-way still leaves
+  the lane in the tube, so the record reads "nobody" while somebody is there,
+  and the next load of a different lane feeds into it. Claiming first makes an
+  accurate record the recovery, with no new code path.
 - **Per-material temperatures refuse rather than guess.** zmod silently
   substitutes PLA for a material it has no entry for, which runs an unknown
   filament at 220 and snaps it off in the heatbreak. Ours reports no temperature
