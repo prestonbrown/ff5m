@@ -203,8 +203,13 @@ class TestCommandQueue(unittest.TestCase):
         self.obj._connect()
         self.obj._thread = AliveThread()
         self.reactor = self.printer.reactor
-        ## Stand in for the poll thread running between reactor pauses.
-        self.reactor.on_pause = self.obj._run_queued
+        ## Stand in for the poll thread running between reactor pauses. The real
+        ## one services queued commands AND keeps polling F13, and anything that
+        ## waits for the board to settle needs those polls to arrive.
+        def tick():
+            if not self.obj._run_queued():
+                self.obj._poll_once()
+        self.reactor.on_pause = tick
 
     def test_a_command_is_answered(self):
         self.link.replies = ["chan 1."]
@@ -247,7 +252,7 @@ class TestCommandQueue(unittest.TestCase):
         and IFS_LOAD died at its first IFS command. zmod's cmd_IFS_F24 waits on
         the same acknowledgement this now waits on.
         """
-        self.link.replies = ["chan 1."]
+        self.link.replies = ["chan 1.", f13()]
         gcmd = fakes.FakeGcmd({"CHANNEL": 1})
         self.obj.cmd_IFS_CLAMP(gcmd)
         self.assertIn("F24 C1", self.link.asked)
@@ -261,6 +266,21 @@ class TestCommandQueue(unittest.TestCase):
         gcmd = fakes.FakeGcmd({"CHANNEL": 1})
         self.obj.cmd_IFS_CLAMP(gcmd)  # must not raise
         self.assertEqual(self.link.asked.count("F24 C1"), 1)
+
+    def test_clamp_waits_for_the_board_to_settle_before_returning(self):
+        """zmod's cmd_IFS_F24 follows the ack with wait_for_state().
+
+        The ack only says the opcode was accepted. A feed sent while the board
+        was still clamping came back "F10 ... refused: FFS not ready." - the
+        clamp has to wait for F13 to report READY before the next command.
+        """
+        self.link.replies = (["chan 1."]
+                             + [f13(state=STATUS.CLAMPED)] * 3
+                             + [f13(state=STATUS.READY)])
+        gcmd = fakes.FakeGcmd({"CHANNEL": 1})
+        self.obj.cmd_IFS_CLAMP(gcmd)
+        ## It must have kept polling F13 until ready, not returned on the ack.
+        self.assertGreater(self.link.asked.count("F13"), 1, self.link.asked)
 
     def test_a_refused_clamp_is_not_reported_as_success(self):
         ## The board prefixes refusals with "ok." exactly as it does successes,
@@ -282,7 +302,7 @@ class TestCommandQueue(unittest.TestCase):
                          gcmd.responses)
 
     def test_release_accepts_the_payload_the_board_actually_sends(self):
-        self.link.replies = ["FFS channel 1 release."]
+        self.link.replies = ["FFS channel 1 release.", f13()]
         gcmd = fakes.FakeGcmd({"CHANNEL": 1})
         self.obj.cmd_IFS_RELEASE(gcmd)
         self.assertIn("F39 C1", self.link.asked)

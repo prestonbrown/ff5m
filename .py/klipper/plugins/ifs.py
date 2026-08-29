@@ -57,6 +57,9 @@ COMMAND_POLL_PAUSE = 0.05
 ## A move can take a while: a metre of filament at 1200 mm/min is fifty
 ## seconds, and a cold-ish nozzle makes a purge slower still.
 DEFAULT_MOVE_TIMEOUT = 120.0
+## How long to let the board finish acting on a command it already accepted.
+## Clamping is mechanical and quick; this only has to outlast that.
+SETTLE_TIMEOUT = 15.0
 
 ## What a move waits for, as the UNTIL= parameter spells it.
 UNTIL_TOOLHEAD = "toolhead"
@@ -479,12 +482,14 @@ class IFS(object):
         ## zmod's cmd_IFS_F24 waits on the same acknowledgement.
         channel = self._channel(gcmd)
         self._run(gcmd, "F24 C%d" % channel, lambda ops: ops.clamp(channel))
+        self._settle(gcmd, channel, "clamp channel %d" % channel)
         gcmd.respond_info("clamped channel %d" % channel)
 
     def cmd_IFS_RELEASE(self, gcmd):
         channel = self._channel(gcmd)
         self._run(gcmd, "F39 C%d" % channel,
                   lambda ops: ops.release(channel))
+        self._settle(gcmd, channel, "release channel %d" % channel)
         gcmd.respond_info("released channel %d" % channel)
 
     def cmd_IFS_RELEASE_ALL(self, gcmd):
@@ -499,6 +504,18 @@ class IFS(object):
         ## The literal C is what the firmware expects; it is not a channel.
         self.execute("F15 C")
         gcmd.respond_info("driver reset")
+
+    def _settle(self, gcmd, channel, what, timeout=SETTLE_TIMEOUT):
+        """Wait for the board to come back to READY after a command.
+
+        zmod follows the acknowledgement of both F24 and F39 with
+        wait_for_state(), which returns when F13 reports READY. The
+        acknowledgement only says the opcode was accepted - the board is still
+        acting on it, and the next opcode sent meanwhile is refused with "FFS
+        not ready.". A feed issued straight after a clamp hit exactly that.
+        """
+        waiter = ifs_sequences.StateWaiter(channel, watch_stall=False)
+        return self._finish(gcmd, self._await(gcmd, waiter, timeout), what)
 
     def _run(self, gcmd, label, action, timeout=DEFAULT_COMMAND_TIMEOUT):
         """run_operation, reporting board and link failures as command errors.
