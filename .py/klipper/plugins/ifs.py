@@ -610,7 +610,14 @@ class IFS(object):
                                + (length * 20) // speed + 1)
             return None
 
-        waiter = ifs_sequences.StateWaiter(channel, activity)
+        ## CHECK mirrors zmod's: only the LOAD feed passes CHECK=1 and gets
+        ## silk and stall judged against the channel's activity state. Its
+        ## unload is a plain `IFS_F11 LEN SPEED` with no CHECK, which waits for
+        ## READY and nothing else. Watching a retract for stalls failed one that
+        ## had worked - the motion stopping IS how a retract ends.
+        check = gcmd.get_int("CHECK", 0)
+        waiter = ifs_sequences.StateWaiter(
+            channel, activity if check else None, watch_stall=bool(check))
         outcome = self._await(gcmd, waiter, timeout, until=until)
         return self._finish(gcmd, outcome,
                             "%s channel %d" % (what, channel))

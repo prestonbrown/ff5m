@@ -413,6 +413,32 @@ class TestCommandQueue(unittest.TestCase):
         self.assertGreaterEqual(self.reactor.monotonic() - before,
                                 (100 * 20) // 300 + 1)
 
+    def test_a_retract_is_not_watched_for_stalls(self):
+        """zmod's unload is a plain IFS_F11 with no CHECK.
+
+        Only its LOAD feed passes CHECK=1. Motion stopping is how a retract
+        ENDS - the filament is home - so judging it as a stall failed a retract
+        that had worked, with the toolhead sensor clear to prove it.
+        """
+        self.link.replies = (["FFS channel 4 exiting."]
+                             + [f13(state=STATUS.UNLOADING, chan=4,
+                                    stall=0)] * 3
+                             + [f13(state=STATUS.READY)])
+        gcmd = fakes.FakeGcmd({"CHANNEL": 4, "UNTIL": "done",
+                               "LENGTH": 1000, "SPEED": 1200})
+        self.obj.cmd_IFS_RETRACT(gcmd)          # must not raise
+
+    def test_check_1_does_watch_for_stalls(self):
+        ## The contrast: the load feed asks for CHECK=1 and still gets the
+        ## silk/stall judgement zmod applies there.
+        self.link.replies = (["FFS channel 1 feeding."]
+                             + [f13(state=STATUS.LOADING, chan=1, stall=0)] * 8)
+        gcmd = fakes.FakeGcmd({"CHANNEL": 1, "UNTIL": "done", "CHECK": 1,
+                               "LENGTH": 1000, "SPEED": 1200, "TIMEOUT": 1.0})
+        with self.assertRaises(gcmd.error) as caught:
+            self.obj.cmd_IFS_FEED(gcmd)
+        self.assertIn("stall", str(caught.exception).lower())
+
     def test_shutdown_releases_a_waiting_caller(self):
         ## A caller blocked on a command when klippy goes down must not hang.
         request = IFS._Request("F13")
