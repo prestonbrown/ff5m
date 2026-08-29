@@ -96,6 +96,7 @@ class StateWaiter(object):
         self._runout_run = 0
         self._stall_run = 0
         self._seen_activity = False
+        self._seen_motion = False
 
     @property
     def expected_state(self):
@@ -162,12 +163,22 @@ class StateWaiter(object):
             ## its sustained ABSENCE during a move we asked for. Measured with
             ## an empty channel as the control; zmod's wait agrees.
             if status.is_moving(self.channel):
+                self._seen_motion = True
                 self._stall_run = 0
             else:
                 self._stall_run += 1
                 if self._stall_run >= self.confirmations:
+                    ## Whether the lane EVER moved is the first question anyone
+                    ## asks of a stall, and it points at different hardware: a
+                    ## lane that never started is bound at the IFS itself, one
+                    ## that stopped part-way hit something ahead of it. Working
+                    ## that out cost a night of reading the motion bit by hand.
                     return Outcome(STALLED, status, elapsed,
-                                   "channel %d stopped moving" % self.channel)
+                                   "channel %d %s" % (
+                                       self.channel,
+                                       "stopped moving after %.1fs" % elapsed
+                                       if self._seen_motion
+                                       else "never started moving"))
         return None
 
     def timed_out(self, status=None, elapsed=0.0):

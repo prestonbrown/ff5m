@@ -370,6 +370,23 @@ class LoadedLaneTest(unittest.TestCase):
         self.assertEqual([c for c in commands if c.startswith("IFS_RETRACT")],
                          [], commands)
 
+    def test_an_unload_hands_its_lane_to_the_extruder_withdraw(self):
+        ## Without this the withdraw drags the strand back through a lane that
+        ## is not driving. _IFS_CLEAR_EXTRUDER cannot work the lane out for
+        ## itself: on IFS_LOAD's fallback path there genuinely is not one.
+        commands = self.render("IFS_UNLOAD", recorded=2, params={"SLOT": 2,
+                                                                 "TEMP": 220})
+        clear = [c for c in commands if c.startswith("_IFS_CLEAR_EXTRUDER")]
+        self.assertEqual(len(clear), 1, commands)
+        self.assertIn("SLOT=2", clear[0])
+
+    def test_a_load_with_no_lane_on_record_names_no_lane(self):
+        commands = self.render("IFS_LOAD", recorded=0, params={"SLOT": 1,
+                                                               "TEMP": 220})
+        clear = [c for c in commands if c.startswith("_IFS_CLEAR_EXTRUDER")]
+        self.assertEqual(len(clear), 1, commands)
+        self.assertNotIn("SLOT=", clear[0])
+
     def test_an_unload_with_no_slot_uses_the_recorded_lane(self):
         commands = self.render("IFS_UNLOAD", {"TEMP": 220}, recorded=4,
                                occupied=True)
@@ -893,13 +910,16 @@ class ClearExtruderTest(unittest.TestCase):
     PARAMS = {"cut_before_mm": 0.0, "cut_after_mm": 5.0, "unload_speed": 600.0,
               "unload_extruder_mm": 60.0}
 
-    def render(self, detected):
+    def render(self, detected, slot=None):
+        params = {"TEMP": 220}
+        if slot is not None:
+            params["SLOT"] = slot
         return render_macro(HW, "_IFS_CLEAR_EXTRUDER", printer={
             "ifs": {"params": self.PARAMS},
             "extruder": {"target": 220.0},
             "filament_switch_sensor toolhead": {"filament_detected": detected},
             "gcode_macro _IFS_SENSOR_HOLD": {"was_enabled": 1},
-        }, params={"TEMP": 220}).commands
+        }, params=params).commands
 
     def test_an_empty_extruder_is_left_alone(self):
         ## zmod's IFS_REMOVE_CURRENT_PRUTOK returns on the same test. Cutting
@@ -922,6 +942,53 @@ class ClearExtruderTest(unittest.TestCase):
                         index_of(commands, r"TEMPERATURE_WAIT"))
         self.assertLess(index_of(commands, r"TEMPERATURE_WAIT"),
                         index_of(commands, r"_IFS_CUT"))
+
+    def test_the_lane_pulls_with_the_extruder(self):
+        """Both ends move the SAME strand, so they move together or they fight.
+
+        The mirror of the co-push in _IFS_PURGE, and zmod's own shape: G1 E of
+        nozzle_cleaning_length beside an IFS retract of the same length at the
+        same speed. Dragging 60 mm back through a released lane works against
+        the idle drive, and a lane that comes out of a swap buckled will not
+        feed OR retract afterwards - which reads as a dead lane and is not one.
+        """
+        commands = self.render(True, slot=2)
+        self.assertIn("IFS_RETRACT CHANNEL=2 UNTIL=done LENGTH=60.0 SPEED=600.0",
+                      commands)
+
+    def test_the_lane_is_clamped_before_it_is_asked_to_pull(self):
+        commands = self.render(True, slot=2)
+        self.assertLess(index_of(commands, r"IFS_CLAMP CHANNEL=2"),
+                        index_of(commands, r"IFS_RETRACT CHANNEL=2"))
+
+    def test_the_retract_is_issued_after_the_extruder_move(self):
+        ## G1 is queued and returns immediately, so ordering it second is what
+        ## makes the two run ALONGSIDE each other. Issued first, the lane would
+        ## finish its pull before the extruder started.
+        commands = self.render(True, slot=2)
+        self.assertLess(index_of(commands, r"G1 E-60\.0"),
+                        index_of(commands, r"IFS_RETRACT CHANNEL=2"))
+
+    def test_the_two_pulls_are_the_same_distance_and_speed(self):
+        ## Different numbers here is the fight, just quieter.
+        commands = self.render(True, slot=2)
+        extrude = [c for c in commands if c.startswith("G1 E-")][0]
+        retract = [c for c in commands if c.startswith("IFS_RETRACT")][0]
+        self.assertIn("60.0", extrude)
+        self.assertIn("600.0", extrude)
+        self.assertIn("LENGTH=60.0", retract)
+        self.assertIn("SPEED=600.0", retract)
+
+    def test_with_no_lane_on_record_the_extruder_works_alone(self):
+        ## IFS_LOAD's fallback when save_variables knows of nothing loaded:
+        ## there is no lane to clamp, and clamping a guess would grip the wrong
+        ## strand.
+        commands = self.render(True)
+        self.assertIn("G1 E-60.0 F600.0", commands)
+        self.assertFalse([c for c in commands if c.startswith("IFS_RETRACT")],
+                         commands)
+        self.assertFalse([c for c in commands if c.startswith("IFS_CLAMP")],
+                         commands)
 
 
 class LeavePurgeTest(unittest.TestCase):

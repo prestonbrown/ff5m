@@ -164,6 +164,27 @@ class TestStall(unittest.TestCase):
         self.assertEqual(outcome.kind, SEQ.STALLED)
         self.assertTrue(outcome.is_problem)
 
+    def test_a_lane_that_never_moved_says_so(self):
+        """The first question anyone asks of a stall, answered in the message.
+
+        A lane bound at the IFS itself never starts; one that hit something
+        ahead of it stops part-way. Those are different repairs, and working
+        the difference out by hand cost a night of reading the motion bit off
+        the board a poll at a time.
+        """
+        waiter = SEQ.StateWaiter(CH, S.LOADING, confirmations=3)
+        outcome = feed(waiter, stuck(LOADING), stuck(LOADING), stuck(LOADING))
+        self.assertEqual(outcome.kind, SEQ.STALLED)
+        self.assertIn("never started moving", outcome.detail)
+
+    def test_a_lane_that_moved_first_says_that_instead(self):
+        waiter = SEQ.StateWaiter(CH, S.LOADING, confirmations=3)
+        outcome = feed(waiter, status(LOADING), stuck(LOADING),
+                       stuck(LOADING), stuck(LOADING))
+        self.assertEqual(outcome.kind, SEQ.STALLED)
+        self.assertIn("stopped moving", outcome.detail)
+        self.assertNotIn("never started", outcome.detail)
+
     def test_healthy_motion_is_never_a_jam(self):
         ## The inversion that would have broken every normal load.
         waiter = SEQ.StateWaiter(CH, S.LOADING, confirmations=2)

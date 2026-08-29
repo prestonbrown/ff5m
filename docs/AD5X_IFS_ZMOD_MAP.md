@@ -237,6 +237,14 @@ pass and then onto the wiper, which smears it rather than removing it.
   0.30 sits in the only real gap, six times above the highest present reading
   and a quarter below the lowest absent one.
 
+- **The extruder withdraw co-pulls with the lane.** zmod's `_IFS_REMOVE_PRUTOK`
+  issues `G1 E-nozzle_cleaning_length` and an `IFS_F11` of the same length at
+  the same speed back to back, so the queued G1 runs alongside the lane's own
+  retract. Ours did the extruder move alone, with the lane released, which
+  drags 60 mm of filament backwards against an idle drive. It is the same rule
+  the purge already follows in the other direction: **the IFS and the extruder
+  move one strand, so they move together or they fight.**
+
 ## Deliberate deviations
 
 Everything else should copy zmod. These do not, for stated reasons:
