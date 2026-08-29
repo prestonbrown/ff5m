@@ -31,7 +31,16 @@ DRIVER_ERROR = "driver_error"  # the board wants F15 before anything else
 TIMED_OUT = "timed_out"
 
 ## Outcomes that mean "stop and deal with it", as opposed to a normal finish.
-PROBLEMS = frozenset([STALLED, RUNOUT, NOT_REACHED, DRIVER_ERROR, TIMED_OUT])
+##
+## NOT_REACHED is deliberately NOT one of them. zmod's checked feed returns
+## RET_OK when the board simply completes the move, and its macro carries
+## straight on to the co-push, where the EXTRUDER gear pulls the filament the
+## last stretch in. Failing there instead stopped a load whose filament was
+## sitting at the toolhead entry waiting for exactly that - "lane 1 is stuck at
+## the toolhead entry, the filament isn't gripped by the gears yet". It is
+## still worth reporting, because a feed that ended on the sensor and one that
+## merely ran out of length are different things.
+PROBLEMS = frozenset([STALLED, RUNOUT, DRIVER_ERROR, TIMED_OUT])
 
 ## Consecutive matching polls before a condition counts. zmod keeps two
 ## separate counts and so do we: a stall has to persist (its motion bit toggles,

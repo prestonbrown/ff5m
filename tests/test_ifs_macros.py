@@ -170,14 +170,18 @@ class AutoinsertTest(unittest.TestCase):
         self.assertIn("VALUE=2", saves[0])
 
     def test_it_backs_off_the_gear_once_the_tip_arrives(self):
-        ## filament_autoinsert_ret_length. Leaving the tip inside the extruder
-        ## gear means the next load has nowhere to push it.
-        commands = self.render()
-        back = [c for c in commands if c.startswith("IFS_RETRACT")]
-        self.assertEqual(len(back), 1, commands)
-        self.assertIn("LENGTH=90", back[0])
-        self.assertLess(index_of(commands, r"IFS_FEED\b"),
-                        index_of(commands, r"IFS_RETRACT\b"))
+        """filament_autoinsert_ret_length, asked for THROUGH the feed.
+
+        A klipper macro is rendered once, before any of it runs, so a separate
+        IFS_RETRACT written after the feed cannot be conditional on whether the
+        feed reached the sensor - that read already happened. BACKOFF puts the
+        decision where the outcome is known.
+        """
+        feed = self.feeds(self.render())
+        self.assertEqual(len(feed), 1, feed)
+        self.assertIn("BACKOFF=90", feed[0])
+        self.assertEqual([c for c in self.render()
+                          if c.startswith("IFS_RETRACT")], [])
 
     def test_the_blocked_branch_moves_nothing_at_all(self):
         ## No feed, no retract, no clamp. The lane stays where the board's own
@@ -187,13 +191,12 @@ class AutoinsertTest(unittest.TestCase):
             self.assertEqual([c for c in commands if c.startswith(verb)], [],
                              commands)
 
-    def test_it_stops_the_board_before_touching_the_lane_again(self):
+    def test_it_stops_the_board_after_the_feed(self):
         ## UNTIL=toolhead returns while the board is still feeding - the sensor
-        ## ends OUR wait, not the board's move. Retracting into a running feed
-        ## fights it.
+        ## ends OUR wait, not the board's move - so the board has to be told.
         commands = self.render()
-        self.assertLess(index_of(commands, r"IFS_STOP\b"),
-                        index_of(commands, r"IFS_RETRACT\b"))
+        self.assertLess(index_of(commands, r"IFS_FEED\b"),
+                        index_of(commands, r"IFS_STOP\b"))
 
     def test_it_marks_the_lane_inserted_and_lets_go(self):
         ## zmod ends with F23 then F39. Without the release the lane stays
@@ -378,16 +381,16 @@ class LoadedLaneTest(unittest.TestCase):
         with self.assertRaises(Exception) as caught:
             self.render("IFS_UNLOAD", {"TEMP": 220}, recorded=0, selector=3,
                         occupied=True)
-        self.assertIn("nothing is currently active", str(caught.exception))
+        self.assertIn("nothing is currently loaded", str(caught.exception))
 
-    def test_a_load_fully_unloads_the_lane_it_is_replacing(self):
+    def test_a_load_unloads_the_lane_it_is_replacing(self):
         """Clearing the extruder is not enough when the lane is known.
 
-        zmod's load opens with IFS_REMOVE_CURRENT_PRUTOK, which runs a full
-        IFS_REMOVE_PRUTOK and pulls the old strand back into its own lane.
-        Clearing only the extruder leaves it sitting at the hub - which, on an
-        AD5X, is mounted on the toolhead and is exactly where the incoming lane
-        arrives.
+        zmod's load opens with IFS_REMOVE_CURRENT_PRUTOK, which takes the
+        previous filament out of the NOZZLE and retracts the lane 70mm - not
+        the 1000mm eject. Clearing only the extruder leaves the old strand at
+        the hub, which on an AD5X is mounted on the toolhead and is exactly
+        where the incoming lane arrives.
         """
         commands = self.render("IFS_LOAD", {"SLOT": 1, "TEMP": 220},
                                recorded=4, occupied=True)
@@ -406,12 +409,52 @@ class LoadedLaneTest(unittest.TestCase):
         self.assertTrue(any(c.startswith("_IFS_CLEAR_EXTRUDER")
                             for c in commands), commands)
 
-    def test_select_unloads_the_recorded_lane_before_loading(self):
+    def test_an_unload_is_short_and_an_eject_is_the_whole_tube(self):
+        """The distinction that ejected a lane clean out of the IFS mid-swap.
+
+        zmod calls these _IFS_REMOVE_PRUTOK and _REMOVE_PRUTOK_IFS - the names
+        differ only in word order, which is how they got conflated. Ours say
+        what they do, and the numbers are what separate them.
+        """
+        unload = self.render("IFS_UNLOAD", {"SLOT": 2, "TEMP": 220},
+                             recorded=2, occupied=True)
+        eject = self.render("IFS_EJECT", {"SLOT": 2, "TEMP": 220},
+                            recorded=2, occupied=True)
+        back = lambda cs: [c for c in cs if c.startswith("IFS_RETRACT")]
+        self.assertEqual(len(back(unload)), 1, unload)
+        self.assertIn("LENGTH=70", back(unload)[0])
+        self.assertEqual(len(back(eject)), 1, eject)
+        self.assertIn("LENGTH=1000", back(eject)[0])
+
+    def test_ejecting_an_idle_lane_never_touches_the_extruder(self):
+        ## Lane 2 while lane 1 is loaded: nothing of lane 2 is in the nozzle,
+        ## so there is nothing to cut and no reason to need heat.
+        commands = self.render("IFS_EJECT", {"SLOT": 2}, recorded=1)
+        self.assertEqual([c for c in commands
+                          if c.startswith("_IFS_CLEAR_EXTRUDER")], [], commands)
+        self.assertEqual(self.saved(commands), {})
+
+    def test_ejecting_the_loaded_lane_does_clear_the_extruder(self):
+        commands = self.render("IFS_EJECT", {"SLOT": 1, "TEMP": 220},
+                               recorded=1, occupied=True)
+        self.assertTrue(any(c.startswith("_IFS_CLEAR_EXTRUDER")
+                            for c in commands), commands)
+        self.assertEqual(self.saved(commands),
+                         {"ifs_loaded": "0", "ifs_at_hub": "0"})
+
+    def test_select_is_just_a_load(self):
+        """zmod's tool change is literally INSERT_PRUTOK_IFS and nothing else.
+
+        The load already takes the previous filament out of the nozzle, so a
+        swap has no separate unload step to get wrong - and getting it wrong is
+        what ejected a lane clean out of the IFS mid-swap.
+        """
         commands = self.render("IFS_SELECT", {"SLOT": 1, "TEMP": 220},
                                recorded=4)
-        unload = index_of(commands, r"IFS_UNLOAD\b")
-        self.assertIn("SLOT=4", commands[unload])
-        self.assertLess(unload, index_of(commands, r"IFS_LOAD\b"))
+        self.assertEqual([c for c in commands if c.startswith("IFS_UNLOAD")],
+                         [], commands)
+        load = index_of(commands, r"IFS_LOAD\b")
+        self.assertIn("SLOT=1", commands[load])
 
     def test_select_skips_the_unload_when_nothing_is_loaded(self):
         commands = self.render("IFS_SELECT", {"SLOT": 1, "TEMP": 220},

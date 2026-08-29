@@ -699,6 +699,14 @@ class IFS(object):
         ## `IFS_F11 LEN SPEED` that waits for READY and nothing else, and
         ## watching a retract for stalls failed one that had worked: the motion
         ## stopping IS how a retract ends.
+        ## BACKOFF exists because a klipper macro is rendered ONCE, before any
+        ## of it runs: a template cannot look at the toolhead sensor after its
+        ## own feed, because that read happened before the feed was sent. So
+        ## "retract this much, but only if you actually reached the sensor" has
+        ## to be decided here, where the outcome is known. zmod decides the same
+        ## thing off its return code (RET_EXTRUDER) in python, for the same
+        ## reason.
+        backoff = gcmd.get_float("BACKOFF", 0., minval=0.)
         check = gcmd.get_int("CHECK", 0)
         for attempt in range(self.retry_count):
             ## A fresh waiter per attempt: the one that saw the fault has a
@@ -720,8 +728,16 @@ class IFS(object):
                                   % (what, channel, attempt + 2,
                                      self.retry_count))
                 self._run(gcmd, label, send)
-        return self._finish(gcmd, outcome,
-                            "%s channel %d" % (what, channel), channel=channel)
+        result = self._finish(gcmd, outcome,
+                              "%s channel %d" % (what, channel),
+                              channel=channel)
+        if backoff and outcome.kind == ifs_sequences.FILAMENT:
+            ## Only when the sensor is what ended the move. A feed that merely
+            ## ran out of length has not arrived anywhere to back away from.
+            self._run(gcmd, "F11 C%d L%d S%d" % (channel, backoff, speed),
+                      lambda ops: ops.retract(channel, backoff, speed))
+            self._settle(gcmd, channel, "back off channel %d" % channel)
+        return result
 
     def cmd_IFS_FEED(self, gcmd):
         self._move(gcmd, "F10", ifs_status.LOADING, UNTIL_TOOLHEAD, "feed")

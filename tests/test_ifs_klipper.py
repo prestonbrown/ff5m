@@ -565,14 +565,15 @@ class TestCommandQueue(unittest.TestCase):
                                "LENGTH": 600, "SPEED": 1200})
         self.obj.cmd_IFS_RETRACT(gcmd)          # must not raise
 
-    def test_a_feed_that_never_reaches_the_toolhead_is_a_failure(self):
-        """The silent failure this replaces.
+    def test_a_feed_that_never_reaches_the_toolhead_is_reported_not_failed(self):
+        """zmod carries on here, and so must we.
 
-        The board runs the whole commanded length, nothing arrives at the
-        toolhead, and F13 goes back to READY. Reading that as a finished move
-        let a load carry straight on to purge filament that was still somewhere
-        in the tube - "SOME filament came out the tip but it still looks white"
-        was exactly that.
+        Its checked feed returns RET_OK when the board simply completes the
+        move, and the macro goes straight to the co-push, where the EXTRUDER
+        gear pulls the filament the last stretch in. Failing instead stranded a
+        load whose filament was already at the toolhead entry waiting for
+        exactly that step. It is still worth SAYING, because ending on the
+        sensor and running out of length are different things.
         """
         self.obj._toolhead_has_filament = lambda: False
         self.link.replies = (["FFS channel 1 feeding."]
@@ -581,9 +582,43 @@ class TestCommandQueue(unittest.TestCase):
                              + ["", ""])
         gcmd = fakes.FakeGcmd({"CHANNEL": 1, "UNTIL": "toolhead", "CHECK": 1,
                                "LENGTH": 600, "SPEED": 1200, "TIMEOUT": 2.0})
-        with self.assertRaises(gcmd.error) as caught:
-            self.obj.cmd_IFS_FEED(gcmd)
-        self.assertIn("not_reached", str(caught.exception))
+        self.obj.cmd_IFS_FEED(gcmd)          # must NOT raise
+        self.assertTrue(any("not_reached" in r for r in gcmd.gcode.responses),
+                        gcmd.gcode.responses)
+        ## And it must not have stopped the board, which is what a problem does.
+        self.assertNotIn("F112", self.link.asked)
+
+    def test_backoff_only_runs_when_the_sensor_ended_the_move(self):
+        """A klipper macro is rendered ONCE, before any of it runs.
+
+        So a template cannot read the toolhead sensor after its own feed - that
+        read already happened. The conditional retract auto-insert needs has to
+        be decided here, where the outcome is known. zmod decides the same thing
+        off RET_EXTRUDER in python.
+        """
+        self.obj._toolhead_has_filament = lambda: True
+        self.link.replies = (["FFS channel 1 feeding."]
+                             + [f13(state=STATUS.LOADING, chan=1)]
+                             + ["FFS channel 1 exiting."]
+                             + [f13(state=STATUS.READY)] * 3)
+        gcmd = fakes.FakeGcmd({"CHANNEL": 1, "UNTIL": "toolhead", "CHECK": 1,
+                               "LENGTH": 600, "SPEED": 1200, "BACKOFF": 90,
+                               "TIMEOUT": 2.0})
+        self.obj.cmd_IFS_FEED(gcmd)
+        self.assertIn("F11 C1 L90 S1200", self.link.asked)
+
+    def test_no_backoff_when_the_feed_merely_ran_out_of_length(self):
+        ## Nothing arrived anywhere, so there is nothing to back away from.
+        self.obj._toolhead_has_filament = lambda: False
+        self.link.replies = (["FFS channel 1 feeding."]
+                             + [f13(state=STATUS.LOADING, chan=1)] * 2
+                             + [f13(state=STATUS.READY)]
+                             + ["", ""])
+        gcmd = fakes.FakeGcmd({"CHANNEL": 1, "UNTIL": "toolhead", "CHECK": 1,
+                               "LENGTH": 600, "SPEED": 1200, "BACKOFF": 90,
+                               "TIMEOUT": 2.0})
+        self.obj.cmd_IFS_FEED(gcmd)
+        self.assertNotIn("F11 C1 L90 S1200", self.link.asked)
 
     def test_a_feed_that_does_reach_the_toolhead_succeeds(self):
         ## The contrast: same board, sensor tripped, no error.
