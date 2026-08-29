@@ -133,6 +133,20 @@ see it: a lane threaded but not loaded sits short of the sensor.
       unlabelled; must be at least 150 either way.
   - **Notes**: Does nothing if that lane is already loaded. Purges more when the
     material type changes, not merely the colour.
+  - **During a print** it also saves and restores the print: position (from
+    `gcode_move.gcode_position`, so bed offsets survive), nozzle target, part
+    fan, and the extrusion mode and `E` position the purge would otherwise
+    clobber. The head returns off the back edge first, travels in X at the
+    lifted height, and comes down in Z last. Idle, none of that happens and the
+    head stays at the chute, which is what somebody standing at the machine
+    wants.
+
+- **T0** / **T1** / **T2** / **T3**
+  - **Description**: What a sliced multi-material file actually contains. Each
+    selects the matching lane - the slicer counts extruders from 0, the IFS
+    counts lanes from 1, so `T0` is slot 1. Klipper runs these synchronously in
+    the gcode stream, which is the blocking behaviour a tool change needs.
+  - **Parameters**: none.
 
 - **IFS_LOAD**
   - **Description**: Load a lane into the nozzle, purging and wiping at the end.

@@ -333,6 +333,11 @@ class LoadedLaneTest(unittest.TestCase):
             "save_variables": {"variables": {"ifs_loaded": recorded,
                                             "ifs_at_hub": at_hub}},
             "print_stats": {"state": printing and "printing" or "standby"},
+            ## Always present on a real printer; a tool change has to know
+            ## where the print was to put it back.
+            "gcode_move": {"gcode_position": {"x": 100.0, "y": 90.0,
+                                              "z": 5.0}},
+            "fan_generic fanM106": {"speed": 0.6},
         }
 
     def render(self, macro, params, **kwargs):
@@ -1027,6 +1032,188 @@ class ClearExtruderTest(unittest.TestCase):
                          commands)
         self.assertFalse([c for c in commands if c.startswith("IFS_CLAMP")],
                          commands)
+
+
+class ToolChangeTest(unittest.TestCase):
+    """A swap during a print has to put the print back exactly as it was.
+
+    zmod does this in _A_CHANGE_FILAMENT / _RESTORE_POSITION_AFTER_FILAMENT_-
+    CHANGE, wrapped around the same load. Its elaborate edge-walk exists
+    because it lifts only 5 mm and must not clip the BACK WALL hardware; ours
+    lifts on the way out through _IFS_GOTO_STATION and enforces the same one
+    rule that actually matters - X never travels while the head is behind
+    safe_y.
+    """
+
+    PARAMS = {"tube_mm": 1000.0, "ifs_speed": 1200.0, "purge_extra_mm": 90.0,
+              "first_purge_mm": 100.0, "first_purge_speed": 300.0,
+              "first_fan": 0.0, "second_purge_mm": 30.0,
+              "second_purge_speed": 300.0, "second_fan": 255.0,
+              "hub_clear_mm": 300.0, "unload_ifs_mm": 70.0,
+              "unload_extruder_mm": 60.0, "unload_speed": 600.0,
+              "cut_before_mm": 0.0, "cut_after_mm": 5.0}
+
+    def printer(self, printing=True, recorded=4, target=205.0):
+        return {
+            "ifs": {"connected": True, "error": None,
+                    "loaded_channels": [1, 2, 4], "params": self.PARAMS},
+            "extruder": {"target": target},
+            "filament_switch_sensor toolhead": {"filament_detected": True},
+            "save_variables": {"variables": {"ifs_loaded": recorded,
+                                             "ifs_at_hub": recorded}},
+            "print_stats": {"state": "printing" if printing else "standby"},
+            "gcode_move": {"gcode_position": {"x": 100.0, "y": 90.0,
+                                              "z": 5.0}},
+            "fan_generic fanM106": {"speed": 0.6},
+            "gcode_macro _IFS_SENSOR_HOLD": {"was_enabled": 1},
+        }
+
+    def select(self, **kwargs):
+        return render_macro(HW, "IFS_SELECT", printer=self.printer(**kwargs),
+                            params={"SLOT": 1}).commands
+
+    def saved(self, commands):
+        out = {}
+        for c in commands:
+            if not c.startswith("SET_GCODE_VARIABLE"):
+                continue
+            bits = dict(w.split("=", 1) for w in c.split()[1:] if "=" in w)
+            out[bits["VARIABLE"]] = bits["VALUE"]
+        return out
+
+    def test_a_swap_mid_print_saves_where_the_print_was(self):
+        saved = self.saved(self.select())
+        self.assertEqual(saved.get("restore_x"), "100.0")
+        self.assertEqual(saved.get("restore_y"), "90.0")
+        self.assertEqual(saved.get("restore_z"), "5.0")
+
+    def test_it_saves_the_prints_temperature_not_the_materials(self):
+        ## The load is about to set the nozzle to the incoming material's
+        ## handling temperature. That is not the number the slicer chose, and
+        ## printing on at 220 what was sliced for 205 ruins the part.
+        self.assertEqual(self.saved(self.select()).get("restore_temp"), "205.0")
+
+    def test_it_saves_the_part_fan(self):
+        ## The purge drives it to full and then to zero.
+        self.assertEqual(self.saved(self.select()).get("restore_fan"), "0.6")
+
+    def test_it_saves_the_extrusion_state(self):
+        ## The purge runs M83 and G92 E0; without this the print's extrusion
+        ## accounting continues from the purge's zero.
+        commands = self.select()
+        self.assertIn("SAVE_GCODE_STATE NAME=ifs_tool_change", commands)
+
+    def test_the_save_happens_before_the_load(self):
+        commands = self.select()
+        self.assertLess(index_of(commands, r"SAVE_GCODE_STATE"),
+                        index_of(commands, r"IFS_LOAD"))
+
+    def test_it_restores_after_the_load(self):
+        commands = self.select()
+        self.assertLess(index_of(commands, r"IFS_LOAD"),
+                        index_of(commands, r"_IFS_RESTORE_AFTER_CHANGE"))
+
+    def test_an_idle_swap_saves_and_restores_nothing(self):
+        ## There is no print to put back, and parking at the chute afterwards
+        ## is what somebody standing at the machine wants.
+        commands = self.select(printing=False)
+        self.assertEqual(self.saved(commands), {})
+        self.assertNotIn("SAVE_GCODE_STATE NAME=ifs_tool_change", commands)
+        self.assertFalse([c for c in commands
+                          if c.startswith("_IFS_RESTORE_AFTER_CHANGE")],
+                         commands)
+
+    def test_selecting_the_loaded_lane_mid_print_moves_nothing(self):
+        ## A slicer emits T<n> at every change including redundant ones. Saving
+        ## a position and never restoring it would strand the sentinel.
+        commands = self.select(recorded=1)
+        self.assertEqual(self.saved(commands), {})
+        self.assertFalse([c for c in commands if c.startswith("IFS_LOAD")],
+                         commands)
+
+
+class RestoreAfterChangeTest(unittest.TestCase):
+    """The way back. Order is the whole content of this macro."""
+
+    def render(self, x=100.0, y=90.0, z=5.0, temp=205.0, fan=0.6):
+        return render_macro(HW, "_IFS_RESTORE_AFTER_CHANGE", printer={
+            "gcode_macro IFS_SELECT": {
+                "restore_x": x, "restore_y": y, "restore_z": z,
+                "restore_temp": temp, "restore_fan": fan},
+            "gcode_macro _IFS_GEOMETRY":
+                load_macro(HW, "_IFS_GEOMETRY").variables,
+        }).commands
+
+    def test_it_leaves_the_back_edge_before_moving_x(self):
+        """The one rule that matters: X never travels behind safe_y.
+
+        The wipe pad is at Y=229 and the wall hardware is back there. A single
+        G1 X from the pad drags the head across it.
+        """
+        commands = self.render()
+        self.assertLess(index_of(commands, r"_IFS_LEAVE_PURGE"),
+                        index_of(commands, r"G1 X100\.0"))
+
+    def test_z_comes_down_last(self):
+        ## Every XY travel happens at the height the outbound trip lifted to.
+        commands = self.render()
+        self.assertGreater(index_of(commands, r"G1 Z5\.0"),
+                           index_of(commands, r"G1 Y90\.0"))
+
+    def test_it_puts_the_prints_temperature_back_and_waits(self):
+        commands = self.render()
+        self.assertIn("M104 S205", commands)
+        self.assertLess(index_of(commands, r"M104 S205"),
+                        index_of(commands, r"TEMPERATURE_WAIT"))
+
+    def test_a_cold_saved_temperature_is_not_restored(self):
+        ## 0 means nothing was heating; M104 S0 would be right but the wait
+        ## would never finish.
+        commands = self.render(temp=0.0)
+        self.assertFalse([c for c in commands if c.startswith("TEMPERATURE_WAIT")],
+                         commands)
+
+    def test_it_puts_the_part_fan_back(self):
+        self.assertIn("SET_FAN_SPEED FAN=fanM106 SPEED=0.6", self.render())
+
+    def test_the_gcode_state_is_restored_without_a_second_trip(self):
+        ## MOVE=1 here would send the head on a diagonal to a position the
+        ## moves above already reached - across the bed, through the part.
+        commands = self.render()
+        restore = [c for c in commands if c.startswith("RESTORE_GCODE_STATE")]
+        self.assertEqual(len(restore), 1, commands)
+        self.assertIn("MOVE=0", restore[0])
+        self.assertIn("NAME=ifs_tool_change", restore[0])
+
+    def test_the_state_restore_comes_after_the_moves(self):
+        ## It carries the extrusion mode and E position the print needs for its
+        ## very next line, so nothing of ours may run after it.
+        commands = self.render()
+        self.assertGreater(index_of(commands, r"RESTORE_GCODE_STATE"),
+                           index_of(commands, r"G1 Z5\.0"))
+
+    def test_the_sentinel_is_cleared(self):
+        ## Otherwise a second restore replays a stale position.
+        commands = self.render()
+        cleared = [c for c in commands
+                   if c.startswith("SET_GCODE_VARIABLE") and "-1000" in c]
+        self.assertEqual(len(cleared), 3, commands)
+
+    def test_an_unsaved_position_is_refused_not_driven_to(self):
+        ## -1000 is not a coordinate. Moving there is a crash into the frame.
+        with self.assertRaises(MacroActionError):
+            self.render(x=-1000.0, y=-1000.0, z=-1000.0)
+
+
+class ToolMacroTest(unittest.TestCase):
+    """T0..T3 are how a sliced multi-material file asks for a change."""
+
+    def test_each_tool_maps_to_its_lane(self):
+        ## The slicer counts extruders from 0; the IFS counts lanes from 1.
+        for tool, slot in enumerate((1, 2, 3, 4)):
+            commands = render_macro(HW, "T%d" % tool, printer={}).commands
+            self.assertEqual(list(commands), ["IFS_SELECT SLOT=%d" % slot],
+                             "T%d" % tool)
 
 
 class SensorHealTest(unittest.TestCase):

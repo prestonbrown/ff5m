@@ -245,6 +245,21 @@ pass and then onto the wiper, which smears it rather than removing it.
   the purge already follows in the other direction: **the IFS and the extruder
   move one strand, so they move together or they fight.**
 
+- **A tool change is a gcode_macro, not a patched `virtual_sdcard`.** zmod
+  intercepts the `T<n>` line inside `work_handler`, fires
+  `_A_CHANGE_FILAMENT`, then spin-waits at 2 Hz on a boolean that
+  `END_CHANGE_FILAMENT` clears - and the print hangs forever if it never does.
+  Klipper already runs a `[gcode_macro T2]` synchronously in the gcode stream,
+  which is that behaviour without the patch, the polling, or the deadlock. It
+  also means no fork of a klipper internal to carry forward.
+- **The lift is the reason the restore is short.** zmod lifts 5 mm and then
+  walks the head around the bed edges, choosing rails by midpoint distance,
+  because at 5 mm it is still in among the part. `_IFS_GOTO_STATION` already
+  lifts 50 mm on the way out, so the way back is: leave the back edge, X, Y, Z
+  last. The one rule that survives is the one that was ever about the machine
+  rather than the part - **X never travels while the head is behind `safe_y`**,
+  because that is where the wall hardware is.
+
 ## Deliberate deviations
 
 Everything else should copy zmod. These do not, for stated reasons:
