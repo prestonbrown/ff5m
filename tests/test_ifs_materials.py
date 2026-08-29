@@ -250,6 +250,19 @@ class TestIfsMaterialsObject(ConfigFileTest):
         self.assertEqual(self.obj.material(1),
                          {"type": "PLA", "color": "#111111"})
 
+    def test_a_bare_hex_colour_is_normalised(self):
+        ## '#' cannot survive klipper's gcode parser - it starts a comment, so
+        ## COLOR=#FF8800 arrives as COLOR= (empty) and COLOR="#FF8800" is a
+        ## malformed command. The spellable form is bare hex; storage keeps
+        ## the '#' prefix that the rest of the world uses.
+        gcmd = fakes.FakeGcmd({"SLOT": 1, "COLOR": "101010"})
+        self.obj.cmd_IFS_SET_MATERIAL(gcmd)
+        self.assertEqual(self.obj.material(1),
+                         {"type": "PLA", "color": "#101010"})
+        gcmd = fakes.FakeGcmd({"SLOT": 1, "COLOR": "F80"})
+        self.obj.cmd_IFS_SET_MATERIAL(gcmd)
+        self.assertEqual(self.obj.material(1)["color"], "#F80")
+
     def test_a_bad_colour_is_refused(self):
         gcmd = fakes.FakeGcmd({"SLOT": 1, "COLOR": "green"})
         with self.assertRaises(fakes.FakeGcmd.error):

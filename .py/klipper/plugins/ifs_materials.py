@@ -22,8 +22,12 @@ import re
 from . import flashforge_config
 
 
-## #RGB or #RRGGBB, which is what the stock UI writes.
-COLOUR = re.compile(r"^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6})$")
+## #RGB or #RRGGBB, which is what the stock UI writes and what is stored. The
+## gcode surface must also take the same digits bare: klipper's parser treats
+## '#' as a comment start, so COLOR=#FF8800 arrives with the value empty and
+## COLOR="#FF8800" is rejected as a malformed command before it reaches us.
+## Stored form is always '#'-prefixed whatever the caller spelled.
+COLOUR = re.compile(r"^#?(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6})$")
 
 ## What each material wants the nozzle at to be pushed through it, from zmod's
 ## `temp_defaults`. This is the ONLY thing zmod varies by material: every other
@@ -203,7 +207,10 @@ class IfsMaterials(object):
         if material is None and colour is None:
             raise gcmd.error("IFS_SET_MATERIAL needs TYPE= or COLOR=")
         if colour not in (None, "") and not COLOUR.match(colour):
-            raise gcmd.error("COLOR must be #RGB or #RRGGBB, got %r" % colour)
+            raise gcmd.error("COLOR must be RGB or RRGGBB hex ('#' optional;"
+                             " the parser drops it), got %r" % colour)
+        if colour not in (None, "") and not colour.startswith("#"):
+            colour = "#" + colour
 
         current = self.material(slot) or {"type": None, "color": None}
         try:
