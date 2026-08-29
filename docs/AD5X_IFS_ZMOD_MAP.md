@@ -221,6 +221,11 @@ whether filament actually moved.
 | retract lane 4 | 150 mm / 7.5 s | **7.8 s, continuous** |
 | feed lane 2 | 150 mm / 7.5 s | 5.0 s |
 | lane 1 via `IFS_AUTOINSERT` | 600 mm / 30.0 s | 1.3 s |
+| lane 1 via `IFS_LOAD`, nozzle at 220 | 1000 mm / 50.0 s | 1.5 s |
+
+**Heat changes nothing.** The last row is a full `IFS_LOAD`: home, park, heat to
+220, clamp, feed. It stalled in the same place and after the same distance as
+the cold probes, which rules out a cold plug in the extruder.
 
 Every retract runs its full length. Every feed dies early, on every lane tried,
 and repeated feeds on one lane get *worse* - which is what grinding a flat on
@@ -251,6 +256,12 @@ common to the spool side rather than at three separate jams.
 
 This is a hypothesis with a one-minute physical test: pull filament off each
 spool by hand at the IFS input. It has not been run.
+
+**The board has been stalling for a long time.** `IFS_DIAGNOSTICS` reports a
+per-lane stall counter, and on a clean read it says `[9, 58, 0, 119]`. Lane 3,
+which has never held filament, is 0 - so the counter is real and per-lane. Lane
+2 reads 58 and we have fed it exactly once. Whatever this is, it predates the
+port and is not something our flow introduced.
 
 The one thing the numbers say without ambiguity is **stop feeding**. Each
 attempt on lane 1 moved less than the one before, which is what grinding a flat
