@@ -538,7 +538,7 @@ class IFS(object):
         return waiter.timed_out(self.latest_status(),
                                 self.reactor.monotonic() - started)
 
-    def _finish(self, gcmd, outcome, what):
+    def _finish(self, gcmd, outcome, what, channel=None):
         """Report an outcome, and stop the board if it was a bad one."""
         if not outcome.is_problem:
             gcmd.respond_info("%s: %s%s"
@@ -554,17 +554,27 @@ class IFS(object):
                             outcome.kind, exc)
         if outcome.kind == ifs_sequences.TIMED_OUT:
             ## zmod's timeout path is F112 then F18. A timeout means we no
-            ## longer know what the board is doing, and a channel left clamped
-            ## holds the filament until someone notices - two of them sat
-            ## gripped for hours after one failed run.
-            try:
-                self.execute("F18")
-            except Exception as exc:
-                logging.warning("IFS: could not release after %s: %s",
-                                outcome.kind, exc)
+            ## longer know which channel the board thinks it is on, so let go
+            ## of all of them.
+            self._let_go("F18", outcome)
+        elif channel is not None:
+            ## A move that failed knows its channel, so it lets go of just that
+            ## one. A klipper macro has no finally, so the release written after
+            ## the feed never runs once the feed raises - which is how two lanes
+            ## sat gripped for hours after one failed run. zmod's AUTOINSERT
+            ## ends with F39 whether or not the feed worked, for this reason.
+            self._let_go("F39 C%d" % channel, outcome)
         raise gcmd.error("%s failed: %s%s"
                          % (what, outcome.kind,
                             " (%s)" % outcome.detail if outcome.detail else ""))
+
+    def _let_go(self, opcode, outcome):
+        """Best-effort unclamp on a failure. Never masks the original error."""
+        try:
+            self.execute(opcode)
+        except Exception as exc:
+            logging.warning("IFS: could not release after %s: %s",
+                            outcome.kind, exc)
 
     def _channel(self, gcmd):
         return gcmd.get_int("CHANNEL", minval=1, maxval=self.channel_count)
@@ -712,7 +722,7 @@ class IFS(object):
                                      self.retry_count))
                 self._run(gcmd, label, send)
         return self._finish(gcmd, outcome,
-                            "%s channel %d" % (what, channel))
+                            "%s channel %d" % (what, channel), channel=channel)
 
     def cmd_IFS_FEED(self, gcmd):
         self._move(gcmd, "F10", ifs_status.LOADING, UNTIL_TOOLHEAD, "feed")

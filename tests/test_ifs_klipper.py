@@ -618,21 +618,43 @@ class TestCommandQueue(unittest.TestCase):
         with self.assertRaises(gcmd.error):
             self.obj.cmd_IFS_FEED(gcmd)
         self.assertIn("F112", self.link.asked)
+        ## A timeout does not know which channel the board thinks it is on.
         self.assertIn("F18", self.link.asked)
+        self.assertNotIn("F39 C1", self.link.asked)
 
-    def test_a_stall_stops_the_board_but_leaves_the_clamp_alone(self):
-        ## zmod releases everything only on a timeout. A stall is a known state
-        ## with a known channel, and the operator is about to clear it - taking
-        ## the clamp off would drop the filament back down the tube.
+    def test_a_failed_move_lets_go_of_its_own_channel(self):
+        """A klipper macro has no finally.
+
+        IFS_AUTOINSERT clamps, feeds, and releases - but once the feed raises,
+        the release written after it never runs, and the lane stays gripped
+        until a human notices. Two of them sat clamped for hours after one
+        failed run. zmod's AUTOINSERT ends with F39 whether or not the feed
+        worked, for exactly this reason.
+
+        A stall knows its channel, so it lets go of that one and leaves the
+        others alone.
+        """
         self.link.replies = (["FFS channel 1 feeding."]
                              + [f13(state=STATUS.LOADING, chan=1, stall=0)] * 8
-                             + [""])
+                             + ["", ""])
         gcmd = fakes.FakeGcmd({"CHANNEL": 1, "UNTIL": "done", "CHECK": 1,
                                "LENGTH": 600, "SPEED": 1200, "TIMEOUT": 1.0})
         with self.assertRaises(gcmd.error):
             self.obj.cmd_IFS_FEED(gcmd)
         self.assertIn("F112", self.link.asked)
+        self.assertIn("F39 C1", self.link.asked)
         self.assertNotIn("F18", self.link.asked)
+
+    def test_a_move_that_worked_keeps_its_clamp(self):
+        ## The load holds the lane through the purge that follows, so a
+        ## successful feed must not let go.
+        self.link.replies = (["FFS channel 1 feeding."]
+                             + [f13(state=STATUS.READY)] * 2)
+        gcmd = fakes.FakeGcmd({"CHANNEL": 1, "UNTIL": "done",
+                               "LENGTH": 600, "SPEED": 1200})
+        self.obj.cmd_IFS_FEED(gcmd)
+        self.assertNotIn("F39 C1", self.link.asked)
+        self.assertNotIn("F112", self.link.asked)
 
     def test_diagnostics_goes_through_the_queue(self):
         """Fourteen queries must not race the poll thread for the link.
