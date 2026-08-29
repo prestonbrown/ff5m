@@ -60,6 +60,11 @@ DEFAULT_MOVE_TIMEOUT = 120.0
 ## How long to let the board finish acting on a command it already accepted.
 ## Clamping is mechanical and quick; this only has to outlast that.
 SETTLE_TIMEOUT = 15.0
+## What zmod polls F13 at inside wait_for_state (its HOST_REPORT_TIME). The
+## background cadence is fine for status but far too coarse to judge motion:
+## the board's motion bit toggles, so three 1s samples can all land in gaps
+## while the motor is running and read as a stall that never happened.
+MOVE_POLL_INTERVAL = 0.2
 
 ## What a move waits for, as the UNTIL= parameter spells it.
 UNTIL_TOOLHEAD = "toolhead"
@@ -127,6 +132,9 @@ class IFS(object):
         self._wake = threading.Event()
         self._queue = []
         self._queue_lock = threading.Lock()
+        ## How many callers are watching a move right now. Non-zero means the
+        ## poll thread runs at zmod's cadence instead of the idle one.
+        self._watchers = 0
         self._thread = None
         self._link = None
         self._ops = None
@@ -202,8 +210,19 @@ class IFS(object):
                 if self._failures >= MAX_POLL_FAILURES:
                     self._drop_link("%d consecutive poll failures"
                                     % self._failures)
-            self._wake.wait(self.poll_interval)
+            self._wake.wait(self._poll_delay())
             self._wake.clear()
+
+    def _poll_delay(self):
+        with self._lock:
+            return MOVE_POLL_INTERVAL if self._watchers else self.poll_interval
+
+    def _watch_moves(self, delta):
+        with self._lock:
+            self._watchers += delta
+        if delta > 0:
+            ## Do not make the watcher wait out the idle interval first.
+            self._wake.set()
 
     def _connect(self):
         try:
@@ -430,6 +449,14 @@ class IFS(object):
         started = self.reactor.monotonic()
         deadline = started + timeout
         before = self.latest_status()
+        self._watch_moves(1)
+        try:
+            return self._await_loop(gcmd, waiter, deadline, started, before,
+                                    until)
+        finally:
+            self._watch_moves(-1)
+
+    def _await_loop(self, gcmd, waiter, deadline, started, before, until):
         while self.reactor.monotonic() < deadline:
             self.reactor.pause(self.reactor.monotonic() + COMMAND_POLL_PAUSE)
             elapsed = self.reactor.monotonic() - started

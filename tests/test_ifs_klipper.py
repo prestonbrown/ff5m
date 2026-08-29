@@ -350,6 +350,30 @@ class TestCommandQueue(unittest.TestCase):
             pass  # the state wait may still time out; the send is what matters
         self.assertIn("F10 C1 L600 S1200", self.link.asked)
 
+    def test_the_poller_speeds_up_while_a_move_is_watched(self):
+        """zmod polls F13 every 0.2s inside wait_for_state; idle cadence is 1s.
+
+        The motion bit toggles, so three 1s samples can all land in gaps while
+        the motor is running and read as a stall that never happened. A feed
+        that was moving was failed as "stalled" on exactly that.
+        """
+        self.assertEqual(self.obj._poll_delay(), self.obj.poll_interval)
+        self.obj._watch_moves(1)
+        try:
+            self.assertEqual(self.obj._poll_delay(), IFS.MOVE_POLL_INTERVAL)
+            self.assertLess(IFS.MOVE_POLL_INTERVAL, self.obj.poll_interval)
+        finally:
+            self.obj._watch_moves(-1)
+        self.assertEqual(self.obj._poll_delay(), self.obj.poll_interval)
+
+    def test_the_watch_count_is_released_even_when_the_move_fails(self):
+        ## A leaked watcher would pin the board at the fast cadence forever.
+        self.link.replies = ["FFS not ready."]
+        gcmd = fakes.FakeGcmd({"CHANNEL": 1, "UNTIL": "done"})
+        with self.assertRaises(gcmd.error):
+            self.obj.cmd_IFS_FEED(gcmd)
+        self.assertEqual(self.obj._poll_delay(), self.obj.poll_interval)
+
     def test_shutdown_releases_a_waiting_caller(self):
         ## A caller blocked on a command when klippy goes down must not hang.
         request = IFS._Request("F13")
