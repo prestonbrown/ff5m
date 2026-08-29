@@ -182,6 +182,35 @@ class TestIfsMaterialsObject(ConfigFileTest):
         ConfigFileTest.setUp(self)
         self.obj, self.printer = make_materials(self.path)
 
+    def test_the_live_record_wins_over_the_stale_one(self):
+        """FlashForge's FFMInfo.channel is not maintained under Forge-X.
+
+        Nothing writes it once the stock UI is gone, so it is whatever it was
+        the last time stock ran - correct until the first tool change, then
+        quietly wrong. save_variables is the live record.
+        """
+        class FakeSaveVariables:
+            allVariables = {"ifs_loaded": 2}
+
+        self.printer.add_object("save_variables", FakeSaveVariables())
+        ## The file says lane 4 (white); we know it is lane 2 (grey ABS).
+        self.assertEqual(self.obj.get_status()["loaded"],
+                         {"type": "ABS", "color": "#898989"})
+
+    def test_with_no_record_it_falls_back_to_the_file(self):
+        ## An IFS that has never been driven, or a machine with no
+        ## save_variables at all, still gets FlashForge's answer.
+        self.assertEqual(self.obj.get_status()["loaded"],
+                         {"type": "PLA", "color": "#FFFFFF"})
+
+    def test_a_record_of_nothing_loaded_is_not_mistaken_for_a_lane(self):
+        class FakeSaveVariables:
+            allVariables = {"ifs_loaded": 0}
+
+        self.printer.add_object("save_variables", FakeSaveVariables())
+        self.assertEqual(self.obj.get_status()["loaded"],
+                         {"type": "PLA", "color": "#FFFFFF"})
+
     def test_status_shape(self):
         info = self.obj.get_status()
         self.assertTrue(info["available"])

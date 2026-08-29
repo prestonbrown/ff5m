@@ -73,21 +73,42 @@ class IfsMaterials(object):
     def material(self, slot):
         return self.slots().get(slot)
 
+    def _recorded_lane(self):
+        """The lane WE know is loaded, if anything is keeping that record.
+
+        FlashForge's own `FFMInfo.channel` is a fine answer on a stock machine,
+        where the stock UI maintains it. Under Forge-X nothing writes it, so it
+        is whatever it was the last time stock ran - it agrees with reality until
+        the first tool change and then quietly does not. save_variables is the
+        live record, so prefer it and fall back to the file.
+        """
+        variables = self.printer.lookup_object("save_variables", None)
+        if variables is None:
+            return None
+        slot = getattr(variables, "allVariables", {}).get("ifs_loaded")
+        try:
+            slot = int(slot)
+        except (TypeError, ValueError):
+            return None
+        return slot if slot >= 1 else None
+
     def get_status(self, eventtime=None):
         document = self._document()
         if document is None:
             return {"available": False, "channel_count": None,
                     "enabled": False, "slots": {}, "loaded": None}
+        slots = self.config_file.materials(document)
+        recorded = self._recorded_lane()
+        loaded = (slots.get(recorded) if recorded is not None
+                  else self.config_file.loaded_material(document))
         return {
             "available": True,
             "channel_count": self.config_file.channel_count(document),
             "enabled": self.config_file.is_enabled(document),
             ## Moonraker serialises dict keys as strings; be explicit about it
             ## rather than leaving consumers to discover it.
-            "slots": {str(slot): value
-                      for slot, value in
-                      self.config_file.materials(document).items()},
-            "loaded": self.config_file.loaded_material(document),
+            "slots": {str(slot): value for slot, value in slots.items()},
+            "loaded": loaded,
         }
 
     ## -- gcode --------------------------------------------------------------
