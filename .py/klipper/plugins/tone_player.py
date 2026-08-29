@@ -91,6 +91,18 @@ class PWMAudio:
             self.duty_cycle = dc
 
 
+## Where the buzzer lives. Not every board has one: the AD5X has no
+## /sys/class/pwm at all, because its buzzer belongs to the stock firmwareExe
+## process rather than to Linux.
+PWM_CHIP = 0
+PWM_DEVICE = 6
+
+
+def buzzer_available(chip=PWM_CHIP):
+    """Whether this board exposes a PWM buzzer to userspace at all."""
+    return Path("/sys/class/pwm/pwmchip%d" % chip).is_dir()
+
+
 class TonePlayer:
     def __init__(self, config):
         self.config = config
@@ -99,32 +111,59 @@ class TonePlayer:
         self.gcode = self.printer.lookup_object("gcode")
 
         self.verbose = config.getboolean("verbose", False)
+        ## Probed once, not per note. A board with no buzzer answers TONE
+        ## silently rather than failing every caller that wants to chirp.
+        self.available = buzzer_available()
+        if not self.available:
+            logging.info("TONE: no PWM buzzer on this board; tones are silent")
 
         self.gcode.register_command("TONE", self.cmd_TONE)
 
     def cmd_TONE(self, gcmd):
+        """Play a tune, and NEVER take the printer down over a buzzer.
+
+        Klipper turns any non-gcode exception into "Internal error on command",
+        which shuts klippy down and takes the MCUs with it. That is a wildly
+        disproportionate outcome for a beep, and it happened: the AD5X has no
+        /sys/class/pwm, so PWMAudio raised FileNotFoundError and a completed
+        filament change ended in a shutdown and a FIRMWARE_RESTART.
+        """
         notes = self._parse_notes(gcmd)
+
+        if not self.available:
+            return
 
         if self.verbose:
             duration = sum(d / 1000 for (_, d) in notes)
             notes_cnt = len([freq for (freq, _) in notes if freq > 0])
             gcmd.respond_raw(f"Playing tune: duration: {duration:.2f}s, notes: {notes_cnt}")
 
-        pwm = PWMAudio(0, 6)
-        for tone, duration in notes:
-            if tone > 0:
-                pwm.set(tone)
-                pwm.enable()
-            else:
-                pwm.disable()
-
-            now = self.reactor.monotonic()
-            self.reactor.pause(now + duration / 1000)
-
-        pwm.disable()
+        try:
+            self._play(notes)
+        except Exception as exc:
+            ## Stop trying: a buzzer that failed once fails every time, and a
+            ## warning per note during a print is its own kind of broken.
+            self.available = False
+            logging.warning("TONE: silencing the buzzer after %s", exc)
+            return
 
         if self.verbose:
             gcmd.respond_raw("Done")
+
+    def _play(self, notes):
+        pwm = PWMAudio(PWM_CHIP, PWM_DEVICE)
+        try:
+            for tone, duration in notes:
+                if tone > 0:
+                    pwm.set(tone)
+                    pwm.enable()
+                else:
+                    pwm.disable()
+
+                now = self.reactor.monotonic()
+                self.reactor.pause(now + duration / 1000)
+        finally:
+            pwm.disable()
 
     def _parse_notes(self, gcmd):
         notes_str = gcmd.get("NOTES")
