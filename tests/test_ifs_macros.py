@@ -19,9 +19,9 @@ from tests.gcode_macro_harness import (MacroActionError, load_macro,
 
 
 ROOT = pathlib.Path(__file__).parents[1]
-HW = ROOT / "macros" / "hw_base.ad5x.cfg"
+IFS = ROOT / "macros" / "ifs.cfg"
 
-GEOMETRY = load_macro(HW, "_IFS_GEOMETRY").variables
+GEOMETRY = load_macro(IFS, "_IFS_GEOMETRY").variables
 
 ## A combined XY move in one G1. Whitespace-tolerant, word-boundary anchored so
 ## `G1 X52.5 F12000` does not match.
@@ -38,7 +38,7 @@ def at(x, y, z=220.0, homed="xyz"):
 
 def station(target, **start):
     """Render _IFS_GOTO_STATION heading for `target` from a given start pose."""
-    return render_macro(HW, "_IFS_GOTO_STATION",
+    return render_macro(IFS, "_IFS_GOTO_STATION",
                         printer=at(**start), params={"X": target}).commands
 
 
@@ -123,7 +123,7 @@ class AutoinsertTest(unittest.TestCase):
         }
 
     def render(self, channel=2, **kwargs):
-        return render_macro(HW, "IFS_AUTOINSERT",
+        return render_macro(IFS, "IFS_AUTOINSERT",
                             printer=self.printer(**kwargs),
                             params={"CHANNEL": channel}).commands
 
@@ -270,7 +270,7 @@ class LoadTest(unittest.TestCase):
         }
 
     def render(self, **kwargs):
-        return render_macro(HW, "IFS_LOAD", printer=self.printer(**kwargs),
+        return render_macro(IFS, "IFS_LOAD", printer=self.printer(**kwargs),
                             params={"SLOT": 1, "TEMP": 220}).commands
 
     def test_it_feeds_the_tube_length_at_ifs_speed(self):
@@ -353,7 +353,7 @@ class LoadedLaneTest(unittest.TestCase):
         }
 
     def render(self, macro, params, **kwargs):
-        return render_macro(HW, macro, printer=self.printer(**kwargs),
+        return render_macro(IFS, macro, printer=self.printer(**kwargs),
                             params=params).commands
 
     def saved(self, commands):
@@ -457,7 +457,7 @@ class LoadedLaneTest(unittest.TestCase):
         ## never arrived, so there the stall IS the answer. SOFT belongs only
         ## where a co-push follows.
         commands = render_macro(
-            HW, "IFS_AUTOINSERT", printer=self.printer(at_hub=0),
+            IFS, "IFS_AUTOINSERT", printer=self.printer(at_hub=0),
             params={"CHANNEL": 2}).commands
         feed = [c for c in commands if c.startswith("IFS_FEED")]
         self.assertEqual(len(feed), 1, commands)
@@ -677,7 +677,7 @@ class ShakeTest(unittest.TestCase):
     """
 
     def render(self):
-        return render_macro(HW, "_IFS_SHAKE", printer=at(52.5, 229.0)).commands
+        return render_macro(IFS, "_IFS_SHAKE", printer=at(52.5, 229.0)).commands
 
     def test_it_never_combines_x_and_y(self):
         ## Same back-wall rule as every other move behind safe_y.
@@ -705,7 +705,7 @@ class ShakeTest(unittest.TestCase):
 class WipeTest(unittest.TestCase):
     def setUp(self):
         self.commands = render_macro(
-            HW, "_IFS_WIPE", printer=at(52.5, 229.0)).commands
+            IFS, "_IFS_WIPE", printer=at(52.5, 229.0)).commands
 
     def test_sweeps_across_the_pad_in_x(self):
         ## The pad is a strip at station_y; a wipe that only pokes in Y at the
@@ -745,7 +745,7 @@ class PurgeTest(unittest.TestCase):
         printer = {"ifs": {"params": self.PARAMS},
                    "gcode_macro _IFS_SENSOR_HOLD": {"was_enabled": 1}}
         params = {"SLOT": slot} if slot is not None else {}
-        return render_macro(HW, "_IFS_PURGE", printer=printer,
+        return render_macro(IFS, "_IFS_PURGE", printer=printer,
                             params=params).commands
 
     def test_every_pass_is_shaken_off_and_wiped(self):
@@ -779,7 +779,8 @@ class PurgeTest(unittest.TestCase):
             block = commands[max(0, shake - 5):shake]
             self.assertIn("G4 P4000", block, (shake, commands))
             fan = [i for i, c in enumerate(block)
-                   if c.startswith("M106 S") and c != "M106 S0"]
+                   if c.startswith("_IFS_PART_FAN S")
+                   and c != "_IFS_PART_FAN S0"]
             wait = [i for i, c in enumerate(block) if c == "G4 P4000"]
             self.assertTrue(fan and wait and fan[-1] < wait[-1],
                             (shake, commands))
@@ -874,7 +875,7 @@ class StandalonePurgeTest(unittest.TestCase):
         ## case the cold-nozzle test needs - no TEMP at all.
         if params is None:
             params = {"TEMP": 220}
-        return render_macro(HW, "IFS_PURGE", printer=self.printer(**kwargs),
+        return render_macro(IFS, "IFS_PURGE", printer=self.printer(**kwargs),
                             params=params).commands
 
     def test_it_parks_over_the_chute_before_extruding(self):
@@ -912,9 +913,9 @@ class CutTest(unittest.TestCase):
               "unload_extruder_mm": 60.0}
 
     def render(self):
-        return render_macro(HW, "_IFS_CUT", printer={
+        return render_macro(IFS, "_IFS_CUT", printer={
             "ifs": {"params": self.PARAMS},
-            "gcode_macro _IFS_CUT": load_macro(HW, "_IFS_CUT").variables,
+            "gcode_macro _IFS_CUT": load_macro(IFS, "_IFS_CUT").variables,
             "gcode_macro _IFS_SENSOR_HOLD": {"was_enabled": 1},
         }).commands
 
@@ -940,7 +941,7 @@ class CutTest(unittest.TestCase):
     def test_the_cut_coordinates_are_inside_the_machine(self):
         ## Negative on purpose, but axis_minimum is (-20, -20): outside that and
         ## klipper refuses the move.
-        g = load_macro(HW, "_IFS_CUT").variables
+        g = load_macro(IFS, "_IFS_CUT").variables
         self.assertGreater(g["cut_x"], -20.0)
         self.assertGreater(g["cut_y"], -20.0)
         self.assertLess(g["cut_x"], 0.0)
@@ -1022,7 +1023,7 @@ class MaterialTest(unittest.TestCase):
 
     def render(self, slots, params=None, **kwargs):
         return render_macro(
-            HW, "IFS_LOAD", printer=self.printer(slots, **kwargs),
+            IFS, "IFS_LOAD", printer=self.printer(slots, **kwargs),
             params=params if params is not None else {"SLOT": 1}).commands
 
     PLA = {"type": "PLA", "color": "#FFFFFF", "temp": 220.0}
@@ -1078,7 +1079,7 @@ class MaterialTest(unittest.TestCase):
     def test_the_bonus_lands_on_both_passes(self):
         ## zmod passes filament_drop_length_add to both of its purge calls.
         commands = render_macro(
-            HW, "_IFS_PURGE",
+            IFS, "_IFS_PURGE",
             printer={"ifs": {"params": self.PARAMS},
                      "gcode_macro _IFS_SENSOR_HOLD": {"was_enabled": 1}},
             params={"SLOT": 1, "EXTRA": 90.0}).commands
@@ -1090,7 +1091,7 @@ class MaterialTest(unittest.TestCase):
         ## The IFS cannot push past a gripping gear - it has to drive the same
         ## distance as the extruder or it stalls against it.
         commands = render_macro(
-            HW, "_IFS_PURGE",
+            IFS, "_IFS_PURGE",
             printer={"ifs": {"params": self.PARAMS},
                      "gcode_macro _IFS_SENSOR_HOLD": {"was_enabled": 1}},
             params={"SLOT": 1, "EXTRA": 90.0}).commands
@@ -1103,9 +1104,37 @@ class MaterialTest(unittest.TestCase):
         ## takes the whole load down with it.
         printer = self.printer({"1": self.PLA}, target=220.0)
         del printer["ifs_materials"]
-        commands = render_macro(HW, "IFS_LOAD", printer=printer,
+        commands = render_macro(IFS, "IFS_LOAD", printer=printer,
                                 params={"SLOT": 1}).commands
         self.assertIn("M104 S220", commands)
+
+
+class PartFanTest(unittest.TestCase):
+    """The part fan, whichever object the host declared it as.
+
+    FlashForge-style hosts name it a fan_generic and redefine M106 over it;
+    a plain klipper declares [fan] and M106 already means it. The purge and
+    the change both go through this one macro so neither has to care.
+    """
+
+    def render(self, named=True, **params):
+        printer = {"gcode_macro _IFS_GEOMETRY": GEOMETRY}
+        if named:
+            printer["fan_generic fanM106"] = {"speed": 0.0}
+        return render_macro(IFS, "_IFS_PART_FAN", printer=printer,
+                            params=params).commands
+
+    def test_a_named_fan_is_driven_directly(self):
+        self.assertEqual(self.render(S=255), ("SET_FAN_SPEED FAN=fanM106"
+                                              " SPEED=1.0",))
+
+    def test_a_host_without_one_falls_back_to_m106(self):
+        self.assertEqual(self.render(named=False, S=255), ("M106 S255",))
+
+    def test_no_speed_argument_means_off(self):
+        self.assertEqual(self.render(), ("SET_FAN_SPEED FAN=fanM106"
+                                         " SPEED=0.0",))
+        self.assertEqual(self.render(named=False), ("M106 S0",))
 
 
 class ClearExtruderTest(unittest.TestCase):
@@ -1116,7 +1145,7 @@ class ClearExtruderTest(unittest.TestCase):
         params = {"TEMP": 220}
         if slot is not None:
             params["SLOT"] = slot
-        return render_macro(HW, "_IFS_CLEAR_EXTRUDER", printer={
+        return render_macro(IFS, "_IFS_CLEAR_EXTRUDER", printer={
             "ifs": {"params": self.PARAMS},
             "extruder": {"target": 220.0, "temperature": temperature},
             "filament_switch_sensor toolhead": {"filament_detected": detected},
@@ -1216,8 +1245,10 @@ class EndPrintParkTest(unittest.TestCase):
     """
 
     def test_the_park_is_retargeted_to_the_chute(self):
-        commands = render_macro(HW, "_IFS_RETARGET_END_PARK", printer={
+        commands = render_macro(IFS, "_IFS_RETARGET_END_PARK", printer={
             "gcode_macro _IFS_GEOMETRY": GEOMETRY,
+            "gcode_macro _CLIENT_VARIABLE": {"custom_park_x": 105.0,
+                                             "custom_park_y": 105.0},
         }).commands
         self.assertIn(
             "SET_GCODE_VARIABLE MACRO=_CLIENT_VARIABLE VARIABLE=custom_park_x"
@@ -1225,6 +1256,14 @@ class EndPrintParkTest(unittest.TestCase):
         self.assertIn(
             "SET_GCODE_VARIABLE MACRO=_CLIENT_VARIABLE VARIABLE=custom_park_y"
             " VALUE=%s" % GEOMETRY["station_y"], commands)
+
+    def test_a_host_without_client_variables_keeps_its_own_park(self):
+        ## The module must not assume the host parks through _CLIENT_VARIABLE;
+        ## writing to a macro that does not exist would be a config error.
+        commands = render_macro(IFS, "_IFS_RETARGET_END_PARK", printer={
+            "gcode_macro _IFS_GEOMETRY": GEOMETRY,
+        }).commands
+        self.assertEqual(commands, ())
 
 
 class ChangeLiftTest(unittest.TestCase):
@@ -1246,7 +1285,7 @@ class ChangeLiftTest(unittest.TestCase):
               "cut_before_mm": 0.0, "cut_after_mm": 5.0}
 
     def select(self, slot=1, current=4, homed="xyz"):
-        return render_macro(HW, "IFS_SELECT", printer={
+        return render_macro(IFS, "IFS_SELECT", printer={
             "ifs": {"connected": True, "error": None,
                     "loaded_channels": [1, 2, 4], "params": self.PARAMS},
             "extruder": {"target": 205.0},
@@ -1259,8 +1298,28 @@ class ChangeLiftTest(unittest.TestCase):
             "fan_generic fanM106": {"speed": 0.6},
             "gcode_macro _IFS_SENSOR_HOLD": {"was_enabled": 1},
             "gcode_macro _IFS_GEOMETRY": GEOMETRY,
+            "gcode_macro MOVE_SAFE": {"x_min": -110.0},
             "toolhead": {"homed_axes": homed},
         }, params={"SLOT": slot}).commands
+
+    def select_without_move_safe(self, **kwargs):
+        ## A host that has no MOVE_SAFE macro (anything but this fork's
+        ## base.cfg) still gets the same relative lift, via core commands.
+        printer = {
+            "ifs": {"connected": True, "error": None,
+                    "loaded_channels": [1, 2, 4], "params": self.PARAMS},
+            "extruder": {"target": 205.0},
+            "filament_switch_sensor toolhead": {"filament_detected": True},
+            "save_variables": {"variables": {"ifs_loaded": 4, "ifs_at_hub": 4}},
+            "print_stats": {"state": "printing"},
+            "gcode_move": {"gcode_position": {"x": 100.0, "y": 90.0,
+                                              "z": 5.0}},
+            "gcode_macro _IFS_SENSOR_HOLD": {"was_enabled": 1},
+            "gcode_macro _IFS_GEOMETRY": GEOMETRY,
+            "toolhead": {"homed_axes": "xyz"},
+        }
+        return render_macro(IFS, "IFS_SELECT", printer=printer,
+                            params={"SLOT": 1}).commands
 
     def lifts(self, commands):
         return [c for c in commands if c.startswith("MOVE_SAFE")]
@@ -1295,6 +1354,27 @@ class ChangeLiftTest(unittest.TestCase):
         ## _IFS_GOTO_STATION homes when needed; the lift is simply skipped.
         commands = self.select(homed="xy")
         self.assertEqual(self.lifts(commands), [])
+
+    def test_without_move_safe_the_lift_is_a_relative_g1(self):
+        """MOVE_SAFE is this fork's macro; a host without it still gets lifted.
+
+        The fallback is a save/G91/restore sandwich rather than a bare G91:
+        the print's absolute/relative mode is the slicer's business, and a
+        macro that left G91 in force would corrupt every move after it.
+        """
+        commands = self.select_without_move_safe()
+        self.assertEqual(self.lifts(commands), [])
+        self.assertIn("SAVE_GCODE_STATE NAME=ifs_lift", commands)
+        self.assertIn("G91", commands)
+        self.assertIn("G1 Z%s F1500" % GEOMETRY["lift_dz"], commands)
+        self.assertIn("RESTORE_GCODE_STATE NAME=ifs_lift MOVE=0", commands)
+        lift = commands.index("SAVE_GCODE_STATE NAME=ifs_lift")
+        restore = commands.index("RESTORE_GCODE_STATE NAME=ifs_lift MOVE=0")
+        self.assertLess(lift, commands.index("G91"), commands)
+        self.assertLess(commands.index("G91"),
+                        commands.index("G1 Z%s F1500" % GEOMETRY["lift_dz"]))
+        self.assertLess(commands.index("G1 Z%s F1500" % GEOMETRY["lift_dz"]),
+                        restore)
 
 
 class ToolChangeTest(unittest.TestCase):
@@ -1334,7 +1414,7 @@ class ToolChangeTest(unittest.TestCase):
         }
 
     def select(self, **kwargs):
-        return render_macro(HW, "IFS_SELECT", printer=self.printer(**kwargs),
+        return render_macro(IFS, "IFS_SELECT", printer=self.printer(**kwargs),
                             params={"SLOT": 1}).commands
 
     def saved(self, commands):
@@ -1401,12 +1481,12 @@ class RestoreAfterChangeTest(unittest.TestCase):
     """The way back. Order is the whole content of this macro."""
 
     def render(self, x=100.0, y=90.0, z=5.0, temp=205.0, fan=0.6):
-        return render_macro(HW, "_IFS_RESTORE_AFTER_CHANGE", printer={
+        return render_macro(IFS, "_IFS_RESTORE_AFTER_CHANGE", printer={
             "gcode_macro IFS_SELECT": {
                 "restore_x": x, "restore_y": y, "restore_z": z,
                 "restore_temp": temp, "restore_fan": fan},
             "gcode_macro _IFS_GEOMETRY":
-                load_macro(HW, "_IFS_GEOMETRY").variables,
+                load_macro(IFS, "_IFS_GEOMETRY").variables,
         }).commands
 
     def test_it_leaves_the_back_edge_before_moving_x(self):
@@ -1439,7 +1519,7 @@ class RestoreAfterChangeTest(unittest.TestCase):
                          commands)
 
     def test_it_puts_the_part_fan_back(self):
-        self.assertIn("SET_FAN_SPEED FAN=fanM106 SPEED=0.6", self.render())
+        self.assertIn("_IFS_PART_FAN S=153", self.render())
 
     def test_the_gcode_state_is_restored_without_a_second_trip(self):
         ## MOVE=1 here would send the head on a diagonal to a position the
@@ -1476,7 +1556,7 @@ class ToolMacroTest(unittest.TestCase):
     def test_each_tool_maps_to_its_lane(self):
         ## The slicer counts extruders from 0; the IFS counts lanes from 1.
         for tool, slot in enumerate((1, 2, 3, 4)):
-            commands = render_macro(HW, "T%d" % tool, printer={}).commands
+            commands = render_macro(IFS, "T%d" % tool, printer={}).commands
             self.assertEqual(list(commands), ["IFS_SELECT SLOT=%d" % slot],
                              "T%d" % tool)
 
@@ -1525,7 +1605,7 @@ class SensorHealTest(unittest.TestCase):
 
     def test_every_public_entry_point_heals_first(self):
         for macro, params in sorted(self.ENTRY_POINTS.items()):
-            commands = render_macro(HW, macro, printer=self.printer(),
+            commands = render_macro(IFS, macro, printer=self.printer(),
                                     params=params).commands
             self.assertIn("_IFS_SENSOR_RESUME", commands,
                           "%s never heals a leaked mute" % macro)
@@ -1543,7 +1623,7 @@ class SensorHealTest(unittest.TestCase):
         ## operator had deliberately switched off. _IFS_SENSOR_RESUME only
         ## restores what a hold actually took.
         for macro, params in sorted(self.ENTRY_POINTS.items()):
-            commands = render_macro(HW, macro, printer=self.printer(),
+            commands = render_macro(IFS, macro, printer=self.printer(),
                                     params=params).commands
             self.assertFalse(
                 [c for c in commands if c.startswith("SET_FILAMENT_SENSOR")],
@@ -1552,7 +1632,7 @@ class SensorHealTest(unittest.TestCase):
 
 class LeavePurgeTest(unittest.TestCase):
     def test_comes_forward_to_safe_y_only(self):
-        commands = render_macro(HW, "_IFS_LEAVE_PURGE",
+        commands = render_macro(IFS, "_IFS_LEAVE_PURGE",
                                 printer=at(52.5, 229.0)).commands
         target = index_of(commands, r"G1 Y%s\b" % GEOMETRY["safe_y"])
         self.assertIsNone(COMBINED_XY.match(commands[target]), commands)
