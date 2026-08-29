@@ -97,6 +97,59 @@ class GotoStationTest(unittest.TestCase):
         self.assertIn("F3000", approach)
 
 
+class LoadTest(unittest.TestCase):
+    """IFS_LOAD renders, and renders the numbers it means to.
+
+    check_macros.py parses templates but never renders them, so it cannot see a
+    name that does not exist. IFS_LOAD referenced `p.load_empty_mm` without
+    defining `p`, klipper raised UndefinedError, and the load failed before it
+    even heated. The harness renders leniently - an undefined name becomes an
+    empty string - so asserting the rendered *value* is what catches it.
+    """
+
+    def printer(self, loaded=False, connected=True, target=0.0):
+        return {
+            "ifs": {
+                "connected": connected, "error": None,
+                "loaded_channels": [1, 2, 4],
+                "params": {"load_empty_mm": 600.0, "load_full_mm": 550.0,
+                           "first_purge_mm": 100.0, "first_purge_speed": 300.0,
+                           "first_fan": 0.0, "second_purge_mm": 30.0,
+                           "second_purge_speed": 300.0, "second_fan": 255.0},
+            },
+            "extruder": {"target": target},
+            "filament_switch_sensor toolhead": {"filament_detected": loaded},
+        }
+
+    def render(self, **kwargs):
+        return render_macro(HW, "IFS_LOAD", printer=self.printer(**kwargs),
+                            params={"SLOT": 1, "TEMP": 220}).commands
+
+    def test_it_feeds_a_real_length(self):
+        feed = [c for c in self.render() if c.startswith("IFS_FEED")]
+        self.assertEqual(len(feed), 1, feed)
+        ## The bug rendered "LENGTH=" with nothing after it.
+        self.assertIn("LENGTH=600", feed[0])
+
+    def test_an_already_loaded_extruder_uses_the_shorter_distance(self):
+        ## zmod picks filament_autoinsert_full_length when the extruder is
+        ## occupied; the board refuses anything longer than these.
+        feed = [c for c in self.render(loaded=True) if c.startswith("IFS_FEED")]
+        self.assertIn("LENGTH=550", feed[0])
+
+    def test_it_heats_before_parking(self):
+        commands = self.render()
+        self.assertLess(index_of(commands, r"M104 S220"),
+                        index_of(commands, r"_IFS_PARK_FOR_PURGE"))
+
+    def test_it_clamps_before_feeding_and_stops_after(self):
+        commands = self.render()
+        assert_order = [index_of(commands, r"IFS_CLAMP"),
+                        index_of(commands, r"IFS_FEED"),
+                        index_of(commands, r"IFS_STOP")]
+        self.assertEqual(assert_order, sorted(assert_order), commands)
+
+
 class WipeTest(unittest.TestCase):
     def setUp(self):
         self.commands = render_macro(
