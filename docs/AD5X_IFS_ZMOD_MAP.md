@@ -206,9 +206,32 @@ the filament looks like. Two different lanes behaving the same way rules out one
 lane's tip, and the drive, the driver and the motion sensor are all evidently
 working because the retract uses all three.
 
-None of this was run through `IFS_AUTOINSERT`, which did not exist yet: the
-lanes were positioned by hand and by ad-hoc feeds. That is the first thing to
-re-measure now that a lane can be put in a known position.
+### The distances look like slack, not an obstruction
+
+Read in order, the feed distances track what had just been pushed back up the
+tube rather than any fixed point:
+
+- feed 1 moved 110 mm and stopped
+- a 200 mm retract then ran its full length
+- feed 2 moved 230 mm - roughly the 200 mm the retract had just returned
+- feed 3, immediately after, managed 40 mm
+
+A fixed obstruction does not move when you retract, and it does not grant you
+exactly as much travel as you just gave back. Slack does.
+
+The asymmetry says the same thing. Feeding has to **draw filament off the
+spool**; retracting only has to push slack back toward it, which needs nothing
+of the spool at all. So a lane whose spool will not pay out feeds until the
+slack between spool and drive is used up, then stalls, and retracts perfectly
+every time. Lanes 1, 2 and 4 all behave this way, which points at something
+common to the spool side rather than at three separate jams.
+
+This is a hypothesis with a one-minute physical test: pull filament off each
+spool by hand at the IFS input. It has not been run.
+
+None of this was measured through `IFS_AUTOINSERT`, which did not exist yet -
+the lanes were positioned by hand and by ad-hoc feeds. Re-measure through it
+now that a lane can be put in a known position.
 
 ## Drivers
 
