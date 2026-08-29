@@ -87,14 +87,32 @@ class FlashForgeConfig(object):
         return value if isinstance(value, dict) else {}
 
     def channel_count(self, document=None):
-        """How many lanes the machine says it has.
+        """How many lanes the file describes, counted from its own keys.
 
-        This is where the count actually lives. `F13` has no `channel_count`
-        field on firmware 3.0.6, and `F19` reports it as an English word baked
-        into the board's firmware image; this is the printer's own number.
+        NOT from `FFMInfo.channel`. That field reads 4 on a four-lane machine
+        with lane 4 loaded, which is consistent with "the lane count" and with
+        "the current lane" at the same time - and zmod reads it as the current
+        lane (`get_current_channel_from_config`). Deriving the count from it
+        would list a single slot the day it means what zmod thinks it means.
+        Counting ffmType<n> keys needs no interpretation at all.
+
+        `F13` has no channel_count on firmware 3.0.6 and `F19` reports it as an
+        English word baked into the board's image, so this file is still the
+        practical answer - just read a different way.
         """
+        info = self.section("FFMInfo", document)
+        slots = [int(key[len("ffmType"):]) for key in info
+                 if key.startswith("ffmType") and key[len("ffmType"):].isdigit()]
+        lanes = [slot for slot in slots if slot >= 1]
+        return max(lanes) if lanes else None
+
+    def current_channel(self, document=None):
+        """Which lane FFMInfo says is loaded, or None. zmod's reading."""
         value = self.section("FFMInfo", document).get("channel")
-        return int(value) if isinstance(value, (int, float)) else None
+        if not isinstance(value, (int, float)):
+            return None
+        channel = int(value)
+        return channel if channel >= 1 else None
 
     def is_enabled(self, document=None):
         return bool(self.section("FFMInfo", document).get("ffmEnable", False))
@@ -110,8 +128,18 @@ class FlashForgeConfig(object):
         return {slot: self._slot(info, slot) for slot in range(1, count + 1)}
 
     def loaded_material(self, document=None):
-        """What FFMInfo says is in the extruder, or None."""
-        return self._slot(self.section("FFMInfo", document), LOADED_SLOT)
+        """What is in the extruder, or None.
+
+        Slot 0 is where a single-material AD5M records this, and it stays empty
+        on a machine with an IFS - which is why this used to answer "none" on an
+        AD5X no matter what was loaded. When FFMInfo names a lane, that lane is
+        the answer.
+        """
+        info = self.section("FFMInfo", document)
+        channel = self.current_channel(document)
+        if channel is not None:
+            return self._slot(info, channel)
+        return self._slot(info, LOADED_SLOT)
 
     @staticmethod
     def _slot(info, slot):

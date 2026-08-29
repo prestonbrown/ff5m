@@ -59,10 +59,22 @@ class ConfigFileTest(unittest.TestCase):
 
 
 class TestReading(ConfigFileTest):
-    def test_channel_count_comes_from_the_printer(self):
-        ## The count lives here, not in F13 (absent on 3.0.6) and not only in
-        ## F19 (an English word baked into the board's firmware).
+    def test_channel_count_is_counted_from_the_keys(self):
+        """Not read out of FFMInfo.channel, which is ambiguous.
+
+        That field reads 4 on a four-lane machine with lane 4 loaded, which fits
+        "the lane count" and "the current lane" equally well - and zmod reads it
+        as the current lane. Deriving the count from it would report a single
+        slot the day it means what zmod thinks it means.
+        """
         self.assertEqual(self.config.channel_count(), 4)
+
+    def test_the_count_survives_channel_meaning_the_current_lane(self):
+        ## The disambiguating case: channel says 1, four lanes are described.
+        document = self.read()
+        document["FFMInfo"]["channel"] = 1
+        self.assertEqual(self.config.channel_count(document), 4)
+        self.assertEqual(sorted(self.config.materials(document)), [1, 2, 3, 4])
 
     def test_materials_are_indexed_from_one(self):
         slots = self.config.materials()
@@ -77,9 +89,25 @@ class TestReading(ConfigFileTest):
         self.assertEqual(self.config.materials()[3],
                          {"type": None, "color": None})
 
-    def test_slot_zero_is_the_loaded_material_not_a_lane(self):
+    def test_slot_zero_is_never_a_lane(self):
         self.assertNotIn(0, self.config.materials())
-        self.assertEqual(self.config.loaded_material(),
+
+    def test_the_loaded_material_follows_the_named_lane(self):
+        """Slot 0 is where a single-material AD5M records this.
+
+        On a machine with an IFS it stays empty, so reading it meant IFS_MATERIALS
+        answered "loaded: none" no matter what was actually in the extruder.
+        """
+        document = self.read()
+        document["FFMInfo"]["channel"] = 2
+        self.assertEqual(self.config.loaded_material(document),
+                         {"type": "ABS", "color": "#898989"})
+
+    def test_with_no_lane_named_it_falls_back_to_slot_zero(self):
+        ## An AD5M has no lanes at all, and slot 0 is the whole answer there.
+        document = self.read()
+        document["FFMInfo"]["channel"] = 0
+        self.assertEqual(self.config.loaded_material(document),
                          {"type": None, "color": None})
 
     def test_enabled_flag(self):
