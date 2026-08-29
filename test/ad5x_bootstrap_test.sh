@@ -748,6 +748,51 @@ assert_contains "an associated radio still gets DHCP" "$(cat "$NET_TRACE")" "UDH
 out=$(AD5X_WIFI_IFACE=no_such_radio wifi_call "$WIFI_CONF_FIX" "")
 assert_empty "absent radio starts no supplicant" "$(cat "$WIFI_TRACE")"
 
+# --- boot logo ---------------------------------------------------------------
+# ZMOD owns /usr/prog/logo.jpeg and re-asserts it, so Forge-X has to assert its
+# own or boot under someone else's brand. What matters is that it is idempotent
+# (it runs every boot), that it preserves what it found exactly once, and that
+# it can be switched off.
+LOGO_WORK="$WORK/logo"; mkdir -p "$LOGO_WORK"
+
+logo_call() {  # $1 = source path, $2 = dest path
+    AD5X_BOOT_LOGO="$1" AD5X_BOOT_LOGO_DEST="$2" "$BASH_BIN" -c '
+        . "$1"
+        install_boot_logo
+    ' _ "$BOOTSTRAP" 2>&1
+}
+
+SRC="$LOGO_WORK/ours.jpg"; DEST="$LOGO_WORK/logo.jpeg"
+printf 'FORGEX-LOGO\n' > "$SRC"
+printf 'ZMOD-LOGO\n'   > "$DEST"
+
+out=$(logo_call "$SRC" "$DEST")
+assert_eq "installs our logo over a foreign one" "FORGEX-LOGO" "$(cat "$DEST")"
+assert_eq "keeps what it found, once" "ZMOD-LOGO" "$(cat "$DEST.forgex-orig")"
+assert_contains "it says so" "$out" "Boot logo: installed"
+
+# Runs every boot: the second pass must do nothing and say nothing.
+out=$(logo_call "$SRC" "$DEST")
+assert_empty "a second run is a silent no-op" "$out"
+
+# And must not overwrite the preserved original with our own logo.
+printf 'FORGEX-LOGO-V2\n' > "$SRC"
+logo_call "$SRC" "$DEST" >/dev/null
+assert_eq "an updated logo still installs" "FORGEX-LOGO-V2" "$(cat "$DEST")"
+assert_eq "the preserved original is never re-taken" "ZMOD-LOGO" "$(cat "$DEST.forgex-orig")"
+
+# Opt out, and a missing asset, must both be silent no-ops rather than errors.
+printf 'UNTOUCHED\n' > "$DEST"
+out=$(logo_call "" "$DEST")
+assert_eq "empty AD5X_BOOT_LOGO leaves the panel alone" "UNTOUCHED" "$(cat "$DEST")"
+assert_empty "and says nothing" "$out"
+out=$(logo_call "$LOGO_WORK/nope.jpg" "$DEST")
+assert_eq "a missing asset is not an error" "UNTOUCHED" "$(cat "$DEST")"
+
+# A helper nothing calls is the same bug as no helper.
+assert_contains "the bring-up actually installs it" \
+    "$(cat "$BOOTSTRAP")" "    install_boot_logo"
+
 # Step 2 must actually call it - a helper nothing invokes is the same bug.
 plan=$(run_forced mips --dry-run)
 assert_contains "the dry-run plan documents the network takeover" "$plan" "ifconfig up + udhcpc"

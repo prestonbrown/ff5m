@@ -389,6 +389,20 @@ WIFI_IFACE="${AD5X_WIFI_IFACE:-wlan0}"
 ## point it at a fixture and exercise the wlan0 paths on a host with no radio.
 NET_SYSFS="${AD5X_NET_SYSFS:-/sys/class/net}"
 
+## The power-on image on the panel.
+##
+## Stock /etc/init.d/S10jpeg_display_shell shows /usr/prog/logo.jpeg when it
+## exists and /etc/logo.jpeg otherwise, and it paints BEFORE raising the
+## backlight - which is why the image is already there the instant the screen
+## lights. /usr/prog is rw ext4, not the squashfs that / is, so a mod can own
+## that file. ZMOD does exactly that, and re-asserts its own logo every time its
+## fix_config runs, so a Forge-X install that left the file alone would boot
+## under someone else's brand. Assert ours on every bring-up instead.
+##
+## Set AD5X_BOOT_LOGO empty to keep whatever is already installed.
+BOOT_LOGO="${AD5X_BOOT_LOGO-$MOD_ROOT/.bin/logo/ad5x.jpg}"
+BOOT_LOGO_DEST="${AD5X_BOOT_LOGO_DEST:-/usr/prog/logo.jpeg}"
+
 iface_has_ipv4() {
     ifconfig "$1" 2>/dev/null | grep -q 'inet addr:' && return 0
     ip -4 addr show "$1" 2>/dev/null | grep -q 'inet ' && return 0
@@ -438,6 +452,9 @@ stop_stock_ui() {
 
     echo "// [ad5x] Taking over the network from the stock UI..."
     provide_network
+
+    ## Takes effect at the NEXT power-on; S10 has long since painted.
+    install_boot_logo
 }
 
 ## Associate wlan0 if credentials were left for us. Returns non-zero - and says
@@ -457,6 +474,20 @@ start_wifi_supplicant() {
         wpa_supplicant -B -i "$WIFI_IFACE" -c "$WIFI_CONF" -D "$_drv" >/dev/null 2>&1 && return 0
     done
     return 1
+}
+
+install_boot_logo() {
+    [ -n "$BOOT_LOGO" ] || return 0
+    [ -f "$BOOT_LOGO" ] || return 0
+    ## Idempotent: the common case is a no-op, so this costs one compare a boot.
+    cmp -s "$BOOT_LOGO" "$BOOT_LOGO_DEST" && return 0
+    ## Keep whatever we found the first time, so an uninstall can put the
+    ## printer back the way it was rather than leaving our branding behind.
+    if [ -f "$BOOT_LOGO_DEST" ] && [ ! -f "$BOOT_LOGO_DEST.forgex-orig" ]; then
+        cp "$BOOT_LOGO_DEST" "$BOOT_LOGO_DEST.forgex-orig"
+    fi
+    cp "$BOOT_LOGO" "$BOOT_LOGO_DEST" || return 1
+    echo "// [ad5x] Boot logo: installed $(basename "$BOOT_LOGO")"
 }
 
 provide_network() {
