@@ -413,6 +413,44 @@ class LoadedLaneTest(unittest.TestCase):
         self.assertEqual([c for c in commands if c.startswith("IFS_RETRACT")],
                          [], commands)
 
+    def test_the_load_feed_hands_a_stall_to_the_extruder(self):
+        """The bug that cost a day, and it was never mechanical.
+
+        A load feed ENDS by arriving at the extruder gear; the IFS cannot push
+        filament past a gear that is not turning. Failing there aborted the
+        load before _IFS_PURGE - the co-push - could finish it, and every
+        symptom that produced (a lane that "jammed" only when feeding, only at
+        the far end of its travel, and retracted perfectly) reads as broken
+        hardware. zmod cannot fail here at all: print_result() only prints.
+        """
+        commands = self.render("IFS_LOAD", {"SLOT": 2, "TEMP": 220})
+        feed = [c for c in commands if c.startswith("IFS_FEED")]
+        self.assertEqual(len(feed), 1, commands)
+        self.assertIn("SOFT=1", feed[0])
+
+    def test_the_load_asks_the_toolhead_only_AFTER_the_purge(self):
+        ## A soft feed cannot say whether the load worked - arriving at the gear
+        ## and never arriving end it identically. Only the extruder can tell
+        ## them apart, so the question has to come after it has had its turn,
+        ## and before anything is recorded as loaded.
+        commands = self.render("IFS_LOAD", {"SLOT": 2, "TEMP": 220})
+        check = index_of(commands, r"IFS_REQUIRE_TOOLHEAD")
+        self.assertGreater(check, index_of(commands, r"_IFS_PURGE"))
+        self.assertLess(
+            check,
+            index_of(commands, r"SAVE_VARIABLE VARIABLE=ifs_loaded VALUE=2"))
+
+    def test_a_thread_still_fails_loudly_on_a_stall(self):
+        ## IFS_AUTOINSERT has nothing after it that could rescue a lane which
+        ## never arrived, so there the stall IS the answer. SOFT belongs only
+        ## where a co-push follows.
+        commands = render_macro(
+            HW, "IFS_AUTOINSERT", printer=self.printer(at_hub=0),
+            params={"CHANNEL": 2}).commands
+        feed = [c for c in commands if c.startswith("IFS_FEED")]
+        self.assertEqual(len(feed), 1, commands)
+        self.assertNotIn("SOFT", feed[0])
+
     def test_an_ordinary_swap_does_not_retract_the_outgoing_lane_twice(self):
         """The loaded lane and the lane at the hub are the same lane.
 
@@ -715,6 +753,31 @@ class PurgeTest(unittest.TestCase):
         ## And each shake comes before its wipe: snap it off, then clean up.
         for shake, wipe in zip(shakes, wipes):
             self.assertLess(shake, wipe, commands)
+
+    def test_every_purge_pass_happens_over_the_chute(self):
+        """Both passes, because _IFS_WIPE moves the head away between them.
+
+        zmod's _SBROS_TRASH_DAVIM opens with _GOTO_TRASH and is called once per
+        pass, so both of its purges land in the bin. Copying only the extrusion
+        out of it left the second pass wherever the wipe had parked the head -
+        measured at X78.0 Y220.0, which is ON the wiper pad, 26mm from the
+        chute at X52.5 Y229. Purging onto the wiper is how a wiper stops
+        working, and it is visible from across the room.
+        """
+        commands = self.render(slot=1)
+        parks = [i for i, c in enumerate(commands)
+                 if c.startswith("_IFS_PARK_FOR_PURGE")]
+        drops = [i for i, c in enumerate(commands) if c.startswith("G1 E")]
+        self.assertEqual(len(parks), 2, commands)
+        self.assertEqual(len(drops), 2, commands)
+        ## Each pass is parked before it extrudes...
+        for park, drop in zip(parks, drops):
+            self.assertLess(park, drop, commands)
+        ## ...and the second park is AFTER the wipe that moved us off the chute,
+        ## which is the whole point - parking before the wipe would not help.
+        wipes = [i for i, c in enumerate(commands) if c.startswith("_IFS_WIPE")]
+        self.assertLess(wipes[0], parks[1], commands)
+        self.assertLess(parks[1], drops[1], commands)
 
     def test_the_lane_drives_alongside_the_extruder(self):
         commands = self.render(slot=1)

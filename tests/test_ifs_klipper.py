@@ -393,6 +393,46 @@ class TestCommandQueue(unittest.TestCase):
             with self.assertRaises(gcmd.error):
                 command(gcmd)
 
+    def test_a_stalled_feed_raises_by_default(self):
+        """The autoinsert thread still needs to fail loudly.
+
+        Nothing follows a thread that could rescue a lane which never arrived,
+        so there the stall IS the answer.
+        """
+        loading = STATUS.state_value(STATUS.LOADING, 1)
+        self.link.replies = (["FFS channel 1 feeding."]
+                             + [f13(state=loading, stall=0)] * 8)
+        gcmd = fakes.FakeGcmd({"CHANNEL": 1, "UNTIL": "done", "CHECK": 1,
+                               "TIMEOUT": 2.0})
+        with self.assertRaises(gcmd.error) as caught:
+            self.obj.cmd_IFS_FEED(gcmd)
+        self.assertIn("stalled", str(caught.exception).lower())
+
+    def test_SOFT_hands_a_stalled_feed_to_the_extruder_instead_of_raising(self):
+        """zmod's only behaviour, and the load depends on it.
+
+        A load feed ENDS by arriving at the extruder gear, and the IFS cannot
+        push filament past a gear that is not turning. So the stall is how this
+        feed finishes, and the co-push purge after it is what completes the
+        load. zmod's cmd_IFS_F10 calls print_result(), which only prints, then
+        carries on to _SBROS_TRASH_DAVIM. Raising there aborted the load before
+        the one step that could have finished it.
+        """
+        loading = STATUS.state_value(STATUS.LOADING, 1)
+        self.link.replies = (["FFS channel 1 feeding."]
+                             + [f13(state=loading, stall=0)] * 8
+                             + ["FFS stopped."] * 4)
+        gcmd = fakes.FakeGcmd({"CHANNEL": 1, "UNTIL": "done", "CHECK": 1,
+                               "SOFT": 1, "TIMEOUT": 2.0})
+        self.obj.cmd_IFS_FEED(gcmd)  # must not raise
+        ## Stopped, exactly as zmod does after a failed wait...
+        self.assertTrue(any("F112" in a for a in self.link.asked),
+                        self.link.asked)
+        ## ...but NOT released: the purge that follows drives this same lane
+        ## and needs the clamp the caller took.
+        self.assertFalse(any("F39" in a for a in self.link.asked),
+                         self.link.asked)
+
     def test_an_accepted_feed_sends_the_length_and_speed_asked_for(self):
         self.link.replies = ["FFS channel 1 feeding."] + [f13(state=STATUS.READY)] * 4
         gcmd = fakes.FakeGcmd({"CHANNEL": 1, "UNTIL": "done",

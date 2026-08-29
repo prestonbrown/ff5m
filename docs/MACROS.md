@@ -155,21 +155,28 @@ see it: a lane threaded but not loaded sits short of the sensor.
 
 - **IFS_UNLOAD**
   - **Description**: Take filament out of the NOZZLE. Cuts, wipes, withdraws
-    the stub, and retracts the lane 70 mm. **The lane stays threaded and ready.**
+    the stub 60 mm through the extruder, and retracts the lane 70 mm more.
+    **The lane stays threaded and ready.** That 130 mm total is the whole
+    distance the geometry needs: the extruder tip is about 150 mm above the
+    combiner, so the strand ends up in its own bowden, clear of the shared
+    path, and its next load only has to feed that 130 mm back.
   - **Parameters**: `SLOT` (optional, defaults to the loaded lane), `TEMP`
     (optional, the lane's own material temperature).
 
 - **IFS_EJECT**
   - **Description**: Take filament out of the IFS entirely, so a spool can be
     changed. Retracts the whole tube. Ejecting a lane that is not the loaded one
-    never touches the extruder and works with a cold nozzle.
+    never touches the extruder and works with a cold nozzle. Rarely what you
+    want between colours - that is `IFS_UNLOAD`, which moves 130 mm instead of
+    1000. An eject also gives up the lane's claim on the shared path, since the
+    filament is no longer in the machine to hold it.
   - **Parameters**: `SLOT` (int), `TEMP` (only needed for the loaded lane).
 
 - **IFS_AUTOINSERT**
   - **Description**: Thread a lane up to the toolhead sensor and back it off
     90 mm, ready to load. **Runs by itself** when the board reports filament
     pushed into a lane. If another lane already holds the hub, the new one is
-    left at its entrance instead, which is still ready - a load feeds the whole
+    left at the IFS instead, which is still ready - a load feeds the whole
     tube anyway.
   - **Parameters**: `CHANNEL` (int).
   - **Configuration**: `autoinsert: False` in `[ifs]` turns the automatic run

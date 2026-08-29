@@ -178,6 +178,10 @@ class IFS(object):
             self.printer.register_event_handler(event, self._stop)
 
         gcode = self.printer.lookup_object("gcode")
+        gcode.register_command("IFS_REQUIRE_TOOLHEAD",
+                               self.cmd_IFS_REQUIRE_TOOLHEAD,
+                               desc="Fail unless the toolhead sensor sees "
+                                    "filament")
         gcode.register_command("IFS_STATUS", self.cmd_IFS_STATUS,
                                desc="Report the IFS board's current state")
         gcode.register_command("IFS_DIAGNOSTICS", self.cmd_IFS_DIAGNOSTICS,
@@ -538,8 +542,36 @@ class IFS(object):
         return waiter.timed_out(self.latest_status(),
                                 self.reactor.monotonic() - started)
 
-    def _finish(self, gcmd, outcome, what, channel=None):
-        """Report an outcome, and stop the board if it was a bad one."""
+    def _finish(self, gcmd, outcome, what, channel=None, soft=False):
+        """Report an outcome, and stop the board if it was a bad one.
+
+        `soft` is zmod's behaviour, and it is the ONLY behaviour zmod has:
+        cmd_IFS_F10 calls print_result() and IFS_F112 and returns. print_result
+        only prints - it cannot raise - so a stalled load feed in zmod reports
+        "Filament N stalled in IFS", stops the board, and the caller carries
+        straight on to _SBROS_TRASH_DAVIM, the co-push purge.
+
+        That is not laxity, it is the geometry. A load feed ENDS by arriving at
+        the extruder gear, and the IFS cannot push filament past a gear that is
+        not turning - the comment in _IFS_PURGE says so in as many words. So
+        the feed stopping short is the expected way for it to finish, not a
+        fault, and the co-push is what completes the load. Raising there aborts
+        the load before the only step that could have finished it.
+
+        The channel is deliberately NOT released on a soft finish: the purge
+        that follows drives the same lane and needs the clamp the caller took.
+        """
+        if soft and outcome.is_problem:
+            gcmd.respond_info("%s: %s%s - handing off to the extruder"
+                              % (what, outcome.kind,
+                                 " (%s)" % outcome.detail if outcome.detail
+                                 else ""))
+            try:
+                self.execute("F112")
+            except Exception as exc:
+                logging.warning("IFS: could not stop after %s: %s",
+                                outcome.kind, exc)
+            return outcome
         if not outcome.is_problem:
             gcmd.respond_info("%s: %s%s"
                               % (what, outcome.kind,
@@ -728,9 +760,13 @@ class IFS(object):
                                   % (what, channel, attempt + 2,
                                      self.retry_count))
                 self._run(gcmd, label, send)
+        ## SOFT=1 is zmod's non-fatal feed. Only the load asks for it; an
+        ## autoinsert thread still fails loudly, because nothing follows it that
+        ## could rescue a lane that never arrived.
         result = self._finish(gcmd, outcome,
                               "%s channel %d" % (what, channel),
-                              channel=channel)
+                              channel=channel,
+                              soft=bool(gcmd.get_int("SOFT", 0)))
         if backoff and outcome.kind == ifs_sequences.FILAMENT:
             ## Only when the sensor is what ended the move. A feed that merely
             ## ran out of length has not arrived anywhere to back away from.
@@ -746,6 +782,26 @@ class IFS(object):
         self._move(gcmd, "F11", ifs_status.UNLOADING, UNTIL_DONE, "retract")
 
     ## -- gcode --------------------------------------------------------------
+
+    ## GCODE_SAFE: reads one sensor and raises gcmd.error, which is the
+    ## command failing - the outcome this whole gate exists to get. The read
+    ## itself returns None rather than raising when there is no sensor.
+    def cmd_IFS_REQUIRE_TOOLHEAD(self, gcmd):
+        """The load's real success test, asked AFTER the co-push.
+
+        A soft feed cannot say whether the load worked, because arriving at the
+        gear and never arriving at all end the same way. The toolhead sensor
+        can, once the extruder has had its turn at the filament. zmod never
+        asks, and quietly purges air when a lane did not make it.
+        """
+        present = self._toolhead_has_filament()
+        if present is None:
+            gcmd.respond_info("IFS: no toolhead sensor to check")
+            return
+        if not present:
+            raise gcmd.error("IFS: the toolhead sensor is still empty after "
+                             "the purge - the lane did not reach the extruder")
+        gcmd.respond_info("IFS: toolhead sensor sees filament")
 
     ## GCODE_SAFE: reads the cached snapshot and formats it. get_status()
     ## returns a dict with every key present even when the link is down,
