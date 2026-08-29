@@ -394,6 +394,33 @@ class MotionAndIntegrationMacroTest(unittest.TestCase):
             "RESTORE_GCODE_STATE NAME=_client_movement",
         ))
 
+    def test_move_safe_relative_targets_stay_in_the_gcode_frame(self):
+        ## MOVE_SAFE built relative targets from toolhead.position - the
+        ## machine frame - and then issued them as absolute GCODE commands.
+        ## The two frames differ by homing_origin, so with a z offset active
+        ## a +5 lift realized 5 + origin (measured +0.58 on a printer with
+        ## -4.42). Build the target from gcode_position so the clamped
+        ## number and the number the G1 targets are the same number.
+        limits = macro_status(BASE, "MOVE_SAFE")
+        result = render_macro(BASE, "MOVE_SAFE", printer={
+            "gcode_macro MOVE_SAFE": limits,
+            "gcode_move": {
+                "gcode_position": {"x": 100.0, "y": 90.0, "z": 0.76},
+                "homing_origin": {"x": 0.0, "y": 0.0, "z": -4.42},
+            },
+            "toolhead": {
+                "axis_maximum": {"z": 230},
+                "position": {"x": 100.0, "y": 90.0, "z": -3.66},
+            },
+        }, params={"Z": 5, "F": 1500, "ABSOLUTE": 0})
+
+        self.assertEqual(result.commands, (
+            "SAVE_GCODE_STATE NAME=_client_movement",
+            "G90",
+            "G1   Z5.76  F1500",
+            "RESTORE_GCODE_STATE NAME=_client_movement",
+        ))
+
     def test_smart_park_uses_fallback_and_rejects_unhomed_motion(self):
         printer = {
             "gcode_macro _KAMP_Settings": {
