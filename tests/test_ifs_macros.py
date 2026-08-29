@@ -119,6 +119,7 @@ class AutoinsertTest(unittest.TestCase):
             "extruder": {"target": 0.0},
             "filament_switch_sensor toolhead": {"filament_detected": occupied},
             "save_variables": {"variables": {"ifs_at_hub": at_hub}},
+            "gcode_macro _IFS_GEOMETRY": GEOMETRY,
         }
 
     def render(self, channel=2, **kwargs):
@@ -153,27 +154,32 @@ class AutoinsertTest(unittest.TestCase):
                           if c.startswith("SAVE_VARIABLE VARIABLE=ifs_at_hub")],
                          commands)
 
-    def test_an_occupied_extruder_leaves_the_lane_at_its_entrance(self):
-        """Only one lane fits in the shared path, so the rest do not move.
+    def test_an_occupied_extruder_threads_the_lane_to_near_hub(self):
+        """Only one lane fits in the shared path - but the inserted lane's
+        own bowden is not shared, so it threads to just short of the hub and
+        its next load feeds the last stretch instead of the whole run.
 
-        zmod feeds filament_autoinsert_full_length here and packs the hub. This
-        is the failure that cost the evening: threading lane 4 parked it 90mm
-        below the sensor, then lanes 2 and 1 were told to thread into it, and
-        all three jammed. Lane 4's next load stalled after exactly 90mm.
+        Feeding all the way to the hub packs it against the incumbent: three
+        lanes once jammed at once that way, and one next load stalled after
+        exactly the 90 mm it had backed off. insert_advance_mm (measured:
+        ~600 mm bowden, advance 500) is what keeps the stop short.
         """
         commands = self.render(occupied=True)
-        self.assertEqual(self.feeds(commands), [], commands)
-        self.assertEqual([c for c in commands if c.startswith("IFS_CLAMP")],
-                         [], commands)
+        feeds = self.feeds(commands)
+        self.assertEqual(len(feeds), 1, commands)
+        self.assertIn("SOFT=1", feeds[0], commands)
+        self.assertIn(
+            "LENGTH=%s" % GEOMETRY["insert_advance_mm"], feeds[0], commands)
         self.assertTrue(any(c.startswith("IFS_MARK_INSERTED")
                             for c in commands), commands)
 
-    def test_a_lane_already_at_the_hub_also_blocks_threading(self):
+    def test_a_lane_already_at_the_hub_also_limits_threading(self):
         ## And this is the case the toolhead sensor cannot see: a lane threaded
         ## but not loaded sits 90mm SHORT of the sensor, so the sensor reads
-        ## empty while the shared path is taken.
+        ## empty while the shared path is taken. The new lane still advances -
+        ## through its own bowden only, stopping short of the hub.
         commands = self.render(channel=2, occupied=False, at_hub=4)
-        self.assertEqual(self.feeds(commands), [], commands)
+        self.assertEqual(len(self.feeds(commands)), 1, commands)
 
     def test_the_lane_already_at_the_hub_may_still_re_thread_itself(self):
         ## It is the one lane that cannot collide with itself.
@@ -200,13 +206,16 @@ class AutoinsertTest(unittest.TestCase):
         self.assertEqual([c for c in self.render()
                           if c.startswith("IFS_RETRACT")], [])
 
-    def test_the_blocked_branch_moves_nothing_at_all(self):
-        ## No feed, no retract, no clamp. The lane stays where the board's own
-        ## insertion left it, which is the one position known to be safe.
+    def test_the_blocked_branch_claims_nothing_and_never_retracts(self):
+        ## The advance feeds through the lane's own bowden and stops short of
+        ## the hub; it must not claim the shared path (that is the incumbent
+        ## lane's) and it has nothing to do at the extruder.
         commands = self.render(occupied=True)
-        for verb in ("IFS_FEED", "IFS_RETRACT", "IFS_CLAMP"):
-            self.assertEqual([c for c in commands if c.startswith(verb)], [],
-                             commands)
+        self.assertFalse(
+            [c for c in commands if c.startswith("IFS_RETRACT")], commands)
+        self.assertFalse(
+            [c for c in commands
+             if c.startswith("SAVE_VARIABLE VARIABLE=ifs_at_hub")], commands)
 
     def test_it_stops_the_board_after_the_feed(self):
         ## UNTIL=toolhead returns while the board is still feeding - the sensor
@@ -909,14 +918,24 @@ class CutTest(unittest.TestCase):
             "gcode_macro _IFS_SENSOR_HOLD": {"was_enabled": 1},
         }).commands
 
-    def test_y_moves_before_x_and_the_cut_is_the_slow_x(self):
-        ## zmod: G1 Y-7.5 F1800 then G1 X-2.5 F600. Reversed, the head would
-        ## cross the front of the bed at the cutter's depth.
+    def test_travel_to_the_corner_is_fast_and_only_the_drag_is_slow(self):
+        ## The blade contact is the last stretch of X at the cutter's depth.
+        ## Everything before it is travel, and travel at the cut feed spent
+        ## ~21 s crossing the bed at F600. Only the final X move carries the
+        ## cut feed.
         commands = self.render()
+        pre_x = index_of(commands, r"G1 X20\.0")
         y = index_of(commands, r"G1 Y-7\.5")
         x = index_of(commands, r"G1 X-2\.5")
+        self.assertLess(pre_x, y, commands)
         self.assertLess(y, x, commands)
+        self.assertIn("F12000", commands[pre_x])
+        self.assertIn("F6000", commands[y])
         self.assertIn("F600", commands[x])
+        ## And nothing else creeps: every other G1 is travel or extrusion.
+        for command in commands:
+            if command.startswith("G1 X") and command != commands[x]:
+                self.assertNotIn("F600\n", command + "\n", commands)
 
     def test_the_cut_coordinates_are_inside_the_machine(self):
         ## Negative on purpose, but axis_minimum is (-20, -20): outside that and
@@ -930,7 +949,8 @@ class CutTest(unittest.TestCase):
     def test_it_withdraws_the_stub_and_leaves_the_corner(self):
         commands = self.render()
         retract = index_of(commands, r"G1 E-5\.0")
-        leave = index_of(commands, r"G1 X20\.0")
+        leave = [i for i, c in enumerate(commands)
+                 if c.startswith("G1 X20.0")][-1]
         self.assertLess(index_of(commands, r"G1 X-2\.5"), retract)
         self.assertLess(retract, leave)
 
@@ -1182,6 +1202,32 @@ class ClearExtruderTest(unittest.TestCase):
                          commands)
         self.assertFalse([c for c in commands if c.startswith("IFS_CLAMP")],
                          commands)
+
+
+class EndPrintParkTest(unittest.TestCase):
+    """Print end parks over the chute, not the bed.
+
+    A nozzle at temperature keeps dripping after the last move; over the bed
+    that lands on the print surface or the part. Over the chute it lands in
+    the bin.
+    """
+
+    def render(self, loaded):
+        return render_macro(HW, "END_PRINT", printer={
+            "save_variables": {"variables": {"ifs_loaded": loaded}},
+            "gcode_macro _IFS_GEOMETRY": GEOMETRY,
+            "toolhead": {"homed_axes": "xyz"},
+            "gcode_move": {"gcode_position": {"x": 105.0, "y": 105.0, "z": 10.0}},
+        }).commands
+
+    def test_a_loaded_machine_finishes_over_the_chute(self):
+        commands = self.render(4)
+        self.assertEqual(commands[0], "_END_PRINT_BASE", commands)
+        self.assertIn("_IFS_GOTO_STATION X=%s" % GEOMETRY["chute_x"],
+                      commands)
+
+    def test_no_lane_loaded_means_no_station_visit(self):
+        self.assertEqual(self.render(0), ("_END_PRINT_BASE",))
 
 
 class ChangeLiftTest(unittest.TestCase):
@@ -1477,6 +1523,7 @@ class SensorHealTest(unittest.TestCase):
             "save_variables": {"variables": {"ifs_loaded": 1,
                                              "ifs_at_hub": 1}},
             "gcode_macro _IFS_SENSOR_HOLD": {"was_enabled": 1},
+            "gcode_macro _IFS_GEOMETRY": GEOMETRY,
         }
 
     def test_every_public_entry_point_heals_first(self):
