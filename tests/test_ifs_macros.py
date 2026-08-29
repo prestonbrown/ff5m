@@ -413,6 +413,38 @@ class LoadedLaneTest(unittest.TestCase):
         self.assertEqual([c for c in commands if c.startswith("IFS_RETRACT")],
                          [], commands)
 
+    def test_an_ordinary_swap_does_not_retract_the_outgoing_lane_twice(self):
+        """The loaded lane and the lane at the hub are the same lane.
+
+        IFS_UNLOAD already pulls it out of the shared path - 60mm through the
+        extruder and 70mm more, and the extruder tip is only 150mm above the
+        combiner. But a macro is rendered ONCE, before any of it runs, so the
+        at_hub this block tests still holds what it held on entry: the unload's
+        SAVE_VARIABLE ifs_at_hub=0 is invisible here. Retracting again cost
+        hub_clear_mm on top, 430mm where 130 was needed, and the re-feed paid
+        it back a second time. Every tool change, both directions.
+        """
+        commands = self.render("IFS_LOAD", {"SLOT": 1, "TEMP": 220},
+                               recorded=4, at_hub=4, occupied=True)
+        ## The unload is what moves lane 4, and it is the ONLY thing that does.
+        self.assertEqual([c for c in commands if c.startswith("IFS_UNLOAD")],
+                         ["IFS_UNLOAD SLOT=4 TEMP=220"], commands)
+        self.assertEqual([c for c in commands if c.startswith("IFS_RETRACT")],
+                         [], commands)
+        self.assertNotIn("IFS: moving lane 4 out of the shared path",
+                         " ".join(commands))
+
+    def test_a_swap_still_clears_a_THIRD_lane_parked_at_the_hub(self):
+        ## The narrow fix must stay narrow: lane 4 is loaded, lane 1 is parked
+        ## in the shared path, and lane 2 is coming in. The unload only knows
+        ## about lane 4, so lane 1 still has to be told to move.
+        commands = self.render("IFS_LOAD", {"SLOT": 2, "TEMP": 220},
+                               recorded=4, at_hub=1, occupied=True)
+        back = [c for c in commands if c.startswith("IFS_RETRACT")]
+        self.assertEqual(len(back), 1, commands)
+        self.assertIn("CHANNEL=1", back[0])
+        self.assertIn("LENGTH=300", back[0])
+
     def test_an_unload_hands_its_lane_to_the_extruder_withdraw(self):
         ## Without this the withdraw drags the strand back through a lane that
         ## is not driving. _IFS_CLEAR_EXTRUDER cannot work the lane out for
@@ -504,6 +536,29 @@ class LoadedLaneTest(unittest.TestCase):
                             for c in commands), commands)
         self.assertEqual(self.saved(commands),
                          {"ifs_loaded": "0", "ifs_at_hub": "0"})
+
+    def test_ejecting_a_parked_lane_gives_up_its_claim_on_the_hub(self):
+        """The filament leaves the building; the claim must not stay behind.
+
+        A lane parked at the hub but never loaded is precisely what a FAILED
+        load leaves behind, so it is the state an eject is most likely to be
+        called in. Measured: ejecting lane 1 from there left ifs_at_hub=1 with
+        the filament on the bench, and the next insertion of lane 4 was refused
+        with "lane 1 holds the hub" by a lane that was not in the printer.
+        """
+        commands = self.render("IFS_EJECT", {"SLOT": 1}, recorded=0, at_hub=1)
+        self.assertEqual(self.saved(commands), {"ifs_at_hub": "0"})
+        ## And only once the filament is actually out. A retract that fails
+        ## part-way leaves the lane in the path, where the claim is still true.
+        self.assertGreater(
+            index_of(commands, r"SAVE_VARIABLE VARIABLE=ifs_at_hub VALUE=0"),
+            index_of(commands, r"IFS_RETRACT CHANNEL=1"))
+
+    def test_ejecting_an_idle_lane_leaves_another_lanes_claim_alone(self):
+        ## Lane 2 comes out while lane 1 holds the hub. Not lane 2's claim to
+        ## drop, and dropping it would feed the next lane into lane 1.
+        commands = self.render("IFS_EJECT", {"SLOT": 2}, recorded=0, at_hub=1)
+        self.assertEqual(self.saved(commands), {}, commands)
 
     def test_motion_calls_a_jam_a_jam_and_pauses(self):
         """zmod's cmd_IFS_MOTION: the LANE's filament bit tells them apart.
