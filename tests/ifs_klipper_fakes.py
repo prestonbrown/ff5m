@@ -52,10 +52,21 @@ class FakeReactor:
 
 
 class FakeGCode:
+    class error(Exception):
+        pass
+
     def __init__(self):
         self.commands = {}
         self.mux = {}
         self.responses = []
+        ## Scripts run outside any command, as the auto-insert does.
+        self.scripts = []
+        self.script_error = None
+
+    def run_script(self, script):
+        self.scripts.append(script)
+        if self.script_error:
+            raise self.error(self.script_error)
 
     def register_command(self, name, handler, desc=None):
         self.commands[name] = handler

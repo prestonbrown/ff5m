@@ -73,6 +73,11 @@ MOVE_POLL_INTERVAL = 0.2
 ## that dropped out ended the run instead of being recovered from.
 DEFAULT_RETRY_COUNT = 3
 
+## What runs when the board reports filament pushed into a lane. zmod fires
+## _IFS_AUTOINSERT the same way, off its poll thread, and it is the step that
+## puts a lane in a known position instead of wherever a human left it.
+AUTOINSERT_SCRIPT = "IFS_AUTOINSERT CHANNEL=%d"
+
 ## What a move waits for, as the UNTIL= parameter spells it.
 UNTIL_TOOLHEAD = "toolhead"
 UNTIL_CLEAR = "clear"
@@ -134,6 +139,11 @@ class IFS(object):
             "stall_count", ifs_sequences.DEFAULT_CONFIRMATIONS, minval=1)
         self.silk_count = config.getint(
             "silk_count", ifs_sequences.DEFAULT_RUNOUT_CONFIRMATIONS, minval=1)
+        ## zmod has no switch for this and always threads an inserted lane. A
+        ## printer that moves filament on its own the moment someone touches it
+        ## is worth being able to turn off, so this is a switch that defaults
+        ## to zmod's behaviour rather than a change to it.
+        self.autoinsert = config.getboolean("autoinsert", True)
         self.params = ifs_sequences.Parameters(
             tube_mm=config.getfloat("tube_length", 1000.0, above=0.),
             ifs_speed=config.getfloat("ifs_speed", 1200.0, above=0.))
@@ -277,9 +287,27 @@ class IFS(object):
         inserted = self._inserts.update(status)
         if inserted:
             self.reactor.register_async_callback(
-                lambda eventtime, ch=inserted: self.printer.send_event(
-                    "ifs:filament_inserted", ch))
+                lambda eventtime, ch=inserted: self._handle_inserted(ch))
         return True
+
+    def _handle_inserted(self, channels):
+        """Announce an insert, then thread the lane as zmod does.
+
+        Runs on the reactor, never on the poll thread. Failures are logged and
+        dropped rather than raised: this is not somebody's command, and zmod's
+        _safe_run_script swallows them for the same reason - a lane that will
+        not thread must not take klippy down with it.
+        """
+        self.printer.send_event("ifs:filament_inserted", channels)
+        if not self.autoinsert:
+            return
+        gcode = self.printer.lookup_object("gcode")
+        for channel in channels:
+            try:
+                gcode.run_script(AUTOINSERT_SCRIPT % channel)
+            except Exception as exc:
+                logging.warning("IFS: auto-insert of channel %d failed: %s",
+                                channel, exc)
 
     def _drop_link(self, reason=None):
         if reason:
@@ -490,6 +518,18 @@ class IFS(object):
                 continue
             before = status
             outcome = waiter.update(status, elapsed)
+            if (outcome.kind == ifs_sequences.FINISHED
+                    and until in (UNTIL_TOOLHEAD, UNTIL_CLEAR)):
+                ## The board ran the whole move and came back to READY without
+                ## the sensor this move was aimed at ever changing. That is not
+                ## a finish, it is the move failing quietly: the caller asked to
+                ## feed UNTIL the toolhead, and nothing arrived there. Reporting
+                ## it as success let a load carry on to purge filament that was
+                ## still somewhere in the tube.
+                return ifs_sequences.Outcome(
+                    ifs_sequences.NOT_REACHED, status, elapsed,
+                    "the board finished but the toolhead sensor is still %s"
+                    % ("empty" if until == UNTIL_TOOLHEAD else "blocked"))
             if outcome.kind != ifs_sequences.WAITING:
                 return outcome
         return waiter.timed_out(self.latest_status(),

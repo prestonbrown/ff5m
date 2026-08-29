@@ -26,11 +26,12 @@ FINISHED = "finished"          # the board went back to ready: motion completed
 FILAMENT = "filament"          # the TOOLHEAD sensor reached the wanted state
 STALLED = "stalled"            # filament stopped moving
 RUNOUT = "runout"              # the lane lost its filament mid-move
+NOT_REACHED = "not_reached"    # the move ended without the sensor it was aimed at
 DRIVER_ERROR = "driver_error"  # the board wants F15 before anything else
 TIMED_OUT = "timed_out"
 
 ## Outcomes that mean "stop and deal with it", as opposed to a normal finish.
-PROBLEMS = frozenset([STALLED, RUNOUT, DRIVER_ERROR, TIMED_OUT])
+PROBLEMS = frozenset([STALLED, RUNOUT, NOT_REACHED, DRIVER_ERROR, TIMED_OUT])
 
 ## Consecutive matching polls before a condition counts. zmod keeps two
 ## separate counts and so do we: a stall has to persist (its motion bit toggles,
@@ -207,6 +208,10 @@ class Parameters(object):
         ## cap a feed at these: "F10 C1 L1000 S1200 refused: FFS not ready." was
         ## a clamp that had not settled yet, and zmod's own load asks for 1000.
         "load_empty_mm": 600.0, "load_full_mm": 550.0,
+        ## How far a freshly threaded lane backs off once its tip reaches the
+        ## toolhead sensor, so it rests below the extruder gear rather than in
+        ## it (zmod's filament_autoinsert_ret_length).
+        "autoinsert_ret_mm": 90.0,
         ## The shear either side of the cut, from zmod's _CUT_PRUTOK
         ## (FILAMENT_UNLOAD_BEFORE_CUTTING / _AFTER_CUTTING). The AD5X cuts
         ## filament by driving the toolhead into a fixed blade, and the stub

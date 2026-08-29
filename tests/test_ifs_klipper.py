@@ -173,6 +173,56 @@ class TestIfsObject(unittest.TestCase):
         printer.reactor.run_async()
         self.assertEqual(len(printer.sent), 1)
 
+    def test_an_insert_threads_the_lane(self):
+        """zmod runs _IFS_AUTOINSERT the moment the board reports an insert.
+
+        It is the step that puts a lane in a KNOWN position. Without it every
+        lane sits wherever a human left it and a later load has to guess how
+        far the toolhead is, which is how a load ends up feeding into nothing.
+        """
+        obj, printer, link = make_ifs(replies=[f13(insert=0b10)])
+        obj._connect()
+        obj._poll_once()
+        printer.reactor.run_async()
+        gcode = printer.lookup_object("gcode")
+        self.assertEqual(gcode.scripts, ["IFS_AUTOINSERT CHANNEL=2"])
+
+    def test_every_inserted_lane_is_threaded(self):
+        ## Two lanes can gain filament between polls. zmod collapses the mask
+        ## to its highest bit and threads only that one.
+        obj, printer, link = make_ifs(replies=[f13(insert=0b1001)])
+        obj._connect()
+        obj._poll_once()
+        printer.reactor.run_async()
+        self.assertEqual(printer.lookup_object("gcode").scripts,
+                         ["IFS_AUTOINSERT CHANNEL=1",
+                          "IFS_AUTOINSERT CHANNEL=4"])
+
+    def test_autoinsert_can_be_turned_off(self):
+        ## The event still fires - something else may want to know - but the
+        ## printer does not move filament on its own.
+        obj, printer, link = make_ifs(values={"autoinsert": False},
+                                      replies=[f13(insert=0b10)])
+        obj._connect()
+        obj._poll_once()
+        printer.reactor.run_async()
+        self.assertEqual(printer.lookup_object("gcode").scripts, [])
+        self.assertEqual(printer.sent, [("ifs:filament_inserted", ([2],))])
+
+    def test_a_lane_that_will_not_thread_does_not_take_klippy_down(self):
+        """This runs on the reactor, not inside anybody's command.
+
+        An exception escaping here is not a failed command, it is an unhandled
+        error in klippy's event loop. zmod's _safe_run_script swallows the same
+        thing for the same reason.
+        """
+        obj, printer, link = make_ifs(replies=[f13(insert=0b10)])
+        obj._connect()
+        printer.lookup_object("gcode").script_error = "lane 2 is empty"
+        obj._poll_once()
+        printer.reactor.run_async()          # must not raise
+        self.assertEqual(printer.sent, [("ifs:filament_inserted", ([2],))])
+
     def test_dropping_a_link_twice_is_harmless(self):
         obj, _, _ = make_ifs()
         obj._connect()
@@ -513,6 +563,44 @@ class TestCommandQueue(unittest.TestCase):
         gcmd = fakes.FakeGcmd({"CHANNEL": 4, "UNTIL": "done",
                                "LENGTH": 600, "SPEED": 1200})
         self.obj.cmd_IFS_RETRACT(gcmd)          # must not raise
+
+    def test_a_feed_that_never_reaches_the_toolhead_is_a_failure(self):
+        """The silent failure this replaces.
+
+        The board runs the whole commanded length, nothing arrives at the
+        toolhead, and F13 goes back to READY. Reading that as a finished move
+        let a load carry straight on to purge filament that was still somewhere
+        in the tube - "SOME filament came out the tip but it still looks white"
+        was exactly that.
+        """
+        self.obj._toolhead_has_filament = lambda: False
+        self.link.replies = (["FFS channel 1 feeding."]
+                             + [f13(state=STATUS.LOADING, chan=1)] * 2
+                             + [f13(state=STATUS.READY)]
+                             + ["", ""])
+        gcmd = fakes.FakeGcmd({"CHANNEL": 1, "UNTIL": "toolhead", "CHECK": 1,
+                               "LENGTH": 600, "SPEED": 1200, "TIMEOUT": 2.0})
+        with self.assertRaises(gcmd.error) as caught:
+            self.obj.cmd_IFS_FEED(gcmd)
+        self.assertIn("not_reached", str(caught.exception))
+
+    def test_a_feed_that_does_reach_the_toolhead_succeeds(self):
+        ## The contrast: same board, sensor tripped, no error.
+        self.obj._toolhead_has_filament = lambda: True
+        self.link.replies = (["FFS channel 1 feeding."]
+                             + [f13(state=STATUS.LOADING, chan=1)] * 4)
+        gcmd = fakes.FakeGcmd({"CHANNEL": 1, "UNTIL": "toolhead", "CHECK": 1,
+                               "LENGTH": 600, "SPEED": 1200, "TIMEOUT": 2.0})
+        self.obj.cmd_IFS_FEED(gcmd)         # must not raise
+
+    def test_an_until_done_move_still_finishes_on_ready(self):
+        ## Only a move aimed at a sensor can miss it. zmod's unchecked moves
+        ## wait for READY and that IS their success.
+        self.link.replies = (["FFS channel 4 exiting."]
+                             + [f13(state=STATUS.READY)] * 2)
+        gcmd = fakes.FakeGcmd({"CHANNEL": 4, "UNTIL": "done",
+                               "LENGTH": 600, "SPEED": 1200})
+        self.obj.cmd_IFS_RETRACT(gcmd)      # must not raise
 
     def test_a_timeout_releases_every_channel(self):
         """zmod's timeout path is F112 then F18.

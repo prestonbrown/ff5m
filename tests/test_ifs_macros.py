@@ -97,6 +97,96 @@ class GotoStationTest(unittest.TestCase):
         self.assertIn("F3000", approach)
 
 
+class AutoinsertTest(unittest.TestCase):
+    """IFS_AUTOINSERT is zmod's cmd_IFS_AUTOINSERT, the step we never had.
+
+    It runs the moment the board reports filament pushed into a lane and it is
+    what leaves that lane in a KNOWN position. Skipping it means every lane
+    sits wherever a human left it, and a later load feeds a guessed distance
+    into a tube whose contents nobody knows.
+    """
+
+    PARAMS = {"tube_mm": 1000.0, "ifs_speed": 1200.0,
+              "load_empty_mm": 600.0, "load_full_mm": 550.0,
+              "autoinsert_ret_mm": 90.0}
+
+    def printer(self, occupied=False, loaded=(1, 2, 4)):
+        return {
+            "ifs": {"connected": True, "error": None,
+                    "loaded_channels": list(loaded), "params": self.PARAMS},
+            "extruder": {"target": 0.0},
+            "filament_switch_sensor toolhead": {"filament_detected": occupied},
+        }
+
+    def render(self, channel=2, **kwargs):
+        return render_macro(HW, "IFS_AUTOINSERT",
+                            printer=self.printer(**kwargs),
+                            params={"CHANNEL": channel}).commands
+
+    def feeds(self, commands):
+        return [c for c in commands if c.startswith("IFS_FEED")]
+
+    def test_an_empty_extruder_draws_the_lane_to_the_toolhead(self):
+        ## zmod's filament_autoinsert_empty_length, waiting on the extruder
+        ## sensor: this is the branch that actually threads the tube.
+        feed = self.feeds(self.render())
+        self.assertEqual(len(feed), 1, feed)
+        self.assertIn("LENGTH=600", feed[0])
+        self.assertIn("SPEED=1200", feed[0])
+        self.assertIn("UNTIL=toolhead", feed[0])
+
+    def test_an_occupied_extruder_only_comes_up_to_the_hub(self):
+        ## filament_autoinsert_full_length, waiting on READY - the sensor is
+        ## already tripped by whatever is loaded, so it cannot be the signal.
+        feed = self.feeds(self.render(occupied=True))
+        self.assertEqual(len(feed), 1, feed)
+        self.assertIn("LENGTH=550", feed[0])
+        self.assertIn("UNTIL=done", feed[0])
+
+    def test_it_backs_off_the_gear_once_the_tip_arrives(self):
+        ## filament_autoinsert_ret_length. Leaving the tip inside the extruder
+        ## gear means the next load has nowhere to push it.
+        commands = self.render()
+        back = [c for c in commands if c.startswith("IFS_RETRACT")]
+        self.assertEqual(len(back), 1, commands)
+        self.assertIn("LENGTH=90", back[0])
+        self.assertLess(index_of(commands, r"IFS_FEED\b"),
+                        index_of(commands, r"IFS_RETRACT\b"))
+
+    def test_the_occupied_branch_does_not_back_off(self):
+        ## Nothing arrived at a sensor, so there is nothing to back away from.
+        self.assertEqual(
+            [c for c in self.render(occupied=True)
+             if c.startswith("IFS_RETRACT")], [])
+
+    def test_it_stops_the_board_before_touching_the_lane_again(self):
+        ## UNTIL=toolhead returns while the board is still feeding - the sensor
+        ## ends OUR wait, not the board's move. Retracting into a running feed
+        ## fights it.
+        commands = self.render()
+        self.assertLess(index_of(commands, r"IFS_STOP\b"),
+                        index_of(commands, r"IFS_RETRACT\b"))
+
+    def test_it_marks_the_lane_inserted_and_lets_go(self):
+        ## zmod ends with F23 then F39. Without the release the lane stays
+        ## clamped, which is how two of them sat gripped for hours.
+        commands = self.render()
+        self.assertLess(index_of(commands, r"IFS_MARK_INSERTED\b"),
+                        index_of(commands, r"IFS_RELEASE\b"))
+        self.assertIn("CHANNEL=2", commands[index_of(commands,
+                                                     r"IFS_RELEASE\b")])
+
+    def test_it_clamps_before_it_feeds(self):
+        commands = self.render()
+        self.assertLess(index_of(commands, r"IFS_CLAMP\b"),
+                        index_of(commands, r"IFS_FEED\b"))
+
+    def test_an_empty_lane_is_refused_rather_than_fed(self):
+        with self.assertRaises(Exception) as caught:
+            self.render(channel=3)
+        self.assertIn("no filament", str(caught.exception))
+
+
 class LoadTest(unittest.TestCase):
     """IFS_LOAD renders, and renders the numbers it means to.
 
