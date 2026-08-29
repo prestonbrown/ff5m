@@ -260,6 +260,22 @@ pass and then onto the wiper, which smears it rather than removing it.
   rather than the part - **X never travels while the head is behind `safe_y`**,
   because that is where the wall hardware is.
 
+- **A stalled load feed is not fatal, because in zmod it cannot be.**
+  `cmd_IFS_F10` ends in `print_result()`, which only prints; a stall reports
+  "Filament N stalled in IFS", runs `IFS_F112`, and the caller carries on to
+  `_SBROS_TRASH_DAVIM`. Ours raised a gcode error there, ending the load before
+  the co-push that completes it. `SOFT=1` now matches zmod. Scope this claim
+  carefully: the lane 1 stalls that prompted the change were a real obstruction
+  at the combiner, cleared by hand, and the soft path has never fired on this
+  printer. A healthy lane reaches the toolhead sensor, which sits UPSTREAM of
+  the extruder gear.
+
+- **Both purge passes go to the chute.** `_SBROS_TRASH_DAVIM` opens with
+  `_GOTO_TRASH` and zmod calls it once per pass, so both of its purges land in
+  the bin. Copying the extrusion without the move put our second 30 mm pass in
+  free air at X78.0 Y220.0, in front of the wiper pad, because `_IFS_WIPE` had
+  just moved the head there. Traced: it now runs at X52.5 Y229.0.
+
 ## Deliberate deviations
 
 Everything else should copy zmod. These do not, for stated reasons:
@@ -322,6 +338,25 @@ Everything else should copy zmod. These do not, for stated reasons:
   substitutes PLA for a material it has no entry for, which runs an unknown
   filament at 220 and snaps it off in the heatbreak. Ours reports no temperature
   and the load insists on an explicit `TEMP=`.
+
+- **The load asks the toolhead sensor AFTER the purge** (`IFS_REQUIRE_TOOLHEAD`).
+  zmod never asks at all: a lane that never arrived is purged as air and
+  recorded as loaded. A soft feed cannot answer the question on its own -
+  arriving at the extruder gear and never arriving end the feed identically -
+  so the check belongs after the extruder has had its turn at the filament.
+
+- **A swap retracts 130 mm, not 430.** The outgoing lane is moved by
+  `IFS_UNLOAD` alone: 60 mm through the extruder and 70 mm more, stock's own
+  `UnloadESpace` + `UnloadIFSSpace`. The extruder tip is about 150 mm above the
+  combiner, so that clears the shared path with margin, and the lane is left
+  staged for its own next load. The extra `hub_clear_mm` retreat now fires only
+  for a lane PARKED at the hub without being loaded, which is what a failed load
+  leaves behind.
+
+- **An eject gives up the lane's claim on the shared path.** The filament is no
+  longer in the machine to hold it. Measured: ejecting a parked lane 1 left
+  `ifs_at_hub=1` with the spool on the bench, and the next insertion of lane 4
+  was refused by a lane that was not in the printer.
 
 ## What the "it will not feed" night actually was
 
