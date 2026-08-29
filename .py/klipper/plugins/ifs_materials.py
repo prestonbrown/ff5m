@@ -92,6 +92,9 @@ class IfsMaterials(object):
 
     ## -- gcode --------------------------------------------------------------
 
+    ## GCODE_SAFE: the file read is inside _document(), which turns a
+    ## missing or unparseable Adventurer5M.json into available=False. A
+    ## printer whose stock config is gone still answers this command.
     def cmd_IFS_MATERIALS(self, gcmd):
         info = self.get_status()
         if not info["available"]:

@@ -747,6 +747,9 @@ class IFS(object):
 
     ## -- gcode --------------------------------------------------------------
 
+    ## GCODE_SAFE: reads the cached snapshot and formats it. get_status()
+    ## returns a dict with every key present even when the link is down,
+    ## so there is nothing here that can raise.
     def cmd_IFS_STATUS(self, gcmd):
         info = self.get_status()
         if not info["connected"]:

@@ -79,6 +79,8 @@ class IfsToolheadSensor(ifs_sensor_base.IfsSensorBase):
             return None
         return self.classifier.has_filament(value)
 
+    ## GCODE_SAFE: _adc() answers None rather than raising when there is no
+    ## ADC to read, and describing a float cannot fail.
     def cmd_IFS_SENSOR_VALUE(self, gcmd):
         value = self._adc()
         if value is None:

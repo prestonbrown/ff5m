@@ -1,0 +1,19 @@
+# Gcode command handlers that can still take the printer down.
+#
+# Klipper turns any exception that is not a gcode error into "Internal error on
+# command", which shuts klippy down and takes the MCUs with it. Everything here
+# predates the check and lives in files this port has not otherwise touched, so
+# it is recorded rather than rewritten.
+#
+# THIS LIST MAY SHRINK. It must never grow: a new handler gets a try or a
+# `## GCODE_SAFE: <reason>` comment instead.
+.py/klipper/plugins/feather_screen.py:cmd_REFRESH_FEATHER_THEME
+.py/klipper/plugins/load_cell_tare.py:cmd_LOAD_CELL_TARE
+.py/klipper/plugins/md5_check.py:cmd_CHECK_MD5
+.py/klipper/plugins/mod_params.py:cmd_LIST_MOD_PARAMS
+.py/klipper/plugins/mod_params.py:cmd_RELOAD_MOD_PARAMS
+.py/klipper/plugins/mod_params.py:cmd_GET_MOD_PARAM
+.py/klipper/plugins/mod_params.py:cmd_GET_MOD
+.py/klipper/plugins/mod_params.py:cmd_SET_MOD
+.py/klipper/plugins/resurrection.py:cmd_RESURRECTION_PAUSE
+.py/klipper/plugins/resurrection.py:cmd_RESURRECTION_RESUME
