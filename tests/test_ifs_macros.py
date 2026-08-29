@@ -757,6 +757,24 @@ class PurgeTest(unittest.TestCase):
         for shake, wipe in zip(shakes, wipes):
             self.assertLess(shake, wipe, commands)
 
+    def test_each_pass_freezes_its_tail_before_the_snap_off(self):
+        """zmod's _SBROS_TRASH_DAVIM blasts the part fan and waits four
+        seconds BEFORE its snap-off bounce. Shaking a molten tail strung
+        filament in front of the chute - watched on the machine.
+        """
+        commands = self.render(slot=1)
+        shakes = [i for i, c in enumerate(commands)
+                  if c.startswith("_IFS_SHAKE")]
+        self.assertEqual(len(shakes), 2, commands)
+        for shake in shakes:
+            block = commands[max(0, shake - 5):shake]
+            self.assertIn("G4 P4000", block, (shake, commands))
+            fan = [i for i, c in enumerate(block)
+                   if c.startswith("M106 S") and c != "M106 S0"]
+            wait = [i for i, c in enumerate(block) if c == "G4 P4000"]
+            self.assertTrue(fan and wait and fan[-1] < wait[-1],
+                            (shake, commands))
+
     def test_every_purge_pass_happens_over_the_chute(self):
         """Both passes, because _IFS_WIPE moves the head away between them.
 
