@@ -1034,6 +1034,35 @@ class ClearExtruderTest(unittest.TestCase):
                          commands)
 
 
+class StationLiftTest(unittest.TestCase):
+    """The lift is relative, so it must not happen on every station visit.
+
+    A tool change visits the back edge four times - chute, cutter, pad, chute.
+    Lifting each time stacked to Z 55, 105, 155, 205 and then the ceiling on a
+    real mid-print change, leaving the nozzle the height of the machine above
+    the bed and dripping. Behind safe_y the head is already clear of the part.
+    """
+
+    def render(self, y):
+        return render_macro(HW, "_IFS_GOTO_STATION", printer={
+            "gcode_macro _IFS_GEOMETRY":
+                load_macro(HW, "_IFS_GEOMETRY").variables,
+            "toolhead": {"homed_axes": "xyz"},
+            "gcode_move": {"gcode_position": {"x": 52.5, "y": y, "z": 5.0}},
+        }, params={"X": 52.5}).commands
+
+    def lifts(self, commands):
+        return [c for c in commands if c.startswith("MOVE_SAFE")]
+
+    def test_it_lifts_coming_out_of_the_print_area(self):
+        self.assertEqual(len(self.lifts(self.render(90.0))), 1)
+
+    def test_it_does_not_lift_again_at_the_back_edge(self):
+        ## safe_y and beyond: already clear, and the lift would stack.
+        self.assertEqual(self.lifts(self.render(220.0)), [])
+        self.assertEqual(self.lifts(self.render(229.0)), [])
+
+
 class ToolChangeTest(unittest.TestCase):
     """A swap during a print has to put the print back exactly as it was.
 
