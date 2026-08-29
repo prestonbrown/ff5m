@@ -793,6 +793,36 @@ assert_eq "a missing asset is not an error" "UNTOUCHED" "$(cat "$DEST")"
 assert_contains "the bring-up actually installs it" \
     "$(cat "$BOOTSTRAP")" "    install_boot_logo"
 
+# The defaults live under MOD_ROOT, which platform.sh sets - and run_bootstrap
+# sources that hundreds of lines BELOW these assignments. Expanding MOD_ROOT at
+# file scope silently yields "/.bin/logo/ad5x.jpg", the -f test fails, and the
+# install no-ops on a real printer while every path-injecting test still passes.
+# That shipped once. These pin the late binding by exercising the DEFAULT.
+path_of() { MOD_ROOT=/mr "$BASH_BIN" -c ". \"$1\"; $2" _ "$BOOTSTRAP" 2>&1; }
+
+assert_eq "the boot logo default resolves against MOD_ROOT" \
+    "/mr/.bin/logo/ad5x.jpg" "$(path_of "$BOOTSTRAP" boot_logo_path)"
+assert_eq "the status card default resolves against MOD_ROOT" \
+    "/mr/.py/ad5x_status_card.py" "$(path_of "$BOOTSTRAP" status_card_path)"
+
+# Set-but-empty still means opt out; unset means default. Both must survive.
+assert_empty "empty AD5X_BOOT_LOGO opts out" \
+    "$(MOD_ROOT=/mr AD5X_BOOT_LOGO= "$BASH_BIN" -c '. "$1"; boot_logo_path' _ "$BOOTSTRAP")"
+assert_empty "empty AD5X_STATUS_CARD opts out" \
+    "$(MOD_ROOT=/mr AD5X_STATUS_CARD= "$BASH_BIN" -c '. "$1"; status_card_path' _ "$BOOTSTRAP")"
+
+# End to end through the default, the way a real boot reaches it.
+DEFROOT="$WORK/defroot"; mkdir -p "$DEFROOT/.bin/logo"
+printf 'DEFAULT-LOGO\n' > "$DEFROOT/.bin/logo/ad5x.jpg"
+DEFDEST="$LOGO_WORK/default_dest.jpeg"; printf 'FOREIGN\n' > "$DEFDEST"
+MOD_ROOT="$DEFROOT" AD5X_BOOT_LOGO_DEST="$DEFDEST" "$BASH_BIN" -c '
+    . "$1"; install_boot_logo' _ "$BOOTSTRAP" >/dev/null 2>&1
+assert_eq "install_boot_logo uses the MOD_ROOT default" "DEFAULT-LOGO" "$(cat "$DEFDEST")"
+
+# The panel redraw must also be wired in, not just defined.
+assert_contains "the bring-up actually shows the status card" \
+    "$(cat "$BOOTSTRAP")" "    show_status_card"
+
 # Step 2 must actually call it - a helper nothing invokes is the same bug.
 plan=$(run_forced mips --dry-run)
 assert_contains "the dry-run plan documents the network takeover" "$plan" "ifconfig up + udhcpc"

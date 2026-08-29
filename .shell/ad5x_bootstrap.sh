@@ -400,8 +400,29 @@ NET_SYSFS="${AD5X_NET_SYSFS:-/sys/class/net}"
 ## under someone else's brand. Assert ours on every bring-up instead.
 ##
 ## Set AD5X_BOOT_LOGO empty to keep whatever is already installed.
-BOOT_LOGO="${AD5X_BOOT_LOGO-$MOD_ROOT/.bin/logo/ad5x.jpg}"
+## Resolved at CALL time, not here: MOD_ROOT comes from platform.sh, which
+## run_bootstrap sources hundreds of lines below this. Expanding it now yields
+## "/.bin/logo/ad5x.jpg", the file test fails, and the install silently no-ops.
+## Unset means the default; set-but-empty means opt out.
+boot_logo_path() {
+    if [ -n "${AD5X_BOOT_LOGO+set}" ]; then printf '%s' "$AD5X_BOOT_LOGO"
+    else printf '%s' "$MOD_ROOT/.bin/logo/ad5x.jpg"; fi
+}
 BOOT_LOGO_DEST="${AD5X_BOOT_LOGO_DEST:-/usr/prog/logo.jpeg}"
+
+## The panel AFTER boot.
+##
+## Forge-X's splash binary is an ARM build and this board is MIPS, so once the
+## stock UI is stopped nothing paints the framebuffer and the panel sits white -
+## a finished boot looks like a hung one. Until HelixScreen owns the screen,
+## redraw the boot logo with the address the printer actually came up on.
+## Set AD5X_STATUS_CARD empty to leave the panel alone.
+## Same late-binding rule as boot_logo_path above.
+status_card_path() {
+    if [ -n "${AD5X_STATUS_CARD+set}" ]; then printf '%s' "$AD5X_STATUS_CARD"
+    else printf '%s' "$MOD_ROOT/.py/ad5x_status_card.py"; fi
+}
+STATUS_CARD_OUT="${AD5X_STATUS_CARD_OUT:-/tmp/forgex_status.jpg}"
 
 iface_has_ipv4() {
     ifconfig "$1" 2>/dev/null | grep -q 'inet addr:' && return 0
@@ -476,7 +497,64 @@ start_wifi_supplicant() {
     return 1
 }
 
+## The interpreter carrying Pillow is the stock one klippy already runs under,
+## and it will not even start without klippy's LD_LIBRARY_PATH. Both are read
+## off the live process rather than restating a path list that stock start.sh
+## owns and could change under us.
+_klippy_pid() {
+    # shellcheck disable=SC2009  # pgrep is the wrong tool on this board: the
+    # BusyBox build misses live processes, and its -f form matches the checking
+    # command's own line. restart_klipper.sh reads ps the same way.
+    ps w 2>/dev/null | grep "[k]lippy\.py" | awk '{print $1}' | head -1
+}
+
+_klippy_python() {
+    local pid=$1
+    tr '\0' '\n' < "/proc/$pid/cmdline" 2>/dev/null | head -1
+}
+
+_klippy_ld_path() {
+    local pid=$1
+    tr '\0' '\n' < "/proc/$pid/environ" 2>/dev/null |
+        sed -n 's/^LD_LIBRARY_PATH=//p' | head -1
+}
+
+## First address we actually hold, wired preferred over wireless.
+primary_ipv4() {
+    local iface addr
+    for iface in $NET_IFACES $WIFI_IFACE; do
+        addr=$(ip -4 addr show "$iface" 2>/dev/null |
+               sed -n 's|.*inet \([0-9.]*\)/.*|\1|p' | head -1)
+        [ -n "$addr" ] && echo "$addr" && return 0
+    done
+    return 1
+}
+
+## Never fatal and never noisy: a printer with a white panel still prints, and
+## this runs at the very end of a bring-up that has already succeeded.
+show_status_card() {
+    local STATUS_CARD BOOT_LOGO
+    STATUS_CARD=$(status_card_path)
+    BOOT_LOGO=$(boot_logo_path)
+    [ -n "$STATUS_CARD" ] || return 0
+    [ -f "$STATUS_CARD" ] || return 0
+    [ -f "$BOOT_LOGO" ] || return 0
+
+    local pid py ld addr
+    pid=$(_klippy_pid); [ -n "$pid" ] || return 0
+    py=$(_klippy_python "$pid"); [ -x "$py" ] || return 0
+    ld=$(_klippy_ld_path "$pid")
+    addr=$(primary_ipv4) || addr="no network"
+
+    LD_LIBRARY_PATH="$ld" "$py" "$STATUS_CARD" \
+        --base "$BOOT_LOGO" --out "$STATUS_CARD_OUT" \
+        --line "> READY   $addr" >/dev/null 2>&1 || return 0
+    cmd_jpeg_display "$STATUS_CARD_OUT" >/dev/null 2>&1 || return 0
+    echo "// [ad5x] Panel: status card shown ($addr)"
+}
+
 install_boot_logo() {
+    local BOOT_LOGO; BOOT_LOGO=$(boot_logo_path)
     [ -n "$BOOT_LOGO" ] || return 0
     [ -f "$BOOT_LOGO" ] || return 0
     ## Idempotent: the common case is a no-op, so this costs one compare a boot.
@@ -818,6 +896,9 @@ run_bootstrap() {
     # Step 9. Done: klippy (Step 7) and the chroot services (Step 8) are up. Stock
     # app_startup.sh continues; it does not launch klippy itself.
     progress 9
+    ## Last, so the panel reflects a bring-up that actually finished.
+    show_status_card
+
     echo "// [ad5x] Bootstrap complete."
     return 0
 }
