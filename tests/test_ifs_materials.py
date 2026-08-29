@@ -13,6 +13,7 @@ import json
 import os
 import pathlib
 import tempfile
+import types
 import unittest
 
 import ifs_modules
@@ -390,6 +391,109 @@ class TestHandlingTemperatures(ConfigFileTest):
         line = [r for r in gcmd.responses if r.strip().startswith("slot 3")]
         self.assertEqual(len(line), 1, gcmd.responses)
         self.assertNotIn("@", line[0])
+
+
+class TestColourDistance(unittest.TestCase):
+    def test_identical_colours_are_zero(self):
+        self.assertEqual(
+            MATERIALS.colour_distance("#A03CF7", "#A03CF7"), 0.0)
+
+    def test_black_and_white_is_one(self):
+        self.assertEqual(MATERIALS.colour_distance("#000000", "#FFFFFF"), 1.0)
+
+    def test_an_unknown_colour_on_either_side_is_none(self):
+        ## None is the caller's cue to purge the full length; it must never be
+        ## mistaken for "close to everything" (a small distance).
+        for pair in ((None, "#FFFFFF"), ("#FFFFFF", None),
+                     ("", "#FFFFFF"), ("#FFFFFF", "not-a-colour")):
+            self.assertIsNone(MATERIALS.colour_distance(*pair), pair)
+
+    def test_three_digit_hex_expands_to_six(self):
+        self.assertEqual(MATERIALS.colour_distance("#F80", "#FF8800"), 0.0)
+
+    def test_it_is_symmetric(self):
+        self.assertAlmostEqual(MATERIALS.colour_distance("#A03CF7", "#FFFFFF"),
+                               MATERIALS.colour_distance("#FFFFFF", "#A03CF7"))
+
+
+class TestPurgeTable(ConfigFileTest):
+    """The first purge pass, scaled by how far apart the colours are.
+
+    Floor 50 mm: the hotend holds ~35 mm, so anything shorter never pushes
+    new colour out of the nozzle. Ceiling: the printer's own first_purge_mm.
+    """
+
+    def setUp(self):
+        ConfigFileTest.setUp(self)
+        self.obj, self.printer = make_materials(self.path)
+        self.set_full_purge(100.0)
+
+    def set_full_purge(self, mm):
+        ## The ceiling is [ifs]'s own setting; the table is built against it.
+        self.printer.add_object("ifs", types.SimpleNamespace(
+            params=types.SimpleNamespace(first_purge_mm=mm)))
+
+    def table(self):
+        return self.obj.get_status()["purge_first_mm"]
+
+    def test_close_colours_bottom_out_at_the_floor(self):
+        self.obj.cmd_IFS_SET_MATERIAL(
+            fakes.FakeGcmd({"SLOT": 2, "COLOR": "FFFFFF"}))
+        ## Slot 4 is #FFFFFF: identical colours in different lanes scale to
+        ## exactly the floor - the hotend still has to be filled and flushed.
+        ## The literal, not PURGE_FLOOR_MM: 50 is load-bearing (the hotend
+        ## holds ~35 mm), so changing it must be a conscious decision that
+        ## walks past this number.
+        self.assertAlmostEqual(self.table()["2>4"], 50.0, places=6)
+
+    def test_opposite_colours_get_the_full_length(self):
+        self.obj.cmd_IFS_SET_MATERIAL(
+            fakes.FakeGcmd({"SLOT": 2, "COLOR": "000000"}))
+        self.assertAlmostEqual(self.table()["2>4"], 100.0, places=2)
+
+    def test_mid_colours_land_between_the_two(self):
+        ## Grey #898989 to white #FFFFFF: neither floor nor ceiling. Literals
+        ## for the same reason as the floor test - a mutation of the constant
+        ## must move the answer out of this window, not the window with it.
+        self.assertGreater(self.table()["2>4"], 55.0)
+        self.assertLess(self.table()["2>4"], 99.0)
+
+    def test_the_ordering_follows_the_distance(self):
+        self.obj.cmd_IFS_SET_MATERIAL(
+            fakes.FakeGcmd({"SLOT": 2, "COLOR": "000000"}))
+        self.obj.cmd_IFS_SET_MATERIAL(
+            fakes.FakeGcmd({"SLOT": 3, "COLOR": "FEFEFE"}))
+        table = self.table()
+        self.assertLess(table["3>4"], table["1>4"], table)   # near-white
+        self.assertLess(table["1>4"], table["2>4"], table)   # violet
+        self.assertGreater(table["2>4"], table["3>4"], table)  # black
+
+    def test_an_unknown_colour_pair_is_absent(self):
+        ## Slot 3 is empty in the fixture. Absent means "purge full length"
+        ## to the macro - unknown colours are never guessed close.
+        table = self.table()
+        self.assertNotIn("3>4", table)
+        self.assertNotIn("4>3", table)
+
+    def test_a_pair_with_itself_is_not_listed(self):
+        ## IFS_SELECT no-ops on the loaded slot; the entry could only mislead.
+        self.assertNotIn("1>1", self.table())
+
+    def test_without_an_ifs_object_there_is_no_table(self):
+        del self.printer.objects["ifs"]
+        self.assertEqual(self.table(), {})
+
+    def test_the_floor_never_rises_above_the_full_setting(self):
+        ## A printer configured to purge 40 mm in total must not be scaled UP
+        ## to our 50 mm floor by the colour table.
+        self.set_full_purge(40.0)
+        table = self.table()
+        for value in table.values():
+            self.assertLessEqual(value, 40.0 + 1e-9, table)
+
+    def test_an_unreadable_file_publishes_an_empty_table(self):
+        obj, _ = make_materials(self.path + ".nope")
+        self.assertEqual(obj.get_status()["purge_first_mm"], {})
 
 
 if __name__ == "__main__":

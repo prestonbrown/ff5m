@@ -52,6 +52,41 @@ TEMPERATURES = {
 ##     temp_PLA: 215
 TEMPERATURE_PREFIX = "temp_"
 
+## The shortest useful first purge pass, mm. The hotend alone holds ~35 mm of
+## filament (the refill distance after a cut), so a shorter pass never pushes
+## new colour out of the nozzle at all - it would finish with the print
+## starting on stale filament. 50 fills the hotend AND flushes it; the full
+## setting above that is what an unknown or maximally distant colour gets.
+PURGE_FLOOR_MM = 50.0
+
+
+def _rgb(value):
+    """(r, g, b) 0-255 from '#RGB'/'#RRGGBB', or None if not a colour."""
+    if not value:
+        return None
+    digits = value.lstrip("#")
+    if len(digits) == 3:
+        digits = "".join(char * 2 for char in digits)
+    try:
+        raw = bytes.fromhex(digits)
+    except ValueError:
+        return None
+    return raw if len(raw) == 3 else None
+
+
+def colour_distance(outgoing, incoming):
+    """How far apart two colours are, 0.0 (identical) to 1.0 (black/white).
+
+    Plain Euclidean RGB, normalised so opposite corners of the cube are 1.0.
+    None when either colour is unknown - the caller cannot scale what it does
+    not know, and must fall back to the full-length purge.
+    """
+    pair = [_rgb(value) for value in (outgoing, incoming)]
+    if None in pair:
+        return None
+    total = sum((a - b) ** 2 for a, b in zip(*pair))
+    return (total / (3.0 * 255 * 255)) ** 0.5
+
 
 def _at(temp):
     """Suffix for a report line: the handling temperature, or nothing."""
@@ -125,6 +160,33 @@ class IfsMaterials(object):
             return None
         return self.temperatures.get(material.upper())
 
+    def purge_first_mm(self, slots):
+        """{"from>to": first-pass purge mm} for every pair of KNOWN colours.
+
+        Scaled between PURGE_FLOOR_MM and the printer's own first_purge_mm by
+        colour distance, so close colours flush less than opposite ones. A
+        pair missing from the table - an unknown colour on either side, or no
+        [ifs] object to ask for the full length - makes the caller purge the
+        full setting, which is the safe answer.
+        """
+        ifs = self.printer.lookup_object("ifs", None)
+        if ifs is None:
+            return {}
+        full = float(ifs.params.first_purge_mm)
+        floor = min(PURGE_FLOOR_MM, full)
+        table = {}
+        for from_slot, from_value in slots.items():
+            for to_slot, to_value in slots.items():
+                if from_slot == to_slot:
+                    continue
+                distance = colour_distance(from_value.get("color"),
+                                           to_value.get("color"))
+                if distance is None:
+                    continue
+                table["%s>%s" % (from_slot, to_slot)] = (
+                    floor + distance * (full - floor))
+        return table
+
     def _recorded_lane(self):
         """The lane WE know is loaded, if anything is keeping that record.
 
@@ -149,6 +211,7 @@ class IfsMaterials(object):
         if document is None:
             return {"available": False, "channel_count": None,
                     "enabled": False, "slots": {}, "loaded": None,
+                    "purge_first_mm": {},
                     "temperatures": dict(self.temperatures)}
         slots = self.config_file.materials(document)
         recorded = self._recorded_lane()
@@ -165,6 +228,9 @@ class IfsMaterials(object):
             "slots": {str(slot): dict(value,
                                       temp=self.temperature(value.get("type")))
                       for slot, value in slots.items()},
+            ## The colour-distance purge table, "from>to" keyed, for the load
+            ## macros. Absent pairs mean "full length" to the caller.
+            "purge_first_mm": self.purge_first_mm(slots),
             "loaded": None if loaded is None else dict(
                 loaded, temp=self.temperature(loaded.get("type"))),
             "temperatures": dict(self.temperatures),

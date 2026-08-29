@@ -297,7 +297,7 @@ class LoadTest(unittest.TestCase):
         ## Without SLOT the purge cannot drive the lane, and the co-push is the
         ## whole point. IFS_MARK_INSERTED is zmod's F23, the last IFS step.
         commands = self.render()
-        self.assertIn("_IFS_PURGE SLOT=1 EXTRA=0.0", commands)
+        self.assertIn("_IFS_PURGE SLOT=1 EXTRA=0.0 FIRST_MM=100.0", commands)
         self.assertIn("IFS_MARK_INSERTED CHANNEL=1", commands)
         self.assertLess(index_of(commands, r"_IFS_PURGE"),
                         index_of(commands, r"IFS_MARK_INSERTED"))
@@ -1009,11 +1009,11 @@ class MaterialTest(unittest.TestCase):
               "unload_extruder_mm": 60.0, "unload_speed": 600.0,
               "cut_before_mm": 0.0, "cut_after_mm": 5.0}
 
-    def printer(self, slots, recorded=0, target=0.0):
+    def printer(self, slots, recorded=0, target=0.0, table=None):
         return {
             "ifs": {"connected": True, "error": None,
                     "loaded_channels": [1, 2, 4], "params": self.PARAMS},
-            "ifs_materials": {"slots": slots},
+            "ifs_materials": {"slots": slots, "purge_first_mm": table or {}},
             "extruder": {"target": target},
             "filament_switch_sensor toolhead": {"filament_detected": False},
             "save_variables": {"variables": {"ifs_loaded": recorded,
@@ -1025,6 +1025,9 @@ class MaterialTest(unittest.TestCase):
         return render_macro(
             IFS, "IFS_LOAD", printer=self.printer(slots, **kwargs),
             params=params if params is not None else {"SLOT": 1}).commands
+
+    def purge_line(self, commands):
+        return [c for c in commands if c.startswith("_IFS_PURGE")][0]
 
     PLA = {"type": "PLA", "color": "#FFFFFF", "temp": 220.0}
     ABS = {"type": "ABS", "color": "#898989", "temp": 250.0}
@@ -1107,6 +1110,79 @@ class MaterialTest(unittest.TestCase):
         commands = render_macro(IFS, "IFS_LOAD", printer=printer,
                                 params={"SLOT": 1}).commands
         self.assertIn("M104 S220", commands)
+
+
+class ColourScaledPurgeTest(unittest.TestCase):
+    """The first pass follows the colour distance table; unknowns stay full.
+
+    [ifs_materials] publishes the table ("from>to" keyed, scaled between a
+    floor that still fills the hotend and the printer's full setting) - the
+    load hands the entry to the purge, and everything the macro cannot know
+    falls back to the full-length purge, which is the safe answer.
+    """
+
+    PARAMS = MaterialTest.PARAMS
+    PLA = MaterialTest.PLA
+    ABS = MaterialTest.ABS
+    RED_PLA = MaterialTest.RED_PLA
+
+    def render(self, slots, table, **kwargs):
+        printer = {
+            "ifs": {"connected": True, "error": None,
+                    "loaded_channels": [1, 2, 4], "params": self.PARAMS},
+            "ifs_materials": {"slots": slots, "purge_first_mm": table},
+            "extruder": {"target": 220.0},
+            "filament_switch_sensor toolhead": {"filament_detected": False},
+            "save_variables": {"variables": {"ifs_loaded": 4,
+                                             "ifs_at_hub": 0}},
+            "gcode_macro _IFS_SENSOR_HOLD": {"was_enabled": 1},
+        }
+        printer.update(kwargs)
+        return render_macro(IFS, "IFS_LOAD", printer=printer,
+                            params={"SLOT": 1}).commands
+
+    def purge_line(self, commands):
+        return [c for c in commands if c.startswith("_IFS_PURGE")][0]
+
+    def test_a_table_entry_reaches_the_purge(self):
+        ## Slot 4 white outgoing, slot 1 violet incoming: a mid distance.
+        commands = self.render({"1": self.PLA, "4": self.RED_PLA},
+                               {"4>1": 74.5})
+        self.assertIn("FIRST_MM=74.5", self.purge_line(commands))
+
+    def test_a_pair_missing_from_the_table_purges_full(self):
+        ## Unknown colour on either side is not in the table. Guessing "close"
+        ## would start the print on stale colour; full is the safe answer.
+        commands = self.render({"1": self.PLA, "4": self.RED_PLA}, {})
+        self.assertIn("FIRST_MM=100.0", self.purge_line(commands))
+
+    def test_a_material_change_ignores_the_colour_scale(self):
+        ## A different TYPE is a different melt, not a different tint: full
+        ## length AND the type bonus, whatever the colours look like.
+        commands = self.render({"1": self.PLA, "4": self.ABS}, {"4>1": 74.5})
+        purge = self.purge_line(commands)
+        self.assertIn("FIRST_MM=100.0", purge)
+        self.assertIn("EXTRA=90.0", purge)
+
+    def test_the_scaled_length_drives_the_lane_and_the_extruder_equally(self):
+        ## The co-push only works if both sides move the same distance - see
+        ## PurgeTest. The scaled length flows into both, not just the G1.
+        printer = {"ifs": {"params": self.PARAMS},
+                   "gcode_macro _IFS_SENSOR_HOLD": {"was_enabled": 1}}
+        commands = render_macro(IFS, "_IFS_PURGE", printer=printer,
+                                params={"SLOT": 1, "FIRST_MM": 74.5}).commands
+        self.assertIn("G1 E74.5 F300.0", commands)
+        self.assertIn("LENGTH=74.5",
+                      [c for c in commands if c.startswith("IFS_FEED")][0])
+
+    def test_the_scale_is_said_out_loud(self):
+        ## The operator standing at the machine wants to see the number the
+        ## change actually purged, not the one it would have purged.
+        commands = self.render({"1": self.PLA, "4": self.RED_PLA},
+                               {"4>1": 74.5})
+        self.assertTrue(
+            [c for c in commands if c.startswith('RESPOND')
+             and "74.5" in c and "first purge" in c], commands)
 
 
 class PartFanTest(unittest.TestCase):
