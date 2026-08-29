@@ -208,6 +208,7 @@ whether filament actually moved.
 | feed lane 1 | 400 mm / 20.0 s | 2.0 s |
 | retract lane 4 | 150 mm / 7.5 s | **7.8 s, continuous** |
 | feed lane 2 | 150 mm / 7.5 s | 5.0 s |
+| lane 1 via `IFS_AUTOINSERT` | 600 mm / 30.0 s | 1.3 s |
 
 Every retract runs its full length. Every feed dies early, on every lane tried,
 and repeated feeds on one lane get *worse* - which is what grinding a flat on
@@ -224,6 +225,7 @@ tube rather than any fixed point:
 - a 200 mm retract then ran its full length
 - feed 2 moved 230 mm - roughly the 200 mm the retract had just returned
 - feed 3, immediately after, managed 40 mm
+- and the auto-insert, later still, managed 25 mm
 
 A fixed obstruction does not move when you retract, and it does not grant you
 exactly as much travel as you just gave back. Slack does.
@@ -238,9 +240,15 @@ common to the spool side rather than at three separate jams.
 This is a hypothesis with a one-minute physical test: pull filament off each
 spool by hand at the IFS input. It has not been run.
 
-None of this was measured through `IFS_AUTOINSERT`, which did not exist yet -
-the lanes were positioned by hand and by ad-hoc feeds. Re-measure through it
-now that a lane can be put in a known position.
+The one thing the numbers say without ambiguity is **stop feeding**. Each
+attempt on lane 1 moved less than the one before, which is what grinding a flat
+on the filament at the drive gear looks like, and every retry makes recovery
+harder. The board's own reports have ruled the software out; this needs hands.
+
+`IFS_AUTOINSERT` has since been run on lane 1 and behaved exactly as intended:
+clamp, feed, stall detected at three consecutive still polls, F112, a clean
+`gcode.error` naming the channel, and no klippy shutdown. It found the same
+mechanical wall. The flow is not what is broken.
 
 ## Drivers
 
