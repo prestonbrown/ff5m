@@ -692,14 +692,13 @@ class IFS(object):
                                + (length * 20) // speed + 1)
             return None
 
-        ## CHECK mirrors zmod's: only the LOAD feed passes CHECK=1 and gets
-        ## silk and stall judged against the channel's activity state. Its
-        ## unload is a plain `IFS_F11 LEN SPEED` with no CHECK, which waits for
-        ## READY and nothing else. Watching a retract for stalls failed one that
-        ## had worked - the motion stopping IS how a retract ends.
-        ## CHECK also turns on the silk check, as zmod's does: its checked F10
-        ## and F11 both pass silk alongside stall, so a lane that runs out is
-        ## reported as an empty lane rather than as a jam.
+        ## CHECK mirrors zmod's: it turns on BOTH judgements its checked calls
+        ## pass, silk and stall, against the channel's activity state - so a
+        ## lane that ran out is reported as an empty lane rather than as a jam.
+        ## Only the LOAD feed asks for it. zmod's unload is a plain
+        ## `IFS_F11 LEN SPEED` that waits for READY and nothing else, and
+        ## watching a retract for stalls failed one that had worked: the motion
+        ## stopping IS how a retract ends.
         check = gcmd.get_int("CHECK", 0)
         for attempt in range(self.retry_count):
             ## A fresh waiter per attempt: the one that saw the fault has a
