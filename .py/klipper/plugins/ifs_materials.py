@@ -263,7 +263,11 @@ class IfsMaterials(object):
 
     def cmd_IFS_SET_MATERIAL(self, gcmd):
         slot = gcmd.get_int("SLOT", minval=0)
-        count = self.config_file.channel_count(self._document())
+        document = self._document()
+        ## None when the settings file does not exist yet: there is nothing
+        ## to count lanes from, and the range check simply has no answer.
+        count = (self.config_file.channel_count(document)
+                 if document is not None else None)
         if count is not None and slot > count:
             raise gcmd.error("SLOT %d is out of range; this printer has %d"
                              % (slot, count))
@@ -284,7 +288,12 @@ class IfsMaterials(object):
                 slot,
                 current["type"] if material is None else (material or None),
                 current["color"] if colour is None else (colour or None))
-        except OSError as exc:
+        except (OSError, ValueError) as exc:
+            ## OSError: the write itself failed. ValueError: a settings file
+            ## that exists but does not parse - never overwritten, so the
+            ## operator gets to recover what is in it. Both as gcode errors;
+            ## a raw exception out of a command handler is a shutdown on a
+            ## console-driven host.
             raise gcmd.error("cannot write %s: %s" % (self.path, exc))
         self._cache_stamp = None      # force a re-read on the next question
         updated = self.material(slot) or {}

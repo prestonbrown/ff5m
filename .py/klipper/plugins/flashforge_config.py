@@ -73,8 +73,18 @@ class FlashForgeConfig(object):
             raise
 
     def update(self, mutate):
-        """Apply `mutate(document)` and write the result back. Returns it."""
-        document = self.load()
+        """Apply `mutate(document)` and write the result back. Returns it.
+
+        A settings file that does not exist yet is started rather than
+        refused: an image without FlashForge's own UI has no reason to have
+        one, and the slot registry still needs somewhere to live. Only a
+        plain miss bootstraps - a file that exists but will not read is
+        raised, because overwriting it could destroy something recoverable.
+        """
+        try:
+            document = self.load()
+        except FileNotFoundError:
+            document = {}
         mutate(document)
         self.save(document)
         return document

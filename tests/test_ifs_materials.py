@@ -172,6 +172,44 @@ class TestWriting(ConfigFileTest):
         self.assertIsNone(FF.load_quietly(self.path + ".nope"))
 
 
+class TestBootstrap(unittest.TestCase):
+    """An image without FlashForge's settings file still gets a registry.
+
+    The module claims to run on any base klipper; a host whose stock UI never
+    existed has no Adventurer5M.json, and IFS_SET_MATERIAL is the only way
+    to tell it what a slot holds. A plain miss starts the file; a file that
+    exists but will not read is never overwritten.
+    """
+
+    def setUp(self):
+        self.dir = tempfile.TemporaryDirectory()
+        self.addCleanup(self.dir.cleanup)
+        self.path = os.path.join(self.dir.name, "Adventurer5M.json")
+        self.obj, self.printer = make_materials(self.path)
+
+    def test_set_material_starts_the_file_when_it_is_absent(self):
+        self.obj.cmd_IFS_SET_MATERIAL(
+            fakes.FakeGcmd({"SLOT": 1, "TYPE": "PLA", "COLOR": "FF0000"}))
+        self.assertEqual(self.obj.material(1),
+                         {"type": "PLA", "color": "#FF0000"})
+        with open(self.path) as handle:
+            self.assertEqual(json.load(handle)["FFMInfo"]["ffmType1"], "PLA")
+
+    def test_the_slot_range_check_has_no_answer_without_the_file(self):
+        ## Not a crash: nothing is countable yet, so every slot is plausible.
+        self.obj.cmd_IFS_SET_MATERIAL(
+            fakes.FakeGcmd({"SLOT": 4, "TYPE": "PETG", "COLOR": "101010"}))
+
+    def test_a_file_that_exists_but_will_not_read_is_never_overwritten(self):
+        with open(self.path, "w") as handle:
+            handle.write("{not json")
+        with self.assertRaises(fakes.FakeGcmd.error):
+            self.obj.cmd_IFS_SET_MATERIAL(
+                fakes.FakeGcmd({"SLOT": 1, "TYPE": "PLA"}))
+        with open(self.path) as handle:
+            self.assertEqual(handle.read(), "{not json")
+
+
 def make_materials(path):
     printer = fakes.FakePrinter()
     config = fakes.FakeConfig("ifs_materials", {"path": path}, printer)
