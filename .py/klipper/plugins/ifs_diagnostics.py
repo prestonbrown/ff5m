@@ -353,6 +353,15 @@ def read_diagnostics(link, capabilities=None):
     f14 = ask("F14")
     f42 = ask("F42")
 
+    ## Whatever any of the above left unread would otherwise be handed to the
+    ## next command as its reply. The poller's F13 is always the next command.
+    drain = getattr(link, "drain_pending", None)
+    if drain is not None:
+        try:
+            drain()
+        except Exception as exc:
+            errors["drain"] = str(exc)
+
     return IfsDiagnostics(
         version=getattr(capabilities, "version", None),
         channel_count=getattr(capabilities, "channel_count", None),

@@ -42,11 +42,19 @@ class FakeCaps:
 
 
 class FakeLink:
-    def __init__(self, script=None, fail=()):
+    def __init__(self, script=None, fail=(), drain_error=None):
         self.script = dict(script or LIVE)
         self.fail = set(fail)
         self.capabilities = FakeCaps()
         self.asked = []
+        self.drains = 0
+        self.drain_error = drain_error
+
+    def drain_pending(self):
+        self.drains += 1
+        if self.drain_error:
+            raise RuntimeError(self.drain_error)
+        return 0
 
     def request(self, command):
         self.asked.append(command)
@@ -221,3 +229,44 @@ class TestReadDiagnostics(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestStreamIsLeftClean(unittest.TestCase):
+    """A diagnostics read must not poison the next command.
+
+    Measured on the printer: the F13 immediately after IFS_DIAGNOSTICS failed
+    with a read error and the one after it succeeded, and the diagnostics output
+    itself differed between calls - stall counts on one, raw silk on the next.
+    Some opcode here answers with lines we do not model, and a line left in the
+    buffer is handed to the next command as its reply. The poller's F13 is
+    always the next command.
+    """
+
+    def test_it_drains_whatever_is_left(self):
+        link = FakeLink()
+        D.read_diagnostics(link)
+        self.assertEqual(link.drains, 1)
+
+    def test_the_drain_happens_after_every_query(self):
+        link = FakeLink()
+        D.read_diagnostics(link)
+        self.assertEqual(link.asked[-1], "F42")
+
+    def test_a_link_that_cannot_drain_still_reports(self):
+        ## A board that will not answer is a diagnostic result, not a crash.
+        link = FakeLink(drain_error="port gone")
+        diag = D.read_diagnostics(link)
+        self.assertIn("drain", diag.errors)
+        self.assertEqual(diag.version, "3.0.6")
+
+    def test_a_link_without_the_method_is_fine(self):
+        ## Nothing should have to grow a method just to be read from.
+        class Bare:
+            capabilities = FakeCaps()
+
+            def request(self, command):
+                if command == "F21":
+                    return FakeResponse("", list(F21_EXTRA))
+                return FakeResponse(LIVE.get(command, ""))
+
+        self.assertEqual(D.read_diagnostics(Bare()).version, "3.0.6")

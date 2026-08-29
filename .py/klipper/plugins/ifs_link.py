@@ -293,6 +293,25 @@ class IfsLink(object):
             raw = raw.decode("utf-8", errors="ignore")
         return raw.strip()
 
+    def drain_pending(self, limit=MAX_EXTRA_LINES):
+        """Throw away anything the board is still sending. Returns the count.
+
+        Some opcodes answer with continuation lines we do not model, and a line
+        left in the buffer becomes the answer to the NEXT command. Measured on
+        the printer: the F13 straight after IFS_DIAGNOSTICS failed to read, and
+        the one after it succeeded, with the diagnostics output itself varying
+        between calls - stall counts on one, raw silk on the next. Call this
+        after a batch of queries so the poller starts from a clean stream.
+        """
+        dropped = 0
+        for _ in range(limit):
+            line = self._read_line()
+            if not line:
+                break
+            logging.debug("IFS: dropping unclaimed line %r", line)
+            dropped += 1
+        return dropped
+
     def _read_response(self, opcode):
         """Find the line that echoes our opcode, discarding stale ones."""
         for _ in range(self.MAX_STALE_LINES + 1):
