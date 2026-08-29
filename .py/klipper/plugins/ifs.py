@@ -535,12 +535,17 @@ class IFS(object):
         gcmd.respond_info("released every channel")
 
     def cmd_IFS_STOP(self, gcmd):
-        self.execute("F112")
+        self._run(gcmd, "F112", lambda ops: ops.stop())
         gcmd.respond_info("stopped")
 
     def cmd_IFS_RESET_DRIVER(self, gcmd):
         ## The literal C is what the firmware expects; it is not a channel.
-        self.execute("F15 C")
+        ##
+        ## Through the operations layer like everything else: writing the opcode
+        ## straight to the link reported success whatever the board answered,
+        ## and a reset that was refused looked identical to one that worked -
+        ## which matters most here, because this is the recovery path.
+        self._run(gcmd, "F15 C", lambda ops: ops.reset_driver())
         gcmd.respond_info("driver reset")
 
     def _settle(self, gcmd, channel, what, timeout=SETTLE_TIMEOUT):

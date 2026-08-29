@@ -334,7 +334,9 @@ class TestCommandQueue(unittest.TestCase):
                 (self.obj.cmd_IFS_FEED, {"CHANNEL": 1, "UNTIL": "done"}),
                 (self.obj.cmd_IFS_CLAMP, {"CHANNEL": 1}),
                 (self.obj.cmd_IFS_RELEASE, {"CHANNEL": 1}),
-                (self.obj.cmd_IFS_RELEASE_ALL, {})):
+                (self.obj.cmd_IFS_RELEASE_ALL, {}),
+                (self.obj.cmd_IFS_STOP, {}),
+                (self.obj.cmd_IFS_RESET_DRIVER, {})):
             self.link.replies = ["FFS not ready."]
             gcmd = fakes.FakeGcmd(params)
             with self.assertRaises(gcmd.error):
