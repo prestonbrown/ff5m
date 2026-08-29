@@ -371,6 +371,24 @@ progress() {
 NET_IFACES="${AD5X_NET_IFACES:-eth0}"
 NET_WAIT="${AD5X_NET_WAIT:-20}"
 
+## Development Wi-Fi, and deliberately opt-in.
+##
+## The rule above still stands: Wi-Fi belongs to HelixScreen's WiFiManager, and
+## an unconditional claimant here would fight it. So this claims wlan0 only when
+## an operator has left credentials at WIFI_CONF. Nothing ships that file and
+## sync never creates it - dropping one in is the opt-in, deleting it is the
+## opt-out, and once WiFiManager owns the radio there is nothing to disable.
+##
+## It exists because until HelixScreen is installed this board has no other way
+## to configure Wi-Fi: the stock Qt UI was the network manager and step 2 kills
+## it. A dev printer that came up wired-only would need its cable back after
+## every reboot.
+WIFI_CONF="${AD5X_WIFI_CONF:-/usr/data/config/mod_data/wpa_supplicant.conf}"
+WIFI_IFACE="${AD5X_WIFI_IFACE:-wlan0}"
+## Where interface presence is read from. A variable only so the tests can
+## point it at a fixture and exercise the wlan0 paths on a host with no radio.
+NET_SYSFS="${AD5X_NET_SYSFS:-/sys/class/net}"
+
 iface_has_ipv4() {
     ifconfig "$1" 2>/dev/null | grep -q 'inet addr:' && return 0
     ip -4 addr show "$1" 2>/dev/null | grep -q 'inet ' && return 0
@@ -422,11 +440,35 @@ stop_stock_ui() {
     provide_network
 }
 
-provide_network() {
-    local n=0 iface
+## Associate wlan0 if credentials were left for us. Returns non-zero - and says
+## nothing - whenever there is no reason to act, so the wired path is untouched
+## on a printer that never opted in.
+start_wifi_supplicant() {
+    [ -f "$WIFI_CONF" ] || return 1
+    [ -d "$NET_SYSFS/$WIFI_IFACE" ] || return 1
 
-    for iface in $NET_IFACES; do
-        if [ ! -d "/sys/class/net/$iface" ]; then
+    # Already associated (a re-run, or the stock UI got there first): leave it.
+    wpa_cli -i "$WIFI_IFACE" status 2>/dev/null | grep -q '^wpa_state=COMPLETED' && return 0
+
+    ifconfig "$WIFI_IFACE" up 2>/dev/null
+    # 8821cu answers to nl80211; the fallback costs nothing and covers a driver
+    # swap without a code change.
+    for _drv in nl80211 wext; do
+        wpa_supplicant -B -i "$WIFI_IFACE" -c "$WIFI_CONF" -D "$_drv" >/dev/null 2>&1 && return 0
+    done
+    return 1
+}
+
+provide_network() {
+    local n=0 iface ifaces="$NET_IFACES"
+
+    if start_wifi_supplicant; then
+        echo "// [ad5x] Network: Wi-Fi credentials present, associating $WIFI_IFACE"
+        ifaces="$ifaces $WIFI_IFACE"
+    fi
+
+    for iface in $ifaces; do
+        if [ ! -d "$NET_SYSFS/$iface" ]; then
             echo "// [ad5x] Network: $iface not present, skipping"
             continue
         fi
@@ -443,7 +485,7 @@ provide_network() {
 
     [ "$NET_WAIT" -gt 0 ] 2>/dev/null || return 0
     while [ "$n" -lt "$NET_WAIT" ]; do
-        for iface in $NET_IFACES; do
+        for iface in $ifaces; do
             if iface_has_ipv4 "$iface"; then
                 echo "// [ad5x] Network up on $iface after ${n}s"
                 return 0
@@ -455,7 +497,7 @@ provide_network() {
     # Not fatal. A printer with no network is still a printer, and the bring-up
     # has more to do; but say so loudly, because everything downstream that
     # looks broken will actually be this.
-    echo "@@ [ad5x] Network: no IPv4 on ($NET_IFACES) after ${NET_WAIT}s." \
+    echo "@@ [ad5x] Network: no IPv4 on ($ifaces) after ${NET_WAIT}s." \
          "Moonraker and ssh will be unreachable even if the bring-up completes." >&2
     return 0
 }

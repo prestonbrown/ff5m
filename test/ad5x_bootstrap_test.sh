@@ -686,6 +686,68 @@ case "$out" in
     *)                       _t_pass "AD5X_NET_WAIT=0 skips the wait" ;;
 esac
 
+# --- opt-in Wi-Fi -----------------------------------------------------------
+# Wi-Fi belongs to HelixScreen's WiFiManager; a boot script that always claimed
+# wlan0 would fight it. So the ONLY thing that turns this on is an operator
+# leaving credentials at WIFI_CONF. These pin both halves: that it stays off
+# with no file, and that it actually associates and gets a lease with one.
+WIFI_TRACE=$(mktemp)
+WIFI_SYS="$WORK/sysfs"
+mkdir -p "$WIFI_SYS/lo" "$WIFI_SYS/wlan0"
+
+# $1 = WIFI_CONF path (may not exist), $2 = wpa_cli state to report
+wifi_call() {
+    : > "$NET_TRACE"; : > "$WIFI_TRACE"
+    AD5X_NET_IFACES=lo AD5X_NET_WAIT=0 AD5X_WIFI_CONF="$1" WPA_STATE="$2" \
+    AD5X_NET_SYSFS="$WIFI_SYS" NET_TRACE="$NET_TRACE" WIFI_TRACE="$WIFI_TRACE" \
+    "$BASH_BIN" -c '
+        . "$1"
+        ifconfig() {
+            case "$2" in up) echo "IFCONFIG_UP $1"; return 0 ;; esac
+            return 0
+        }
+        ip() { return 1; }
+        udhcpc() { echo "UDHCPC $*" >> "$NET_TRACE"; }
+        wpa_cli() { [ -n "$WPA_STATE" ] && echo "wpa_state=$WPA_STATE"; return 0; }
+        wpa_supplicant() { echo "WPA_SUPPLICANT $*" >> "$WIFI_TRACE"; return 0; }
+        sleep() { :; }
+        provide_network
+    ' _ "$BOOTSTRAP" 2>&1
+}
+
+# No credentials: the radio must be untouched, and nothing said about it.
+out=$(wifi_call "$WORK/absent.conf" "")
+assert_empty "no credentials means no supplicant" "$(cat "$WIFI_TRACE")"
+case "$(cat "$NET_TRACE")" in
+    *wlan0*) _t_fail "no credentials means no DHCP on wlan0" "udhcpc ran on wlan0" ;;
+    *)       _t_pass "no credentials means no DHCP on wlan0" ;;
+esac
+case "$out" in
+    *"Wi-Fi credentials"*) _t_fail "silent when Wi-Fi is not opted in" "it announced Wi-Fi anyway" ;;
+    *)                     _t_pass "silent when Wi-Fi is not opted in" ;;
+esac
+
+# Credentials present: associate, then treat wlan0 as an interface to address.
+WIFI_CONF_FIX="$WORK/wpa.conf"
+printf 'network={\n  ssid="x"\n}\n' > "$WIFI_CONF_FIX"
+out=$(wifi_call "$WIFI_CONF_FIX" "")
+assert_contains "credentials start wpa_supplicant" "$(cat "$WIFI_TRACE")" "WPA_SUPPLICANT"
+assert_contains "the supplicant is pointed at those credentials" \
+    "$(cat "$WIFI_TRACE")" "$WIFI_CONF_FIX"
+assert_contains "wlan0 joins the DHCP set" "$(cat "$NET_TRACE")" "UDHCPC -i wlan0"
+assert_contains "the wired interface is still brought up too" "$(cat "$NET_TRACE")" "UDHCPC -i lo"
+assert_contains "it says Wi-Fi was opted into" "$out" "Wi-Fi credentials present"
+
+# Already associated: do not start a second supplicant, but still get a lease -
+# a re-run must not leave wlan0 up with no address.
+out=$(wifi_call "$WIFI_CONF_FIX" COMPLETED)
+assert_empty "an associated radio is not re-associated" "$(cat "$WIFI_TRACE")"
+assert_contains "an associated radio still gets DHCP" "$(cat "$NET_TRACE")" "UDHCPC -i wlan0"
+
+# Credentials for a radio this board does not have must not start anything.
+out=$(AD5X_WIFI_IFACE=no_such_radio wifi_call "$WIFI_CONF_FIX" "")
+assert_empty "absent radio starts no supplicant" "$(cat "$WIFI_TRACE")"
+
 # Step 2 must actually call it - a helper nothing invokes is the same bug.
 plan=$(run_forced mips --dry-run)
 assert_contains "the dry-run plan documents the network takeover" "$plan" "ifconfig up + udhcpc"
