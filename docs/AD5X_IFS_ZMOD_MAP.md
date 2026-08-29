@@ -56,7 +56,7 @@ else is pulling, and at 300 mm/min it reads as stopped within seconds.
 | F11 | retract | `retract()` | done |
 | F112 | stop | `stop()` | done |
 | F23 | mark inserted | `mark_inserted()` | in ops, **no gcode command** |
-| F15 | driver reset | `IFS_RESET_DRIVER` | done, **not wired to recovery** |
+| F15 | driver reset | `IFS_RESET_DRIVER` | done, and wired to the retry |
 
 ## zmod's python commands
 
@@ -64,7 +64,7 @@ else is pulling, and at 300 mm/min it reads as stopped within seconds.
 |---|---|---|
 | `IFS_F10/F11/F13/F15/F18/F23/F24/F39/F112` | raw opcodes | `IFS_FEED/RETRACT/STATUS/RESET_DRIVER/RELEASE_ALL/-/CLAMP/RELEASE/STOP` |
 | `IFS_STATUS` | report state | `IFS_STATUS` |
-| `IFS_AUTOINSERT` | pull filament in at the IFS | **missing** |
+| `IFS_AUTOINSERT` | pull filament in at the IFS | `IFS_AUTOINSERT`, fired on the board's insert report |
 | `IFS_EXTRUDER_SENSOR` | read the toolhead sensor | `IFS_SENSOR_VALUE` |
 | `IFS_MOTION` | has it stopped / run out | **missing** |
 | `INSERT_PRUTOK_IFS` | load to nozzle | `IFS_LOAD` |
@@ -115,10 +115,24 @@ Ours does: park, heat, clamp, feed, purge, wipe. **Gaps, in order of severity:**
    centimetres later, so the hub and the extruder are the only shared parts of
    the path. `tube_length` is one lane's full run, not a hub-to-toolhead
    segment.
-5. **No retry.** Still open, and the largest remaining gap. zmod retries a
-   failed opcode up to `retry_count` (3), and calls F15 the moment the board
-   reports `DRV_ERROR`. Ours fails the command instead, which is why a driver
-   that dropped out ended the evening rather than being recovered from.
+5. ~~No retry~~ - **done**. Every move re-issues its opcode up to
+   `retry_count` (3) and sends F15 on each `DRV_ERROR`, as zmod's
+   `wait_for_state` + `cmd_IFS_F10` pair does. A stall is not retried: zmod
+   breaks on `RET_STALL`, and driving into a jam again grinds a flat on the
+   filament.
+
+6. ~~No auto-insert~~ - **done**, and this was the biggest one. zmod runs
+   `_IFS_AUTOINSERT` the moment the board reports filament pushed into a lane:
+   it draws that lane up to the toolhead sensor and backs off 90 mm. Our insert
+   event was detected and then dropped on the floor, so no lane was ever in a
+   position anything downstream could assume.
+
+7. **No lane tracking.** Still open. zmod reads the loaded lane out of
+   FlashForge's own config (`FFMInfo.channel`) and writes it back with
+   `SET_CURRENT_PRUTOK`. Ours uses `ifs.active_channel`, which is the board's
+   *selector* position, not what is in the nozzle - it reads 0 after a power
+   cycle with filament still loaded, so `IFS_SELECT` will happily load a second
+   lane on top of the first.
 
 ### Unload - `_REMOVE_PRUTOK_IFS` ("Unloading filament Extruder + IFS")
 
@@ -157,8 +171,44 @@ Everything else should copy zmod. These do not, for stated reasons:
   each call site; ours is `IfsOperations._expect`, so a command cannot forget.
 - **The pre-command status is skipped by identity** (`_fresh_status`) rather
   than avoided by polling quickly. Stronger than a timing assumption.
+- **A move aimed at a sensor fails if it never reaches it.** zmod's checked
+  feed returns `RET_OK` when the board simply finishes, and its macro carries
+  on regardless; ours reports `not_reached`. Asking to feed UNTIL the toolhead
+  and finishing with the sensor still empty is not a success, and treating it
+  as one let a load purge filament that was still in the tube.
+- **Auto-insert can be switched off** (`autoinsert:` in `[ifs]`, default on).
+  zmod always threads an inserted lane. A printer that moves filament on its
+  own the moment somebody touches it is worth being able to stop.
+- **Every newly inserted lane is threaded**, not just the highest-numbered one.
+  zmod collapses the insert mask with `bit_length()` and loses the rest.
 - **`stall_state` is named for what it reports.** It carries MOTION, and zmod's
   name inverts that. Ours is `moving_channels` / `is_moving()`.
+
+## Measured: feed and retract are not symmetric
+
+Sampled from the board at 0.2 s during cold, isolated moves, with the plugin in
+its move cadence. The board stays in its activity state for the whole commanded
+duration whatever happens, so the *motion bit* is the only thing that says
+whether filament actually moved.
+
+| move | commanded | motion |
+|---|---|---|
+| feed lane 1 | 200 mm / 10.0 s | 5.5 s, then nothing |
+| retract lane 1 | 200 mm / 10.0 s | **10.3 s, continuous** |
+| feed lane 1 | 300 mm / 15.0 s | 11.5 s |
+| feed lane 1 | 400 mm / 20.0 s | 2.0 s |
+| retract lane 4 | 150 mm / 7.5 s | **7.8 s, continuous** |
+| feed lane 2 | 150 mm / 7.5 s | 5.0 s |
+
+Every retract runs its full length. Every feed dies early, on every lane tried,
+and repeated feeds on one lane get *worse* - which is what grinding a flat on
+the filament looks like. Two different lanes behaving the same way rules out one
+lane's tip, and the drive, the driver and the motion sensor are all evidently
+working because the retract uses all three.
+
+None of this was run through `IFS_AUTOINSERT`, which did not exist yet: the
+lanes were positioned by hand and by ad-hoc feeds. That is the first thing to
+re-measure now that a lane can be put in a known position.
 
 ## Drivers
 
@@ -177,10 +227,15 @@ concluding anything about filament.
 **selector** flag, and there is no selector reset in the opcode set - zmod has
 none either.
 
-What is NOT established: whether a flagged driver actually stops driving. The
-test that looked like proof - feeding a second lane and seeing it stall too -
-was invalid, because that lane's filament had been retracted clear out of the
-IFS and there was nothing in the drive to move. A stall against an empty drive
-proves nothing. Treat the `reset` flag as a signal worth reading, not as a
-diagnosis, until something moves or fails to move with filament known to be
-engaged.
+**The `reset` flag is noise, not a fault.** Measured across a power cycle: both
+drivers read clear on a fresh boot, and both read `reset` again after a run of
+moves that ended in the stop path, with "no driver faults" reported throughout.
+So the flag says the driver was reset at some point - which F112 evidently does
+- and nothing about whether the board is driving. The earlier suspicion that a
+flagged driver stops driving is **disproved**: with both flagged, a 200 mm
+retract ran its full length with the motion bit set continuously.
+
+`IFS_DIAGNOSTICS` desyncs the link. The F13 immediately after it fails to read
+and the next one succeeds, and its own output varies between calls (`stall
+counts` on one, `raw silk` on the next), so it is mis-slicing the board's reply.
+Read it, then throw the next status away.
