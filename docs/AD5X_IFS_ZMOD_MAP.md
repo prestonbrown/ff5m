@@ -127,12 +127,17 @@ Ours does: park, heat, clamp, feed, purge, wipe. **Gaps, in order of severity:**
    event was detected and then dropped on the floor, so no lane was ever in a
    position anything downstream could assume.
 
-7. **No lane tracking.** Still open. zmod reads the loaded lane out of
-   FlashForge's own config (`FFMInfo.channel`) and writes it back with
-   `SET_CURRENT_PRUTOK`. Ours uses `ifs.active_channel`, which is the board's
-   *selector* position, not what is in the nozzle - it reads 0 after a power
-   cycle with filament still loaded, so `IFS_SELECT` will happily load a second
-   lane on top of the first.
+7. ~~No lane tracking~~ - **done**. `ifs.active_channel` is the board's
+   *selector* position, not what is in the nozzle, and it reads 0 after a power
+   cycle with filament still loaded, so `IFS_SELECT` would have loaded a second
+   lane on top of the first. zmod reads the loaded lane out of FlashForge's own
+   config (`FFMInfo.channel`); Forge-X has no stock config to read, so it is
+   recorded in `save_variables` - the load writes it, the unload clears it, and
+   both `IFS_UNLOAD` and `IFS_SELECT` read it.
+
+**Still open:** `IFS_MOTION` (jam vs runout for the loaded lane, and what its
+`_PRINT_IFS_MOTION PAUSE=` argument actually drives), a standalone
+`PURGE_PRUTOK_IFS`, and `_SBROS_TRASH`'s shake-off move.
 
 ### Unload - `_REMOVE_PRUTOK_IFS` ("Unloading filament Extruder + IFS")
 
@@ -181,6 +186,10 @@ Everything else should copy zmod. These do not, for stated reasons:
   own the moment somebody touches it is worth being able to stop.
 - **Every newly inserted lane is threaded**, not just the highest-numbered one.
   zmod collapses the insert mask with `bit_length()` and loses the rest.
+- **The first insert reading only primes.** The board reports insert as a
+  level, so a fresh watcher's first non-zero reading is not an edge - it is
+  whatever was already in the lanes. zmod's `Insert` starts at 0 and fires on
+  it, which would mean driving three lanes at once on every klippy restart.
 - **`stall_state` is named for what it reports.** It carries MOTION, and zmod's
   name inverts that. Ours is `moving_channels` / `is_moving()`.
 
