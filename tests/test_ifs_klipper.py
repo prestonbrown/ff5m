@@ -157,8 +157,9 @@ class TestIfsObject(unittest.TestCase):
     def test_an_insert_is_marshalled_to_the_reactor(self):
         ## Serial work happens off-thread; anything touching klipper has to
         ## come back through the reactor.
-        obj, printer, link = make_ifs(replies=[f13(insert=0b10)])
+        obj, printer, link = make_ifs(replies=[f13(), f13(insert=0b10)])
         obj._connect()
+        obj._poll_once()                    # primes; nothing was inserted yet
         obj._poll_once()
         self.assertEqual(len(printer.reactor.async_callbacks), 1)
         self.assertEqual(printer.sent, [])
@@ -167,9 +168,9 @@ class TestIfsObject(unittest.TestCase):
 
     def test_an_insert_fires_once(self):
         obj, printer, link = make_ifs(
-            replies=[f13(insert=0b10), f13(insert=0b10)])
+            replies=[f13(), f13(insert=0b10), f13(insert=0b10)])
         obj._connect()
-        obj._poll_once(); obj._poll_once()
+        obj._poll_once(); obj._poll_once(); obj._poll_once()
         printer.reactor.run_async()
         self.assertEqual(len(printer.sent), 1)
 
@@ -180,9 +181,9 @@ class TestIfsObject(unittest.TestCase):
         lane sits wherever a human left it and a later load has to guess how
         far the toolhead is, which is how a load ends up feeding into nothing.
         """
-        obj, printer, link = make_ifs(replies=[f13(insert=0b10)])
+        obj, printer, link = make_ifs(replies=[f13(), f13(insert=0b10)])
         obj._connect()
-        obj._poll_once()
+        obj._poll_once(); obj._poll_once()
         printer.reactor.run_async()
         gcode = printer.lookup_object("gcode")
         self.assertEqual(gcode.scripts, ["IFS_AUTOINSERT CHANNEL=2"])
@@ -190,9 +191,9 @@ class TestIfsObject(unittest.TestCase):
     def test_every_inserted_lane_is_threaded(self):
         ## Two lanes can gain filament between polls. zmod collapses the mask
         ## to its highest bit and threads only that one.
-        obj, printer, link = make_ifs(replies=[f13(insert=0b1001)])
+        obj, printer, link = make_ifs(replies=[f13(), f13(insert=0b1001)])
         obj._connect()
-        obj._poll_once()
+        obj._poll_once(); obj._poll_once()
         printer.reactor.run_async()
         self.assertEqual(printer.lookup_object("gcode").scripts,
                          ["IFS_AUTOINSERT CHANNEL=1",
@@ -202,9 +203,9 @@ class TestIfsObject(unittest.TestCase):
         ## The event still fires - something else may want to know - but the
         ## printer does not move filament on its own.
         obj, printer, link = make_ifs(values={"autoinsert": False},
-                                      replies=[f13(insert=0b10)])
+                                      replies=[f13(), f13(insert=0b10)])
         obj._connect()
-        obj._poll_once()
+        obj._poll_once(); obj._poll_once()
         printer.reactor.run_async()
         self.assertEqual(printer.lookup_object("gcode").scripts, [])
         self.assertEqual(printer.sent, [("ifs:filament_inserted", ([2],))])
@@ -216,10 +217,10 @@ class TestIfsObject(unittest.TestCase):
         error in klippy's event loop. zmod's _safe_run_script swallows the same
         thing for the same reason.
         """
-        obj, printer, link = make_ifs(replies=[f13(insert=0b10)])
+        obj, printer, link = make_ifs(replies=[f13(), f13(insert=0b10)])
         obj._connect()
         printer.lookup_object("gcode").script_error = "lane 2 is empty"
-        obj._poll_once()
+        obj._poll_once(); obj._poll_once()
         printer.reactor.run_async()          # must not raise
         self.assertEqual(printer.sent, [("ifs:filament_inserted", ([2],))])
 

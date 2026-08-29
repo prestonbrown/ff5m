@@ -238,13 +238,24 @@ class InsertWatcher(object):
 
     Insertions are only reported while the board is ready; during a load or an
     unload the mask moves for reasons that are not a user pushing filament in.
+
+    The first reading only ever primes: whatever the board already had inserted
+    when we started watching was not pushed in by anyone just now, and acting on
+    it would mean klippy driving filament in three lanes at once every time it
+    restarts. zmod has this hole - its Insert starts at 0, so its first non-zero
+    reading looks like an edge.
     """
 
     def __init__(self):
         self._seen_mask = 0
+        self._primed = False
 
     def update(self, status):
         """Channels newly inserted since the last call, low channel first."""
+        if not self._primed:
+            self._primed = True
+            self._seen_mask = status.insert_mask
+            return []
         if not status.is_ready:
             ## Not an insert we should act on, but still the current truth -
             ## tracking it here stops the return to ready from replaying every
@@ -257,3 +268,4 @@ class InsertWatcher(object):
 
     def reset(self):
         self._seen_mask = 0
+        self._primed = False

@@ -156,9 +156,31 @@ class TestMasks(unittest.TestCase):
 class TestInsertWatcher(unittest.TestCase):
     def setUp(self):
         self.watcher = S.InsertWatcher()
+        ## The board reports insert as a LEVEL, so the first reading can only
+        ## ever say what was already there. Every test starts from a primed
+        ## watcher because that is the only state a real edge happens in.
+        self.watcher.update(status())
 
     def test_nothing_inserted_reports_nothing(self):
         self.assertEqual(self.watcher.update(status()), [])
+
+    def test_the_first_reading_only_primes(self):
+        """klippy restarting is not somebody inserting three spools.
+
+        A fresh watcher whose first reading already has channels set must stay
+        quiet: that filament was pushed in before anyone was watching, and
+        firing on it means driving three lanes at once on every restart. zmod
+        has this hole - its Insert starts at 0, so its first non-zero reading
+        looks like an edge.
+        """
+        fresh = S.InsertWatcher()
+        self.assertEqual(
+            fresh.update(status(ffs_channels_insert=0b101)), [])
+        ## And it is primed, not merely skipping one poll.
+        self.assertEqual(
+            fresh.update(status(ffs_channels_insert=0b101)), [])
+        self.assertEqual(
+            fresh.update(status(ffs_channels_insert=0b111)), [2])
 
     def test_an_insert_fires_once(self):
         self.assertEqual(
@@ -197,10 +219,13 @@ class TestInsertWatcher(unittest.TestCase):
             self.watcher.update(status(ffs_channels_insert=0b1)), [])
 
     def test_reset_forgets_everything(self):
+        ## Including the priming, so the watcher comes back exactly as new.
         self.watcher.update(status(ffs_channels_insert=0b11))
         self.watcher.reset()
         self.assertEqual(
-            self.watcher.update(status(ffs_channels_insert=0b11)), [1, 2])
+            self.watcher.update(status(ffs_channels_insert=0b11)), [])
+        self.assertEqual(
+            self.watcher.update(status(ffs_channels_insert=0b111)), [3])
 
 
 class TestReadyAndError(unittest.TestCase):
