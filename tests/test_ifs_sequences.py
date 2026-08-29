@@ -88,44 +88,65 @@ class TestFinishing(unittest.TestCase):
         self.assertEqual(waiter.update(status()).kind, SEQ.FINISHED)
 
 
-class TestFilamentCondition(unittest.TestCase):
-    def test_a_load_stops_when_filament_arrives(self):
-        waiter = SEQ.StateWaiter(CH, S.LOADING, expect_filament=True,
-                                 confirmations=3)
-        loaded = status(LOADING, silk=0b10)
-        outcome = feed(waiter, loaded, loaded, loaded)
-        self.assertEqual(outcome.kind, SEQ.FILAMENT)
-        self.assertIn("present", outcome.detail)
+class TestRunoutCondition(unittest.TestCase):
+    """zmod's silk check: the LANE losing its filament aborts the move.
 
-    def test_an_unload_stops_when_filament_leaves(self):
-        waiter = SEQ.StateWaiter(CH, S.UNLOADING, expect_filament=False,
-                                 confirmations=2)
-        empty = status(UNLOADING, silk=0)
-        outcome = feed(waiter, empty, empty)
-        self.assertEqual(outcome.kind, SEQ.FILAMENT)
-        self.assertIn("gone", outcome.detail)
+    It passes silk={'count': silk_count, 'status': False} on both its checked
+    feed and its checked retract, and the answer is RET_SILK, "No filament N in
+    IFS" - a failure, not an arrival. Modelling it as a success condition meant
+    an empty lane read as a completed load.
+    """
+
+    def test_an_empty_lane_aborts_a_load(self):
+        waiter = SEQ.StateWaiter(CH, S.LOADING, watch_runout=True,
+                                 runout_confirmations=1)
+        outcome = feed(waiter, status(LOADING, silk=0))
+        self.assertEqual(outcome.kind, SEQ.RUNOUT)
+        self.assertTrue(outcome.is_problem)
+
+    def test_an_empty_lane_aborts_an_unload_too(self):
+        waiter = SEQ.StateWaiter(CH, S.UNLOADING, watch_runout=True,
+                                 runout_confirmations=1)
+        outcome = feed(waiter, status(UNLOADING, silk=0))
+        self.assertEqual(outcome.kind, SEQ.RUNOUT)
+
+    def test_a_lane_with_filament_keeps_going(self):
+        waiter = SEQ.StateWaiter(CH, S.LOADING, watch_runout=True,
+                                 runout_confirmations=1)
+        outcome = feed(waiter, status(LOADING, silk=0b10),
+                       status(LOADING, silk=0b10))
+        self.assertEqual(outcome.kind, SEQ.WAITING)
 
     def test_it_takes_consecutive_confirmations(self):
-        waiter = SEQ.StateWaiter(CH, S.LOADING, expect_filament=True,
-                                 confirmations=3)
+        waiter = SEQ.StateWaiter(CH, S.LOADING, watch_runout=True,
+                                 runout_confirmations=3)
         loaded = status(LOADING, silk=0b10)
-        outcome = feed(waiter, loaded, loaded, status(LOADING, silk=0),
-                       loaded, loaded)
+        outcome = feed(waiter, status(LOADING, silk=0), loaded,
+                       status(LOADING, silk=0), status(LOADING, silk=0))
         self.assertEqual(outcome.kind, SEQ.WAITING)
 
     def test_the_condition_is_ignored_outside_the_activity(self):
         ## While the board is clamping rather than loading, the filament bit is
         ## describing something we did not ask about.
-        waiter = SEQ.StateWaiter(CH, S.LOADING, expect_filament=True,
-                                 confirmations=2)
-        clamped = status(S.state_value(S.CLAMPED, CH), silk=0b10)
+        waiter = SEQ.StateWaiter(CH, S.LOADING, watch_runout=True,
+                                 runout_confirmations=1)
+        clamped = status(S.state_value(S.CLAMPED, CH), silk=0)
         outcome = feed(waiter, clamped, clamped, clamped)
         self.assertEqual(outcome.kind, SEQ.WAITING)
 
-    def test_another_channels_filament_does_not_count(self):
-        waiter = SEQ.StateWaiter(CH, S.LOADING, expect_filament=True,
-                                 confirmations=1)
-        outcome = feed(waiter, status(LOADING, silk=0b1000))
+    def test_another_channels_empty_lane_does_not_count(self):
+        ## CH is 2, so silk 0b10 is CH's own bit set and every other clear.
+        waiter = SEQ.StateWaiter(CH, S.LOADING, watch_runout=True,
+                                 runout_confirmations=1)
+        outcome = feed(waiter, status(LOADING, silk=0b10))
+        self.assertEqual(outcome.kind, SEQ.WAITING)
+
+    def test_runout_is_off_unless_asked_for(self):
+        ## zmod only passes silk on its CHECK=1 calls; an unchecked move waits
+        ## for READY and judges nothing.
+        waiter = SEQ.StateWaiter(CH, S.LOADING, watch_stall=False)
+        outcome = feed(waiter, status(LOADING, silk=0),
+                       status(LOADING, silk=0))
         self.assertEqual(outcome.kind, SEQ.WAITING)
 
 
@@ -162,17 +183,20 @@ class TestStall(unittest.TestCase):
         outcome = feed(waiter, stuck(LOADING), stuck(LOADING))
         self.assertEqual(outcome.kind, SEQ.WAITING)
 
-    def test_filament_beats_a_jam_on_the_same_poll(self):
-        ## Filament stopping because it arrived at the sensor is success.
-        waiter = SEQ.StateWaiter(CH, S.LOADING, expect_filament=True,
-                                 confirmations=1)
-        outcome = feed(waiter, stuck(LOADING, silk=0b10))
-        self.assertEqual(outcome.kind, SEQ.FILAMENT)
+    def test_an_empty_lane_beats_a_jam_on_the_same_poll(self):
+        ## Both are true at once when a spool runs out - the filament stops
+        ## moving because there is none left. zmod checks silk first, and it is
+        ## the more useful answer: "no filament" tells you what to do next,
+        ## "stalled" sends you looking for a jam that is not there.
+        waiter = SEQ.StateWaiter(CH, S.LOADING, watch_runout=True,
+                                 confirmations=1, runout_confirmations=1)
+        outcome = feed(waiter, stuck(LOADING, silk=0))
+        self.assertEqual(outcome.kind, SEQ.RUNOUT)
 
 
 class TestFaults(unittest.TestCase):
     def test_a_driver_fault_stops_everything(self):
-        waiter = SEQ.StateWaiter(CH, S.LOADING, expect_filament=True)
+        waiter = SEQ.StateWaiter(CH, S.LOADING, watch_runout=True)
         outcome = waiter.update(status(S.DRIVER_ERROR))
         self.assertEqual(outcome.kind, SEQ.DRIVER_ERROR)
         self.assertTrue(outcome.is_problem)

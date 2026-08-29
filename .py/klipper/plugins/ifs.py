@@ -66,6 +66,13 @@ SETTLE_TIMEOUT = 15.0
 ## while the motor is running and read as a stall that never happened.
 MOVE_POLL_INTERVAL = 0.2
 
+## How many times a move is re-issued after the board reports a driver fault.
+## zmod's retry_count, and its wait_for_state is where the recovery lives: the
+## moment F13 reads DRV_ERROR it sends F15 and returns RET_RETRY, and the caller
+## re-sends the same opcode. Ours used to fail the command outright, so a driver
+## that dropped out ended the run instead of being recovered from.
+DEFAULT_RETRY_COUNT = 3
+
 ## What a move waits for, as the UNTIL= parameter spells it.
 UNTIL_TOOLHEAD = "toolhead"
 UNTIL_CLEAR = "clear"
@@ -121,6 +128,12 @@ class IFS(object):
         ## Which filament_switch_sensor speaks for the toolhead. UNTIL=toolhead
         ## has nothing to wait on without it.
         self.toolhead_sensor_name = config.get("toolhead_sensor", None)
+        self.retry_count = config.getint(
+            "retry_count", DEFAULT_RETRY_COUNT, minval=1)
+        self.stall_count = config.getint(
+            "stall_count", ifs_sequences.DEFAULT_CONFIRMATIONS, minval=1)
+        self.silk_count = config.getint(
+            "silk_count", ifs_sequences.DEFAULT_RUNOUT_CONFIRMATIONS, minval=1)
         self.params = ifs_sequences.Parameters(
             tube_mm=config.getfloat("tube_length", 1000.0, above=0.),
             ifs_speed=config.getfloat("ifs_speed", 1200.0, above=0.))
@@ -496,6 +509,16 @@ class IFS(object):
         except Exception as exc:
             logging.warning("IFS: could not stop after %s: %s",
                             outcome.kind, exc)
+        if outcome.kind == ifs_sequences.TIMED_OUT:
+            ## zmod's timeout path is F112 then F18. A timeout means we no
+            ## longer know what the board is doing, and a channel left clamped
+            ## holds the filament until someone notices - two of them sat
+            ## gripped for hours after one failed run.
+            try:
+                self.execute("F18")
+            except Exception as exc:
+                logging.warning("IFS: could not release after %s: %s",
+                                outcome.kind, exc)
         raise gcmd.error("%s failed: %s%s"
                          % (what, outcome.kind,
                             " (%s)" % outcome.detail if outcome.detail else ""))
@@ -504,11 +527,12 @@ class IFS(object):
         return gcmd.get_int("CHANNEL", minval=1, maxval=self.channel_count)
 
     def cmd_IFS_CLAMP(self, gcmd):
-        ## Completes on the board's acknowledgement, NOT on a state transition.
-        ## F24 answers "F24 ok. chan N." and the board stays in `ready`; it
-        ## never reports CLAMPED for the channel, so waiting for that state
-        ## timed out every time while the clamp itself had already happened.
-        ## zmod's cmd_IFS_F24 waits on the same acknowledgement.
+        ## Acknowledged first, then settled on READY - never on CLAMPED. The
+        ## board does pass through `clamped ch=N`, for a few seconds at that
+        ## (measured: 3.8 s on channel 4, 0.2 s on channel 2), but how long is
+        ## the selector's business and a short one is missed between polls.
+        ## zmod's cmd_IFS_F24 waits on the acknowledgement and then on READY,
+        ## which is true whether or not the transition was seen.
         channel = self._channel(gcmd)
         self._run(gcmd, "F24 C%d" % channel, lambda ops: ops.clamp(channel))
         self._settle(gcmd, channel, "clamp channel %d" % channel)
@@ -601,8 +625,8 @@ class IFS(object):
 
         label = "%s C%d L%d S%d" % (opcode, channel, length, speed)
         operation = self.MOVE_OPERATIONS[opcode]
-        self._run(gcmd, label,
-                  lambda ops: getattr(ops, operation)(channel, length, speed))
+        send = lambda ops: getattr(ops, operation)(channel, length, speed)
+        self._run(gcmd, label, send)
 
         if gcmd.get_int("SLEEP", 0):
             ## zmod's SLEEP=1: fire the opcode and pause for a fixed fraction of
@@ -620,10 +644,30 @@ class IFS(object):
         ## unload is a plain `IFS_F11 LEN SPEED` with no CHECK, which waits for
         ## READY and nothing else. Watching a retract for stalls failed one that
         ## had worked - the motion stopping IS how a retract ends.
+        ## CHECK also turns on the silk check, as zmod's does: its checked F10
+        ## and F11 both pass silk alongside stall, so a lane that runs out is
+        ## reported as an empty lane rather than as a jam.
         check = gcmd.get_int("CHECK", 0)
-        waiter = ifs_sequences.StateWaiter(
-            channel, activity if check else None, watch_stall=bool(check))
-        outcome = self._await(gcmd, waiter, timeout, until=until)
+        for attempt in range(self.retry_count):
+            ## A fresh waiter per attempt: the one that saw the fault has a
+            ## stall run part-counted against a board that was not driving.
+            waiter = ifs_sequences.StateWaiter(
+                channel, activity if check else None,
+                watch_stall=bool(check), watch_runout=bool(check),
+                confirmations=self.stall_count,
+                runout_confirmations=self.silk_count)
+            outcome = self._await(gcmd, waiter, timeout, until=until)
+            if outcome.kind != ifs_sequences.DRIVER_ERROR:
+                break
+            ## zmod resets the driver on every DRV_ERROR, including the last
+            ## one it gives up on, so the board is not left faulted.
+            self._run(gcmd, "F15 C", lambda ops: ops.reset_driver())
+            if attempt + 1 < self.retry_count:
+                gcmd.respond_info("%s channel %d: driver fault, reset and "
+                                  "retrying (%d of %d)"
+                                  % (what, channel, attempt + 2,
+                                     self.retry_count))
+                self._run(gcmd, label, send)
         return self._finish(gcmd, outcome,
                             "%s channel %d" % (what, channel))
 

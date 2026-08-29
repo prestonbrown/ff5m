@@ -108,7 +108,13 @@ Ours does: park, heat, clamp, feed, purge, wipe. **Gaps, in order of severity:**
 3. ~~No F23~~ - **done**, `IFS_MARK_INSERTED`, and the load ends with it.
 4. ~~No unload-first~~ - **done**, `_IFS_CLEAR_EXTRUDER`, which both the load and
    the unload begin with. A lane cannot be fed while another lane's filament
-   occupies the combiner; the incoming filament simply pushes against it.
+   occupies the hub; the incoming filament simply pushes against it.
+
+   **There is no shared bowden on an AD5X.** Each lane runs its own tube the
+   whole way and the hub is mounted ON the toolhead, feeding the extruder a few
+   centimetres later, so the hub and the extruder are the only shared parts of
+   the path. `tube_length` is one lane's full run, not a hub-to-toolhead
+   segment.
 5. **No retry.** Still open, and the largest remaining gap. zmod retries a
    failed opcode up to `retry_count` (3), and calls F15 the moment the board
    reports `DRV_ERROR`. Ours fails the command instead, which is why a driver

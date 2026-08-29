@@ -23,16 +23,21 @@ from . import ifs_status
 ## How a wait ended.
 WAITING = "waiting"            # nothing decisive yet
 FINISHED = "finished"          # the board went back to ready: motion completed
-FILAMENT = "filament"          # the channel's filament sensor reached the wanted state
+FILAMENT = "filament"          # the TOOLHEAD sensor reached the wanted state
 STALLED = "stalled"            # filament stopped moving
+RUNOUT = "runout"              # the lane lost its filament mid-move
 DRIVER_ERROR = "driver_error"  # the board wants F15 before anything else
 TIMED_OUT = "timed_out"
 
 ## Outcomes that mean "stop and deal with it", as opposed to a normal finish.
-PROBLEMS = frozenset([STALLED, DRIVER_ERROR, TIMED_OUT])
+PROBLEMS = frozenset([STALLED, RUNOUT, DRIVER_ERROR, TIMED_OUT])
 
-## Consecutive matching polls before a sensor condition counts.
-DEFAULT_CONFIRMATIONS = 3
+## Consecutive matching polls before a condition counts. zmod keeps two
+## separate counts and so do we: a stall has to persist (its motion bit toggles,
+## so single samples read as stopped all the time), while the lane's own
+## filament bit is steady and one reading of it is enough.
+DEFAULT_CONFIRMATIONS = 3      # zmod's stall_count
+DEFAULT_RUNOUT_CONFIRMATIONS = 1   # zmod's silk_count
 
 
 class Outcome(object):
@@ -61,22 +66,24 @@ class StateWaiter(object):
     Feed it every F13 reading. It returns an Outcome each time; keep going
     while that is WAITING.
 
-    `expect_filament` is what the channel's filament bit should become for the
-    move to count as successful - True for a load, False for an unload. It is
-    only tested while the board is in `activity`, because outside that state
-    the bit is describing something we did not ask for.
+    `watch_runout` turns on zmod's silk check: the lane's own filament bit
+    going FALSE during a move. Both are only tested while the board is in
+    `activity`, because outside that state the bits are describing something we
+    did not ask for.
     """
 
-    def __init__(self, channel, activity=None, expect_filament=None,
-                 watch_stall=True, confirmations=DEFAULT_CONFIRMATIONS):
-        if confirmations < 1:
+    def __init__(self, channel, activity=None, watch_stall=True,
+                 watch_runout=False, confirmations=DEFAULT_CONFIRMATIONS,
+                 runout_confirmations=DEFAULT_RUNOUT_CONFIRMATIONS):
+        if confirmations < 1 or runout_confirmations < 1:
             raise ValueError("confirmations must be at least 1")
         self.channel = channel
         self.activity = activity
-        self.expect_filament = expect_filament
         self.watch_stall = watch_stall
+        self.watch_runout = watch_runout
         self.confirmations = confirmations
-        self._filament_run = 0
+        self.runout_confirmations = runout_confirmations
+        self._runout_run = 0
         self._stall_run = 0
         self._seen_activity = False
 
@@ -105,7 +112,7 @@ class StateWaiter(object):
                 return outcome
         else:
             ## Conditions only count while the board is doing what we asked.
-            self._filament_run = self._stall_run = 0
+            self._runout_run = self._stall_run = 0
 
         if status.is_ready:
             ## zmod's wait_for_state returns success the moment F13 reports
@@ -124,16 +131,21 @@ class StateWaiter(object):
         return Outcome(WAITING, status, elapsed)
 
     def _check_sensors(self, status, elapsed):
-        if self.expect_filament is not None:
-            if status.has_filament(self.channel) == self.expect_filament:
-                self._filament_run += 1
-                if self._filament_run >= self.confirmations:
-                    return Outcome(FILAMENT, status, elapsed,
-                                   "filament %s on channel %d"
-                                   % ("present" if self.expect_filament
-                                      else "gone", self.channel))
+        ## Silk first, as zmod checks it first: a lane that lost its filament
+        ## has also stopped moving, and "there is nothing to feed" is the more
+        ## useful of the two answers.
+        if self.watch_runout:
+            ## zmod's silk={'count': silk_count, 'status': False} -> RET_SILK,
+            ## "No filament N in IFS". It is a FAILURE in both directions: on a
+            ## load the spool ran out, on an unload the strand left the lane.
+            if status.has_filament(self.channel):
+                self._runout_run = 0
             else:
-                self._filament_run = 0
+                self._runout_run += 1
+                if self._runout_run >= self.runout_confirmations:
+                    return Outcome(RUNOUT, status, elapsed,
+                                   "channel %d has no filament in the IFS"
+                                   % self.channel)
 
         if self.watch_stall:
             ## The board's motion bit is SET while filament moves, so a jam is
@@ -191,9 +203,9 @@ class Parameters(object):
         "unload_extruder_mm": 60.0, "unload_ifs_mm": 70.0,
         "unload_speed": 600.0,
         ## How far a load feeds, straight from zmod's defaults
-        ## (filament_autoinsert_empty_length / _full_length). The board REFUSES
-        ## a longer feed - "F10 C1 L1000 S1200 refused: FFS not ready." - so
-        ## this is not a bound that can be raised to the tube length.
+        ## (filament_autoinsert_empty_length / _full_length). The board does NOT
+        ## cap a feed at these: "F10 C1 L1000 S1200 refused: FFS not ready." was
+        ## a clamp that had not settled yet, and zmod's own load asks for 1000.
         "load_empty_mm": 600.0, "load_full_mm": 550.0,
         ## The shear either side of the cut, from zmod's _CUT_PRUTOK
         ## (FILAMENT_UNLOAD_BEFORE_CUTTING / _AFTER_CUTTING). The AD5X cuts

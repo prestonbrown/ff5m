@@ -441,6 +441,110 @@ class TestCommandQueue(unittest.TestCase):
             self.obj.cmd_IFS_FEED(gcmd)
         self.assertIn("stall", str(caught.exception).lower())
 
+    def test_a_driver_fault_resets_the_driver_and_re_issues_the_move(self):
+        """zmod's recovery, which we did not have.
+
+        Its wait_for_state sends F15 the moment F13 reads DRV_ERROR and returns
+        RET_RETRY; cmd_IFS_F10 then re-sends the same opcode, up to retry_count
+        times. Ours failed the command outright, so a driver that dropped out
+        ended the run - which is exactly how one evening on the AD5X ended.
+        """
+        self.link.replies = (["FFS channel 1 feeding."]
+                             + [f13(state=STATUS.DRIVER_ERROR)]
+                             + [""]                       # F15 C
+                             + ["FFS channel 1 feeding."]  # the re-issue
+                             + [f13(state=STATUS.READY)] * 4)
+        gcmd = fakes.FakeGcmd({"CHANNEL": 1, "UNTIL": "done", "CHECK": 1,
+                               "LENGTH": 600, "SPEED": 1200, "TIMEOUT": 2.0})
+        self.obj.cmd_IFS_FEED(gcmd)             # must not raise
+        self.assertIn("F15 C", self.link.asked)
+        self.assertEqual(self.link.asked.count("F10 C1 L600 S1200"), 2)
+
+    def test_the_driver_retry_gives_up_after_retry_count(self):
+        ## Three attempts, and a reset after each so the board is not left
+        ## faulted even on the one we give up on.
+        self.link.replies = ([]
+                             + (["FFS channel 1 feeding."]
+                                + [f13(state=STATUS.DRIVER_ERROR)]
+                                + [""]) * 3
+                             + [f13(state=STATUS.READY)] * 4)
+        gcmd = fakes.FakeGcmd({"CHANNEL": 1, "UNTIL": "done", "CHECK": 1,
+                               "LENGTH": 600, "SPEED": 1200, "TIMEOUT": 2.0})
+        with self.assertRaises(gcmd.error) as caught:
+            self.obj.cmd_IFS_FEED(gcmd)
+        self.assertIn("driver", str(caught.exception).lower())
+        self.assertEqual(self.link.asked.count("F10 C1 L600 S1200"), 3)
+        self.assertEqual(self.link.asked.count("F15 C"), 3)
+
+    def test_a_stall_is_not_retried(self):
+        ## zmod retries RET_RETRY only. RET_STALL breaks out of the loop: the
+        ## filament is jammed, and driving into it again grinds a flat on it.
+        self.link.replies = (["FFS channel 1 feeding."]
+                             + [f13(state=STATUS.LOADING, chan=1, stall=0)] * 8)
+        gcmd = fakes.FakeGcmd({"CHANNEL": 1, "UNTIL": "done", "CHECK": 1,
+                               "LENGTH": 600, "SPEED": 1200, "TIMEOUT": 1.0})
+        with self.assertRaises(gcmd.error):
+            self.obj.cmd_IFS_FEED(gcmd)
+        self.assertNotIn("F15 C", self.link.asked)
+        self.assertEqual(self.link.asked.count("F10 C1 L600 S1200"), 1)
+
+    def test_an_empty_lane_reads_as_a_runout_not_a_jam(self):
+        """zmod passes silk alongside stall on every CHECK=1 move.
+
+        A spool that ran out also stops moving, so without the silk check the
+        board's answer is "stalled" and the operator goes looking for a jam
+        that is not there.
+        """
+        self.link.replies = (["FFS channel 1 feeding."]
+                             + [f13(state=STATUS.LOADING, chan=1, silk=0b1010,
+                                    stall=0b1)] * 8)
+        gcmd = fakes.FakeGcmd({"CHANNEL": 1, "UNTIL": "done", "CHECK": 1,
+                               "LENGTH": 600, "SPEED": 1200, "TIMEOUT": 1.0})
+        with self.assertRaises(gcmd.error) as caught:
+            self.obj.cmd_IFS_FEED(gcmd)
+        self.assertIn("no filament", str(caught.exception).lower())
+
+    def test_an_unchecked_move_ignores_an_empty_lane(self):
+        ## The contrast, and zmod's shape: no CHECK, no judging. Its unload is
+        ## a plain F11 that waits for READY and nothing else.
+        self.link.replies = (["FFS channel 4 exiting."]
+                             + [f13(state=STATUS.UNLOADING, chan=4, silk=0)] * 2
+                             + [f13(state=STATUS.READY, silk=0)])
+        gcmd = fakes.FakeGcmd({"CHANNEL": 4, "UNTIL": "done",
+                               "LENGTH": 600, "SPEED": 1200})
+        self.obj.cmd_IFS_RETRACT(gcmd)          # must not raise
+
+    def test_a_timeout_releases_every_channel(self):
+        """zmod's timeout path is F112 then F18.
+
+        A timeout means we no longer know what the board is doing, and a lane
+        left clamped holds its filament until a human notices - two of them sat
+        gripped for hours after one failed run.
+        """
+        self.link.replies = (["FFS channel 1 feeding."]
+                             + [f13(state=STATUS.CLAMPED, chan=1)] * 12
+                             + ["", ""])
+        gcmd = fakes.FakeGcmd({"CHANNEL": 1, "UNTIL": "done", "CHECK": 1,
+                               "LENGTH": 600, "SPEED": 1200, "TIMEOUT": 0.3})
+        with self.assertRaises(gcmd.error):
+            self.obj.cmd_IFS_FEED(gcmd)
+        self.assertIn("F112", self.link.asked)
+        self.assertIn("F18", self.link.asked)
+
+    def test_a_stall_stops_the_board_but_leaves_the_clamp_alone(self):
+        ## zmod releases everything only on a timeout. A stall is a known state
+        ## with a known channel, and the operator is about to clear it - taking
+        ## the clamp off would drop the filament back down the tube.
+        self.link.replies = (["FFS channel 1 feeding."]
+                             + [f13(state=STATUS.LOADING, chan=1, stall=0)] * 8
+                             + [""])
+        gcmd = fakes.FakeGcmd({"CHANNEL": 1, "UNTIL": "done", "CHECK": 1,
+                               "LENGTH": 600, "SPEED": 1200, "TIMEOUT": 1.0})
+        with self.assertRaises(gcmd.error):
+            self.obj.cmd_IFS_FEED(gcmd)
+        self.assertIn("F112", self.link.asked)
+        self.assertNotIn("F18", self.link.asked)
+
     def test_shutdown_releases_a_waiting_caller(self):
         ## A caller blocked on a command when klippy goes down must not hang.
         request = IFS._Request("F13")
