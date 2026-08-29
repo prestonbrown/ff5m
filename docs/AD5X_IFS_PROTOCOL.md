@@ -37,26 +37,26 @@ Everything in this section is **measured** - see "Ground truth" below.
 
 **One reader, always.** A reply has no terminator and ends when the board goes
 quiet, so two readers on the port do not each get a clean answer - they get
-whichever line arrives first, and so does the other. Reading the port from a
-second thread while a poller was mid-`F13` produced diagnostics output that
-varied between calls and a status poll that came back empty and looked like a
-disconnected board. Everything must go through the one thread that polls.
+whichever bytes arrive first, and so does the other. The symptom is quiet
+corruption: diagnostics output that varies between calls and status polls that
+come back empty, reading exactly like a disconnected board. Everything must go
+through the one thread that polls.
 
 The board is not slow. Watching `firmwareExe` suggests ~4.6 ms per byte, but that
 is its own read loop - it calls `read()` for **one byte at a time**, so a 127-byte
 reply is 127 syscalls. Reading in blocks gets the same reply in ~165 ms.
 
-**There is no `0xFF` commit byte.** An earlier revision of this document called it
-required. Stock sent 101 polls and five action commands without one. Tested
-directly against the board, all four combinations return an identical 127-byte
-`F13` reply:
+**The `0xFF` commit byte is a host habit, not a protocol requirement.** The stock
+FlashForge host sends one ~200 ms after every command - that is where zmod's came
+from - but the board does not wait for it: all four combinations return an
+identical 127-byte `F13` reply when sent directly to the board:
 
 | command sent | reply |
 |---|---|
-| `F13 \r\n` (OEM: space, no commit) | yes |
-| `F13\r\n` + `0xFF` (zmod) | yes |
-| `F13\r\n` (neither) | yes |
-| `F13 \r\n` + `0xFF` (both) | yes |
+| `F13 \r\n` - space only (stock form, as captured) | yes |
+| `F13\r\n` + `0xFF` - zmod's form | yes |
+| `F13\r\n` - neither | yes |
+| `F13 \r\n` + `0xFF` - both | yes |
 
 So the trailing space and the commit byte are both **cosmetic** on firmware 3.0.6.
 Sending the commit byte also forces a delay before it, which is a hard 200 ms on
@@ -149,7 +149,12 @@ both their `GCONF` registers.
 - `silk_state`, `stall_state` - per-channel **bitmasks**, `(v >> i) & 1`
 - `ffs_channels_insert` - per-channel bitmask, and a **request queue**: a set
   bit means "please thread this lane", not "this lane is threaded". See below.
-- `chan` - active channel, 0 = none
+- `chan` - **not the loaded channel.** Observed naming a lane that was not the
+  one in the shared path after a completed load, with nothing in the documented
+  opcode set bringing it back in step - whatever it tracks is board-internal,
+  probably selector-side. `0` means none. Which lane is loaded is host-side
+  state (`save_variables` `ifs_loaded` under the macros in this repo); never
+  read `chan` as that answer.
 
 ### `stall_state` reports MOTION, not a stall
 
@@ -176,9 +181,10 @@ precondition check: `F10` on a lane with no filament answers `FFS not ready.`
 
 `zmod_ifs.py` regexes `channel_count:\s*(\d+)` out of the `F13` line. **That field
 is not in 3.0.6's format string**, so on this board the regex never matches and
-the value stays 0. It is presumably a newer IFS revision's field. Confirmed against
-101 live `F13` replies: the fields present are exactly `FFS_state`, `silk_state`,
-`chan`, `ffs_channels_insert`, `stall_state`, `jinsi_GCONF`, `qiehuan_GCONF`.
+the value stays 0. The field list does move across revisions: a captured 3.0.5
+`F13` reply carries a trailing `vibr: %d` that 3.0.6 never emits. On 3.0.6 the
+fields present are exactly `FFS_state`, `silk_state`, `chan`,
+`ffs_channels_insert`, `stall_state`, `jinsi_GCONF`, `qiehuan_GCONF`.
 
 ZMOD's actual channel count is neither probed nor parsed: it is the `color_limit`
 config option, `config.getint('color_limit', 4)`. Every install is hardcoded to
@@ -203,7 +209,7 @@ A value of **2** also appears, for under a second at the start of a clamp. zmod
 has no name for it and never waits on it; treat it as "busy, not ready".
 
 `clamped` (7) is real but its duration is not predictable - measured at 3.8 s on
-one channel and 0.2 s on another during the same session. Anything that waits
+one channel and 0.2 s on another in one sequence of clamps. Anything that waits
 for it to *arrive* will sometimes miss it entirely. Wait for the return to
 `ready` instead, which is what zmod does.
 
@@ -255,8 +261,7 @@ filament in 1, 2 and 4).
   and the version are baked into each firmware build and a different board
   answers with its own. Every driver today assumes four channels; this asks.
 
-- **`F21` returns raw per-channel sensor values, not bitmasks.** This is the find
-  of the sweep:
+- **`F21` returns raw per-channel sensor values, not bitmasks:**
 
   ```
   F21 ok.
@@ -270,11 +275,10 @@ filament in 1, 2 and 4).
   channel that is marginal - filament present but barely triggering - is visible
   in `F21` and invisible everywhere else. No driver reads it.
 
-- **`F40` returns cumulative-looking stall counts**, e.g.
-  `stall count: C1: 1 C2: 462 C3: 1 C4: 1` after a channel fought resistance.
-  **Not monotonic**: the same counter read 462, then 30 after an unrelated
-  clamp/retract/feed/release cycle. Something resets or windows it. Do not treat
-  it as a lifetime total until that is understood.
+- **`F40` returns per-channel counters labelled `stall count`**, e.g.
+  `stall count: C1: 1 C2: 462 C3: 1 C4: 1`. **Not monotonic**: the same counter
+  read 462, then 30 after a clamp/retract/feed/release cycle that moved other
+  lanes. Something resets or windows it. Do not treat it as a lifetime total.
 
 - **Both TMC drivers are readable.** `F41`/`F44`/`F45` and `F50`-`F54` (driver 1)
   and `F60`-`F64` (driver 2) expose `GCONF`, `GSTAT`, `CHOPCONF`, `DRV_STATUS`,
@@ -314,9 +318,14 @@ filament in 1, 2 and 4).
   fault-bit decoding names the family it assumed and an unknown family still
   reports that *some* fault bit is set rather than staying silent.
 
-- `F12`, `F20`, `F30`, `F43` acknowledge but reveal nothing about their effect.
-  Do not send them blind; they may actuate. They were deliberately excluded from
-  the sweep.
+- `F20`, `F30`, `F43` acknowledge but reveal nothing about their effect. Do not
+  send them blind; they may actuate. They were deliberately excluded from the
+  sweep.
+- `F12` answers with four numbers: per-channel filament presence, the decimal
+  form of `F13`'s `silk_state`.
+- `F37` is reported by an external capture (a Telegram-circulated IFS table) to
+  put the board into **firmware-update mode**. Never probe it from a working
+  install.
 
 ## Versioning
 
@@ -401,8 +410,9 @@ F39 C2         -> ... channel 2 release.              state=23, insert=0
 
 ### `F23` is what clears the insert bit, and the bit is a REQUEST
 
-Previously unresolved here, because `F112`, `F23` and `F39` all landed inside
-350 ms of each other. A run on 2026-08-29 separated them by accident:
+In the driven sequence `F112`, `F23` and `F39` land within 350 ms of each other,
+which leaves the clearer ambiguous. A run where two lanes failed to thread
+separated them - the failing lanes never reached their `F23`:
 
 | lane | opcodes sent | insert bit afterwards |
 |---|---|---|
@@ -415,7 +425,8 @@ Previously unresolved here, because `F112`, `F23` and `F39` all landed inside
 
 That also settles what the field *means*. A set bit is the board asking to have
 that lane threaded, and `F23` is the acknowledgement - so reading it as "channels
-that are inserted" gets it backwards. Ours is `pending_insert_channels`.
+that are inserted" gets it backwards. This repo's status object publishes it as
+`pending_insert_channels`.
 
 ## Not yet verified
 
@@ -425,16 +436,19 @@ that are inserted" gets it backwards. Ours is `pending_insert_channels`.
   lengths, and how it coordinates with the extruder - has not been captured,
   because an unload needs filament actually loaded to the nozzle.
 - **What exactly `F40`'s stall counters count.** They are per-lane and they go
-  DOWN as well as up, so they are not a lifetime total. Three readings on
-  2026-08-29 - `[9, 58, 0, 119]`, then `[428, 467, 0, 69]`, then
+  DOWN as well as up, so they are not a lifetime total. Three readings in one
+  session - `[9, 58, 0, 119]`, then `[428, 467, 0, 69]`, then
   `[195, 161, 0, 488]` - each moved only for the lanes that had just been asked
-  to move, and lane 3, which has never held filament, read 0 throughout. That is
+  to move, and a lane that has never held filament read 0 throughout. That is
   consistent with "how much of the most recent commanded move did not happen":
   the 428 and 467 followed 600 mm feeds that barely moved, the 69 followed the
   one feed that worked, and the 488 followed a 1000 mm eject of which only about
   676 mm had filament left to pull. Consistent with, not established.
-- The effect of `F12`, `F20`, `F30`, `F43` is unknown. They acknowledge and reveal
+- The effect of `F20`, `F30`, `F43` is unknown. They acknowledge and reveal
   nothing; do not send them blind on a loaded machine.
-- Whether the trailing space and the `0xFF` byte matter to any **other** firmware
-  revision. On 3.0.6 neither is needed, and the two shipping drivers disagree
-  about both, which is itself evidence that neither is load-bearing.
+- Whether the trailing space and the `0xFF` byte matter to any **other** IFS
+  firmware revision. On 3.0.6 neither is needed: the stock FlashForge host
+  sends the byte ~200 ms after every command (an independently circulated
+  protocol table records it, and zmod replicates the habit), the board accepts
+  commands with and without it, and the byte costs a hard 200 ms of delay per
+  command when a driver sends it.

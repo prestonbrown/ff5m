@@ -198,6 +198,16 @@ see it: a lane threaded but not loaded sits short of the sensor.
   - **Description**: Report or set what each slot holds. Read from and written
     to FlashForge's own configuration, so the stock UI agrees and the values
     survive pulling a lane out and putting it back.
+  - **Usage**: `IFS_SET_MATERIAL SLOT=2 TYPE=PETG COLOR=FF8800`. The colour is
+    bare hex, without `#`: klipper's parser treats `#` as a comment start, so
+    `COLOR=#FF8800` arrives empty (the colour is silently cleared) and
+    `COLOR="#FF8800"` is worse - an unbalanced quote after the `#` truncation
+    is a malformed command, and a malformed command from the console shuts
+    this klipper fork down entirely.
+    Stored and reported with the `#` either way. `TYPE=` and `COLOR=` are
+    independent - pass one to change just that; an empty value clears it.
+    `IFS_SELECT` with no `TEMP=` needs the slot's `TYPE` to be one it knows,
+    so set the type when a lane is first loaded.
 
 - **IFS_STATUS** / **IFS_DIAGNOSTICS**
   - **Description**: What the board is doing, and its firmware, stall counters
