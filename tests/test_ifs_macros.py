@@ -254,6 +254,92 @@ class PurgeTest(unittest.TestCase):
         self.assertEqual(commands[-1], "_IFS_WIPE", commands)
 
 
+class CutTest(unittest.TestCase):
+    """The cutter is a fixed blade off the front-left of the bed."""
+
+    PARAMS = {"cut_before_mm": 0.0, "cut_after_mm": 5.0, "unload_speed": 600.0,
+              "unload_extruder_mm": 60.0}
+
+    def render(self):
+        return render_macro(HW, "_IFS_CUT", printer={
+            "ifs": {"params": self.PARAMS},
+            "gcode_macro _IFS_CUT": load_macro(HW, "_IFS_CUT").variables,
+            "gcode_macro _IFS_SENSOR_HOLD": {"was_enabled": 1},
+        }).commands
+
+    def test_y_moves_before_x_and_the_cut_is_the_slow_x(self):
+        ## zmod: G1 Y-7.5 F1800 then G1 X-2.5 F600. Reversed, the head would
+        ## cross the front of the bed at the cutter's depth.
+        commands = self.render()
+        y = index_of(commands, r"G1 Y-7\.5")
+        x = index_of(commands, r"G1 X-2\.5")
+        self.assertLess(y, x, commands)
+        self.assertIn("F600", commands[x])
+
+    def test_the_cut_coordinates_are_inside_the_machine(self):
+        ## Negative on purpose, but axis_minimum is (-20, -20): outside that and
+        ## klipper refuses the move.
+        g = load_macro(HW, "_IFS_CUT").variables
+        self.assertGreater(g["cut_x"], -20.0)
+        self.assertGreater(g["cut_y"], -20.0)
+        self.assertLess(g["cut_x"], 0.0)
+        self.assertLess(g["cut_y"], 0.0)
+
+    def test_it_withdraws_the_stub_and_leaves_the_corner(self):
+        commands = self.render()
+        retract = index_of(commands, r"G1 E-5\.0")
+        leave = index_of(commands, r"G1 X20\.0")
+        self.assertLess(index_of(commands, r"G1 X-2\.5"), retract)
+        self.assertLess(retract, leave)
+
+    def test_every_extruder_move_is_bracketed(self):
+        commands = self.render()
+        held = False
+        for command in commands:
+            if command == "_IFS_SENSOR_HOLD":
+                held = True
+            elif command == "_IFS_SENSOR_RESUME":
+                held = False
+            elif command.startswith("G1 E"):
+                self.assertTrue(held, "unbracketed %r" % command)
+        self.assertFalse(held, "sensor left muted")
+
+
+class ClearExtruderTest(unittest.TestCase):
+    PARAMS = {"cut_before_mm": 0.0, "cut_after_mm": 5.0, "unload_speed": 600.0,
+              "unload_extruder_mm": 60.0}
+
+    def render(self, detected):
+        return render_macro(HW, "_IFS_CLEAR_EXTRUDER", printer={
+            "ifs": {"params": self.PARAMS},
+            "extruder": {"target": 220.0},
+            "filament_switch_sensor toolhead": {"filament_detected": detected},
+            "gcode_macro _IFS_SENSOR_HOLD": {"was_enabled": 1},
+        }, params={"TEMP": 220}).commands
+
+    def test_an_empty_extruder_is_left_alone(self):
+        ## zmod's IFS_REMOVE_CURRENT_PRUTOK returns on the same test. Cutting
+        ## air and retracting 60mm of nothing would strip the gear.
+        commands = self.render(False)
+        self.assertFalse([c for c in commands if c.startswith("_IFS_CUT")],
+                         commands)
+        self.assertFalse([c for c in commands if c.startswith("G1 E")],
+                         commands)
+
+    def test_a_loaded_extruder_is_cut_then_withdrawn(self):
+        commands = self.render(True)
+        self.assertLess(index_of(commands, r"_IFS_CUT"),
+                        index_of(commands, r"G1 E-60\.0"))
+
+    def test_it_heats_and_waits_before_cutting(self):
+        ## Cold filament snaps in the heatbreak instead of shearing.
+        commands = self.render(True)
+        self.assertLess(index_of(commands, r"M104 S220"),
+                        index_of(commands, r"TEMPERATURE_WAIT"))
+        self.assertLess(index_of(commands, r"TEMPERATURE_WAIT"),
+                        index_of(commands, r"_IFS_CUT"))
+
+
 class LeavePurgeTest(unittest.TestCase):
     def test_comes_forward_to_safe_y_only(self):
         commands = render_macro(HW, "_IFS_LEAVE_PURGE",

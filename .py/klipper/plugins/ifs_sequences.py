@@ -195,6 +195,11 @@ class Parameters(object):
         ## a longer feed - "F10 C1 L1000 S1200 refused: FFS not ready." - so
         ## this is not a bound that can be raised to the tube length.
         "load_empty_mm": 600.0, "load_full_mm": 550.0,
+        ## The shear either side of the cut, from zmod's _CUT_PRUTOK
+        ## (FILAMENT_UNLOAD_BEFORE_CUTTING / _AFTER_CUTTING). The AD5X cuts
+        ## filament by driving the toolhead into a fixed blade, and the stub
+        ## left behind has to come back out of the extruder afterwards.
+        "cut_before_mm": 0.0, "cut_after_mm": 5.0,
     }
     ## Multicolour key -> our name. FlashForge spells it "Frist".
     FROM_MULTICOLOUR = {
