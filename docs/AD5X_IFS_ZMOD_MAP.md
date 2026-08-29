@@ -23,7 +23,17 @@ window and it answers `FFS not ready.`. zmod follows F24 and F39 with
 **Success is a return to READY, never the arrival of an activity state.**
 `wait_for_state` returns `RET_OK` on `state == FFS_STATUS_READY`. The
 per-channel activity (`CLAMPED`, `LOADING` + 11×(port-1)) is only the window in
-which silk and stall are judged. Waiting for an activity to *arrive* times out.
+which silk and stall are judged. Waiting for an activity to *arrive* times out -
+and not because the board skips it, but because it can be over before the next
+poll: `clamped` was measured at 3.8 s on one channel and 0.2 s on another in the
+same session.
+
+**Only one lane may hold the path into the extruder.** All four converge at a hub
+on the toolhead, so a lane threaded there blocks the rest, and the toolhead
+sensor cannot see it - a threaded lane parks SHORT of the sensor, which reads
+empty while the path is taken. Threading a second lane into an occupied hub jams
+both, and the symptom is a feed that stalls at exactly the distance the first
+lane had backed off.
 
 **Refusals are prefixed like successes.** `F10 ok. FFS not ready.` is a refusal
 and `F10 ok. FFS channel 1 feeding.` is a success. Only the payload separates
@@ -132,10 +142,12 @@ Ours does: park, heat, clamp, feed, purge, wipe. **Gaps, in order of severity:**
    the same hole.
 3. ~~No F23~~ - **done**, `IFS_MARK_INSERTED`, and the load ends with it.
 4. ~~No unload-first~~ - **done**. zmod's load opens with
-   `IFS_REMOVE_CURRENT_PRUTOK`, which runs a full `IFS_REMOVE_PRUTOK` and pulls
-   the old strand back into its own lane. Ours does the same now that the loaded
-   lane is on record: `IFS_LOAD` calls `IFS_UNLOAD` for it, and falls back to
-   `_IFS_CLEAR_EXTRUDER` only when no lane is recorded and there is nothing to
+   `IFS_REMOVE_CURRENT_PRUTOK`, which runs `_IFS_REMOVE_PRUTOK` - the SHORT
+   path, 70 mm, leaving the lane threaded. Not `_REMOVE_PRUTOK_IFS`, the 1000 mm
+   one that pushes the lane out of the IFS; the names differ only in word order
+   and using the wrong one ejects the outgoing lane in the middle of a tool
+   change. Ours is `IFS_LOAD` calling `IFS_UNLOAD`, falling back to
+   `_IFS_CLEAR_EXTRUDER` when no lane is recorded and there is nothing to
    retract. Clearing just the extruder left the old filament at the hub, which
    is where the incoming lane arrives.
 
@@ -158,11 +170,14 @@ Ours does: park, heat, clamp, feed, purge, wipe. **Gaps, in order of severity:**
 
 7. ~~No lane tracking~~ - **done**. `ifs.active_channel` is the board's
    *selector* position, not what is in the nozzle, and it reads 0 after a power
-   cycle with filament still loaded, so `IFS_SELECT` would have loaded a second
-   lane on top of the first. zmod reads the loaded lane out of FlashForge's own
-   config (`FFMInfo.channel`); Forge-X has no stock config to read, so it is
-   recorded in `save_variables` - the load writes it, the unload clears it, and
-   both `IFS_UNLOAD` and `IFS_SELECT` read it.
+   cycle with filament still loaded, so a swap would have loaded a second lane
+   on top of the first. zmod reads the loaded lane out of `FFMInfo.channel`.
+   That file is present and we do read it (`[ifs_materials]`), but nothing
+   writes that field once the stock UI is not running, so under Forge-X it is a
+   stale number. Ours lives in `save_variables` instead: `ifs_loaded` for the
+   nozzle and `ifs_at_hub` for the shared path, written by the load, cleared by
+   the unload, and read by `IFS_UNLOAD`, `IFS_EJECT`, `IFS_MOTION`, `IFS_PURGE`
+   and the auto-insert guard.
 
 **Nothing on zmod's command surface is missing now.** What is left is the
 behaviour it never had: `IFS_EJECT` for taking a lane out of the machine, hub
@@ -170,7 +185,10 @@ ownership so two lanes cannot be threaded into the same place, and a gate
 (`tools/lint/check_gcode_safety.py`) against the exception that shuts klippy
 down - which bit us through zmod's own code path as well as ours.
 
-### Unload - `_REMOVE_PRUTOK_IFS` ("Unloading filament Extruder + IFS")
+### Eject - `_REMOVE_PRUTOK_IFS` ("Unloading filament Extruder + IFS")
+
+This is the 1000 mm one, our `IFS_EJECT`. The short 70 mm sibling that a tool
+change wants is `_IFS_REMOVE_PRUTOK`, our `IFS_UNLOAD`.
 
 ```
 _G28 / _GOTO_TRASH / heat
@@ -209,11 +227,25 @@ Everything else should copy zmod. These do not, for stated reasons:
   each call site; ours is `IfsOperations._expect`, so a command cannot forget.
 - **The pre-command status is skipped by identity** (`_fresh_status`) rather
   than avoided by polling quickly. Stronger than a timing assumption.
-- **A move aimed at a sensor fails if it never reaches it.** zmod's checked
-  feed returns `RET_OK` when the board simply finishes, and its macro carries
-  on regardless; ours reports `not_reached`. Asking to feed UNTIL the toolhead
-  and finishing with the sensor still empty is not a success, and treating it
-  as one let a load purge filament that was still in the tube.
+- **A move says HOW it ended, but a missed sensor is not a failure.** zmod's
+  checked feed returns `RET_OK` when the board simply finishes; ours reports
+  `not_reached` and carries on. Making it a failure was tried and **reverted**:
+  it stopped a load whose filament was already at the toolhead entry, before the
+  co-push that would have pulled it in. Reporting the difference is useful,
+  acting on it is not.
+- **A move can back off through the feed** (`BACKOFF=`), applied only when the
+  sensor is what ended it. zmod decides the same thing in python off
+  `RET_EXTRUDER`. It cannot live in the macro: a klipper gcode_macro is rendered
+  ONCE, before any of it runs, so a sensor read written after a feed already
+  happened before the feed was sent.
+- **Only one lane may hold the shared path**, tracked in `save_variables`
+  (`ifs_at_hub`). zmod threads every inserted lane to the toolhead and packs
+  the hub; the toolhead sensor cannot catch this, because a lane threaded but
+  not loaded sits SHORT of the sensor.
+- **UNLOAD and EJECT are different commands.** zmod's `_IFS_REMOVE_PRUTOK`
+  (70 mm, lane stays threaded) and `_REMOVE_PRUTOK_IFS` (1000 mm, lane leaves
+  the IFS) differ only by the order of three words in their names, and using the
+  second where the first belongs ejects the outgoing lane during a tool change.
 - **Auto-insert can be switched off** (`autoinsert:` in `[ifs]`, default on).
   zmod always threads an inserted lane. A printer that moves filament on its
   own the moment somebody touches it is worth being able to stop.

@@ -33,6 +33,14 @@ Everything in this section is **measured** - see "Ground truth" below.
 | First byte | ~105 ms after the command |
 | Whole reply | ~165 ms for a 127-byte `F13`, reading in blocks |
 | Poll cadence | stock sends `F13` every ~0.91 s, and nothing else while idle |
+| Readers | **exactly one**, always |
+
+**One reader, always.** A reply has no terminator and ends when the board goes
+quiet, so two readers on the port do not each get a clean answer - they get
+whichever line arrives first, and so does the other. Reading the port from a
+second thread while a poller was mid-`F13` produced diagnostics output that
+varied between calls and a status poll that came back empty and looked like a
+disconnected board. Everything must go through the one thread that polls.
 
 The board is not slow. Watching `firmwareExe` suggests ~4.6 ms per byte, but that
 is its own read loop - it calls `read()` for **one byte at a time**, so a 127-byte
@@ -139,7 +147,8 @@ carries **two TMC drivers**: a feeder and a channel selector, and `F13` returns
 both their `GCONF` registers.
 
 - `silk_state`, `stall_state` - per-channel **bitmasks**, `(v >> i) & 1`
-- `ffs_channels_insert` - consumed as a bit length
+- `ffs_channels_insert` - per-channel bitmask, and a **request queue**: a set
+  bit means "please thread this lane", not "this lane is threaded". See below.
 - `chan` - active channel, 0 = none
 
 ### `stall_state` reports MOTION, not a stall
@@ -189,6 +198,14 @@ comments read "18, 29, 40" / "22, 33, 44" / "26, 37, 48" / "23, 34, 45":
 | 12 | unclamping |
 | 15 | unloading |
 | 127 | driver error |
+
+A value of **2** also appears, for under a second at the start of a clamp. zmod
+has no name for it and never waits on it; treat it as "busy, not ready".
+
+`clamped` (7) is real but its duration is not predictable - measured at 3.8 s on
+one channel and 0.2 s on another during the same session. Anything that waits
+for it to *arrive* will sometimes miss it entirely. Wait for the return to
+`ready` instead, which is what zmod does.
 
 ### Return codes (driver-side, from `zmod_ifs.py`)
 
@@ -380,10 +397,25 @@ F23 C2         -> F23 ok. chan 2.
 F39 C2         -> ... channel 2 release.              state=23, insert=0
 ```
 
-`ffs_channels_insert` went 2 -> 0 across this sequence. **Which command cleared it
-is not established** - `F112`, `F23` and `F39` all landed inside 350 ms and the
-next poll was ~900 ms later. `F23` is the semantically likely one. Do not build on
-that without a capture that separates them.
+`ffs_channels_insert` went 2 -> 0 across this sequence.
+
+### `F23` is what clears the insert bit, and the bit is a REQUEST
+
+Previously unresolved here, because `F112`, `F23` and `F39` all landed inside
+350 ms of each other. A run on 2026-08-29 separated them by accident:
+
+| lane | opcodes sent | insert bit afterwards |
+|---|---|---|
+| 4 | `F112`, **`F23`**, `F39` | **cleared** |
+| 2 | `F112`, `F39` (threading failed before its `F23`) | still set |
+| 1 | `F112`, `F39` (same) | still set |
+
+`F112` and `F39` both happened in the failing cases and left the bit alone, so
+**`F23` is the clearer**, as the naming suggested.
+
+That also settles what the field *means*. A set bit is the board asking to have
+that lane threaded, and `F23` is the acknowledgement - so reading it as "channels
+that are inserted" gets it backwards. Ours is `pending_insert_channels`.
 
 ## Not yet verified
 
@@ -392,7 +424,15 @@ that without a capture that separates them.
   but that was driven by hand. The stock UI's complete unload flow - opcode order,
   lengths, and how it coordinates with the extruder - has not been captured,
   because an unload needs filament actually loaded to the nozzle.
-- **What resets `F40`'s stall counters.** Observed dropping 462 -> 30.
+- **What exactly `F40`'s stall counters count.** They are per-lane and they go
+  DOWN as well as up, so they are not a lifetime total. Three readings on
+  2026-08-29 - `[9, 58, 0, 119]`, then `[428, 467, 0, 69]`, then
+  `[195, 161, 0, 488]` - each moved only for the lanes that had just been asked
+  to move, and lane 3, which has never held filament, read 0 throughout. That is
+  consistent with "how much of the most recent commanded move did not happen":
+  the 428 and 467 followed 600 mm feeds that barely moved, the 69 followed the
+  one feed that worked, and the 488 followed a 1000 mm eject of which only about
+  676 mm had filament left to pull. Consistent with, not established.
 - The effect of `F12`, `F20`, `F30`, `F43` is unknown. They acknowledge and reveal
   nothing; do not send them blind on a loaded machine.
 - Whether the trailing space and the `0xFF` byte matter to any **other** firmware
