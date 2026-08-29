@@ -442,6 +442,30 @@ class LoadedLaneTest(unittest.TestCase):
         self.assertEqual(self.saved(commands),
                          {"ifs_loaded": "0", "ifs_at_hub": "0"})
 
+    def test_motion_calls_a_jam_a_jam_and_pauses(self):
+        """zmod's cmd_IFS_MOTION: the LANE's filament bit tells them apart.
+
+        Filament stopping is the same event either way. If the lane still holds
+        filament something is stuck and the print has to stop; if it does not,
+        the spool is finished, which the runout sensor already handles. Calling
+        a runout a jam sends somebody looking for a blockage that is not there.
+        """
+        commands = self.render("IFS_MOTION", {}, recorded=2)
+        self.assertTrue(any("jam" in c for c in commands), commands)
+        self.assertIn("PAUSE", commands)
+
+    def test_motion_calls_an_empty_lane_a_runout_and_does_not_pause(self):
+        ## Lane 3 is not in loaded_channels, so its filament is gone.
+        commands = self.render("IFS_MOTION", {}, recorded=3)
+        self.assertTrue(any("run out" in c for c in commands), commands)
+        self.assertNotIn("PAUSE", commands)
+
+    def test_motion_with_nothing_loaded_says_so(self):
+        commands = self.render("IFS_MOTION", {}, recorded=0)
+        self.assertNotIn("PAUSE", commands)
+        self.assertTrue(any("no lane is loaded" in c for c in commands),
+                        commands)
+
     def test_select_is_just_a_load(self):
         """zmod's tool change is literally INSERT_PRUTOK_IFS and nothing else.
 
