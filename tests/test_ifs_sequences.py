@@ -64,13 +64,23 @@ class TestFinishing(unittest.TestCase):
         outcome = feed(waiter, status(LOADING), status(LOADING), status())
         self.assertEqual(outcome.kind, SEQ.FINISHED)
 
-    def test_ready_before_the_move_starts_is_not_a_finish(self):
-        ## The board answers the command and only then starts working. Calling
-        ## that first ready poll a finish would end every move instantly.
+    def test_ready_finishes_even_if_the_activity_was_never_seen(self):
+        ## zmod's wait_for_state:  if state == FFS_STATUS_READY: return True
+        ## - no precondition that the activity was observed first. It polls
+        ## every 0.2s and still does not require it; this reads the poller's
+        ## 1s snapshots, so requiring it meant a missed transition hung until
+        ## the timeout and then blamed the board for never reaching the state.
+        ## Both hardware failures - clamp and feed - were this.
         waiter = SEQ.StateWaiter(CH, S.LOADING)
-        self.assertEqual(waiter.update(status()).kind, SEQ.WAITING)
-        self.assertEqual(waiter.update(status()).kind, SEQ.WAITING)
-        outcome = feed(waiter, status(LOADING), status())
+        self.assertEqual(waiter.update(status()).kind, SEQ.FINISHED)
+
+    def test_the_pre_command_ready_race_is_not_the_waiters_job(self):
+        ## Reading a READY captured before the command landed would end a move
+        ## instantly. That is guarded upstream in _await, which only feeds the
+        ## waiter a status newer than the one it started with, so the waiter
+        ## stays a pure function of the readings it is given.
+        waiter = SEQ.StateWaiter(CH, S.LOADING)
+        outcome = feed(waiter, status(LOADING), status(LOADING), status())
         self.assertEqual(outcome.kind, SEQ.FINISHED)
 
     def test_without_an_activity_ready_finishes_immediately(self):

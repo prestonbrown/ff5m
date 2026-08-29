@@ -108,10 +108,19 @@ class StateWaiter(object):
             self._filament_run = self._stall_run = 0
 
         if status.is_ready:
-            ## Ready before the board ever entered the activity means the move
-            ## has not started yet, not that it finished.
-            if self._seen_activity or self.activity is None:
-                return Outcome(FINISHED, status, elapsed)
+            ## zmod's wait_for_state returns success the moment F13 reports
+            ## READY, with no precondition that the activity was ever seen:
+            ##     if state == FFS_STATUS_READY: return True, RET_OK, ...
+            ## Requiring the activity first meant a transition the poll missed -
+            ## it polls every second, zmod every 0.2 - hung until the timeout and
+            ## then blamed the board for "never reaching loading" when the move
+            ## had actually finished. Reaching the activity is not the success
+            ## condition; coming back from it is.
+            ##
+            ## The race this guarded against - reading READY from before the
+            ## command landed - is handled upstream instead: _await only acts on
+            ## a status newer than the one it started with.
+            return Outcome(FINISHED, status, elapsed)
         return Outcome(WAITING, status, elapsed)
 
     def _check_sensors(self, status, elapsed):
