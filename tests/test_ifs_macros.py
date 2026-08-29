@@ -502,6 +502,40 @@ class LoadedLaneTest(unittest.TestCase):
                           if c.startswith(("IFS_LOAD", "IFS_UNLOAD"))], [])
 
 
+class ShakeTest(unittest.TestCase):
+    """zmod's _SBROS_TRASH: out, in, out, no extrusion.
+
+    The point is the sudden stop, which snaps the purge string off the nozzle so
+    it drops down the chute instead of being dragged onto the pad for the wiper
+    to smear around.
+    """
+
+    def render(self):
+        return render_macro(HW, "_IFS_SHAKE", printer=at(52.5, 229.0)).commands
+
+    def test_it_never_combines_x_and_y(self):
+        ## Same back-wall rule as every other move behind safe_y.
+        for command in self.render():
+            self.assertIsNone(COMBINED_XY.match(command), command)
+
+    def test_it_does_not_extrude(self):
+        for command in self.render():
+            self.assertNotIn("E", command.split("G1")[-1].split("F")[0]
+                             if command.startswith("G1") else "")
+
+    def test_it_dips_into_the_chute_and_comes_back_out(self):
+        ys = [c for c in self.render() if c.startswith("G1 Y")]
+        self.assertEqual(len(ys), 3, ys)
+        self.assertIn(str(GEOMETRY["safe_y"]), ys[0])
+        self.assertIn(str(GEOMETRY["station_y"]), ys[1])
+        self.assertIn(str(GEOMETRY["safe_y"]), ys[2])
+
+    def test_it_ends_clear_of_the_back_edge(self):
+        ## So the next X move is legal.
+        ys = [c for c in self.render() if c.startswith("G1 Y")]
+        self.assertIn(str(GEOMETRY["safe_y"]), ys[-1])
+
+
 class WipeTest(unittest.TestCase):
     def setUp(self):
         self.commands = render_macro(
@@ -548,6 +582,24 @@ class PurgeTest(unittest.TestCase):
         return render_macro(HW, "_IFS_PURGE", printer=printer,
                             params=params).commands
 
+    def test_every_pass_is_shaken_off_and_wiped(self):
+        """zmod follows EVERY _SBROS_TRASH_DAVIM with _SBROS_TRASH and
+        _CLEAR_REZINA, not just the last one.
+
+        Leaving the first blob attached to the nozzle carries it into the second
+        pass and then onto the wiper, which smears it rather than removing it.
+        """
+        commands = self.render(slot=1)
+        shakes = [i for i, c in enumerate(commands)
+                  if c.startswith("_IFS_SHAKE")]
+        wipes = [i for i, c in enumerate(commands)
+                 if c.startswith("_IFS_WIPE")]
+        self.assertEqual(len(shakes), 2, commands)
+        self.assertEqual(len(wipes), 2, commands)
+        ## And each shake comes before its wipe: snap it off, then clean up.
+        for shake, wipe in zip(shakes, wipes):
+            self.assertLess(shake, wipe, commands)
+
     def test_the_lane_drives_alongside_the_extruder(self):
         commands = self.render(slot=1)
         extrude = index_of(commands, r"G1 E100\.0 F300")
@@ -592,6 +644,56 @@ class PurgeTest(unittest.TestCase):
         self.assertEqual(len([c for c in commands if c.startswith("G1 E")]), 2,
                          commands)
         self.assertEqual(commands[-1], "_IFS_WIPE", commands)
+
+
+class StandalonePurgeTest(unittest.TestCase):
+    """zmod's PURGE_PRUTOK_IFS, for when a colour has not fully changed over."""
+
+    def printer(self, recorded=1, target=220.0):
+        return {
+            "ifs": {"params": {"first_purge_mm": 100.0,
+                               "first_purge_speed": 300.0, "first_fan": 0.0,
+                               "second_purge_mm": 30.0,
+                               "second_purge_speed": 300.0,
+                               "second_fan": 255.0}},
+            "extruder": {"target": target},
+            "save_variables": {"variables": {"ifs_loaded": recorded}},
+        }
+
+    def render(self, params=None, **kwargs):
+        ## `params or {...}` would swallow an EMPTY dict, which is exactly the
+        ## case the cold-nozzle test needs - no TEMP at all.
+        if params is None:
+            params = {"TEMP": 220}
+        return render_macro(HW, "IFS_PURGE", printer=self.printer(**kwargs),
+                            params=params).commands
+
+    def test_it_parks_over_the_chute_before_extruding(self):
+        commands = self.render()
+        self.assertLess(index_of(commands, r"_IFS_PARK_FOR_PURGE\b"),
+                        index_of(commands, r"_IFS_PURGE\b"))
+
+    def test_it_waits_for_temperature(self):
+        commands = self.render()
+        self.assertTrue(any(c.startswith("TEMPERATURE_WAIT") for c in commands),
+                        commands)
+
+    def test_it_does_not_drive_the_lane(self):
+        ## The filament is already through the gear; this is the extruder's job
+        ## alone, which is zmod's _SBROS_TRASH_DAVIM PRUTOK=0.
+        inner = [c for c in self.render() if c.startswith("_IFS_PURGE")]
+        self.assertEqual(len(inner), 1, inner)
+        self.assertNotIn("SLOT=", inner[0])
+
+    def test_it_refuses_when_nothing_is_loaded(self):
+        with self.assertRaises(Exception) as caught:
+            self.render(recorded=0)
+        self.assertIn("nothing is loaded", str(caught.exception))
+
+    def test_it_refuses_a_cold_nozzle(self):
+        with self.assertRaises(Exception) as caught:
+            self.render(params={}, target=0.0)
+        self.assertIn("TEMP", str(caught.exception))
 
 
 class CutTest(unittest.TestCase):
