@@ -51,6 +51,22 @@ and reported the board as disconnected.
 
 **Counts:** `stall_count` 3, `silk_count` 1, `retry_count` 3.
 
+## Two fields that mean the opposite of their name
+
+**`ffs_channels_insert` is a request queue.** F23 CLEARS the bit, so a set bit
+means "please thread this lane", not "this lane is threaded". Measured: after
+threading channel 4 and acknowledging it, channel 4 left the mask while channels
+1 and 2, whose threading had failed before their F23, stayed in it. Our status
+field is `pending_insert_channels` for that reason.
+
+**`FFMInfo.channel` is the current lane, not the lane count.** It reads 4 on a
+four-lane machine with lane 4 loaded, which fits both readings at once, and we
+had been deriving the channel count from it while zmod reads it as the active
+lane. The count is now counted from the `ffmType<n>` keys, which needs no
+interpretation. Slot 0 is where a single-material AD5M records what is loaded;
+on a machine with an IFS it stays empty, which is why `IFS_MATERIALS` used to
+say "loaded: none" whatever was in the extruder.
+
 ## Opcodes
 
 | Opcode | Meaning | Ours | State |
