@@ -171,6 +171,8 @@ class IFS(object):
                 ("IFS_RETRACT", self.cmd_IFS_RETRACT,
                  "Pull filament back into its lane"),
                 ("IFS_STOP", self.cmd_IFS_STOP, "Stop the board feeding"),
+                ("IFS_MARK_INSERTED", self.cmd_IFS_MARK_INSERTED,
+                 "Tell the board a channel now holds filament"),
                 ("IFS_RESET_DRIVER", self.cmd_IFS_RESET_DRIVER,
                  "Reset the board's stepper driver after a fault")):
             gcode.register_command(name, handler, desc=description)
@@ -518,6 +520,15 @@ class IFS(object):
                   lambda ops: ops.release(channel))
         self._settle(gcmd, channel, "release channel %d" % channel)
         gcmd.respond_info("released channel %d" % channel)
+
+    def cmd_IFS_MARK_INSERTED(self, gcmd):
+        ## zmod's IFS_F23, the last IFS step of its load. Without it the board
+        ## is never told the lane is occupied, so its own view of which channels
+        ## hold filament goes stale as soon as we load one.
+        channel = self._channel(gcmd)
+        self._run(gcmd, "F23 C%d" % channel,
+                  lambda ops: ops.mark_inserted(channel))
+        gcmd.respond_info("marked channel %d inserted" % channel)
 
     def cmd_IFS_RELEASE_ALL(self, gcmd):
         self._run(gcmd, "F18", lambda ops: ops.release_all())

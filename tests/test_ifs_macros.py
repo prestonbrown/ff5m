@@ -145,6 +145,15 @@ class LoadTest(unittest.TestCase):
         self.assertLess(index_of(commands, r"M104 S220"),
                         index_of(commands, r"_IFS_PARK_FOR_PURGE"))
 
+    def test_it_hands_the_slot_to_the_purge_and_marks_it_inserted(self):
+        ## Without SLOT the purge cannot drive the lane, and the co-push is the
+        ## whole point. IFS_MARK_INSERTED is zmod's F23, the last IFS step.
+        commands = self.render()
+        self.assertIn("_IFS_PURGE SLOT=1", commands)
+        self.assertIn("IFS_MARK_INSERTED CHANNEL=1", commands)
+        self.assertLess(index_of(commands, r"_IFS_PURGE"),
+                        index_of(commands, r"IFS_MARK_INSERTED"))
+
     def test_it_clamps_before_feeding_and_stops_after(self):
         commands = self.render()
         assert_order = [index_of(commands, r"IFS_CLAMP"),
@@ -176,6 +185,73 @@ class WipeTest(unittest.TestCase):
 
     def test_leaves_the_head_clear_of_the_back_edge(self):
         self.assertEqual(self.commands[-1], "_IFS_LEAVE_PURGE", self.commands)
+
+
+class PurgeTest(unittest.TestCase):
+    """The purge drives the lane and the extruder together.
+
+    The IFS cannot push filament past a gripping extruder gear; it stalls
+    against it, which is what "feed channel 1 failed: stalled" was on the
+    printer with the filament held fast at the gear. zmod's _SBROS_TRASH_DAVIM
+    issues G1 E<n> and then IFS_F10 at the same length and speed - G1 is queued
+    and returns at once, so both drive the filament at the same time.
+    """
+
+    PARAMS = {"first_purge_mm": 100.0, "first_purge_speed": 300.0,
+              "first_fan": 0.0, "second_purge_mm": 30.0,
+              "second_purge_speed": 300.0, "second_fan": 255.0}
+
+    def render(self, slot=None):
+        printer = {"ifs": {"params": self.PARAMS},
+                   "gcode_macro _IFS_SENSOR_HOLD": {"was_enabled": 1}}
+        params = {"SLOT": slot} if slot is not None else {}
+        return render_macro(HW, "_IFS_PURGE", printer=printer,
+                            params=params).commands
+
+    def test_the_lane_drives_alongside_the_extruder(self):
+        commands = self.render(slot=1)
+        extrude = index_of(commands, r"G1 E100\.0 F300")
+        feed = index_of(commands, r"IFS_FEED CHANNEL=1")
+        ## The extruder move must be issued FIRST: it is queued and returns, so
+        ## the blocking IFS feed then overlaps it. Reversed, the feed blocks
+        ## before the gear ever turns and stalls exactly as before.
+        self.assertLess(extrude, feed, commands)
+        self.assertIn("LENGTH=100", commands[feed])
+        self.assertIn("SPEED=300", commands[feed])
+
+    def test_the_lane_is_released_once_the_extruder_has_it(self):
+        commands = self.render(slot=1)
+        self.assertLess(index_of(commands, r"IFS_FEED"),
+                        index_of(commands, r"IFS_RELEASE CHANNEL=1"))
+
+    def test_without_a_slot_nothing_drives_the_lane(self):
+        ## A standalone purge must not command a channel it was not given.
+        commands = self.render()
+        self.assertFalse([c for c in commands if c.startswith("IFS_FEED")],
+                         commands)
+        self.assertFalse([c for c in commands if c.startswith("IFS_RELEASE")],
+                         commands)
+
+    def test_every_extruder_move_is_bracketed_by_the_sensor_hold(self):
+        ## pause_on_runout is on, so filament moving under our own command
+        ## would read as a runout and pause the print.
+        commands = self.render(slot=1)
+        held = False
+        for command in commands:
+            if command == "_IFS_SENSOR_HOLD":
+                held = True
+            elif command == "_IFS_SENSOR_RESUME":
+                held = False
+            elif command.startswith("G1 E"):
+                self.assertTrue(held, "unbracketed %r in %r"
+                                % (command, commands))
+        self.assertFalse(held, "sensor left muted: %r" % (commands,))
+
+    def test_it_purges_twice_and_ends_at_the_wiper(self):
+        commands = self.render(slot=1)
+        self.assertEqual(len([c for c in commands if c.startswith("G1 E")]), 2,
+                         commands)
+        self.assertEqual(commands[-1], "_IFS_WIPE", commands)
 
 
 class LeavePurgeTest(unittest.TestCase):
