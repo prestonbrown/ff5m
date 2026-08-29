@@ -41,6 +41,14 @@ filament, zmod uses `SLEEP=1`: fire the opcode, pause `(len*20)//speed+1`, never
 look at state. The lane's motion bit says nothing about a jam when something
 else is pulling, and at 300 mm/min it reads as stopped within seconds.
 
+**One reader.** Every exchange with the board goes through the poll thread, via
+`run_operation`. The link is not thread-safe and the poller is always mid-F13,
+so a second reader does not get a clean answer - it gets whichever line arrives
+first, and so does the poller. `IFS_DIAGNOSTICS` read the link directly for
+fourteen queries and the two readers split each other's replies: its own output
+varied between calls and the status poll that landed mid-batch came back empty
+and reported the board as disconnected.
+
 **Counts:** `stall_count` 3, `silk_count` 1, `retry_count` 3.
 
 ## Opcodes
