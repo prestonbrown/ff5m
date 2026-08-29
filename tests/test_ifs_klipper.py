@@ -238,6 +238,55 @@ class TestCommandQueue(unittest.TestCase):
         with self.assertRaises(IFS.IfsBusy):
             self.obj.execute("F13")
 
+    def test_clamp_completes_on_the_acknowledgement(self):
+        """The regression that cost a real load attempt.
+
+        F24 answers "F24 ok. chan N." and the board then sits in READY - it
+        never reports CLAMPED for the channel. Waiting on that state transition
+        timed out after 15s on hardware while the clamp had already happened,
+        and IFS_LOAD died at its first IFS command. zmod's cmd_IFS_F24 waits on
+        the same acknowledgement this now waits on.
+        """
+        self.link.replies = ["chan 1."]
+        gcmd = fakes.FakeGcmd({"CHANNEL": 1})
+        self.obj.cmd_IFS_CLAMP(gcmd)
+        self.assertIn("F24 C1", self.link.asked)
+        self.assertTrue(any("clamped channel 1" in r for r in gcmd.responses),
+                        gcmd.responses)
+
+    def test_clamp_never_waits_on_a_state_transition(self):
+        ## The board stays in READY throughout; a poll that keeps saying so must
+        ## not turn into a timeout. Only the acknowledgement may end the wait.
+        self.link.replies = ["chan 1."] + [f13(state=STATUS.READY)] * 40
+        gcmd = fakes.FakeGcmd({"CHANNEL": 1})
+        self.obj.cmd_IFS_CLAMP(gcmd)  # must not raise
+        self.assertEqual(self.link.asked.count("F24 C1"), 1)
+
+    def test_a_refused_clamp_is_not_reported_as_success(self):
+        ## The board prefixes refusals with "ok." exactly as it does successes,
+        ## so the payload is the only thing that distinguishes them. Sending the
+        ## raw command without checking it reported every clamp as fine.
+        self.link.replies = ["FFS not ready."]
+        gcmd = fakes.FakeGcmd({"CHANNEL": 1})
+        with self.assertRaises(Exception):
+            self.obj.cmd_IFS_CLAMP(gcmd)
+        self.assertFalse(any("clamped" in r for r in gcmd.responses),
+                         gcmd.responses)
+
+    def test_a_refused_release_is_not_reported_as_success(self):
+        self.link.replies = ["FFS not ready."]
+        gcmd = fakes.FakeGcmd({"CHANNEL": 1})
+        with self.assertRaises(Exception):
+            self.obj.cmd_IFS_RELEASE(gcmd)
+        self.assertFalse(any("released" in r for r in gcmd.responses),
+                         gcmd.responses)
+
+    def test_release_accepts_the_payload_the_board_actually_sends(self):
+        self.link.replies = ["FFS channel 1 release."]
+        gcmd = fakes.FakeGcmd({"CHANNEL": 1})
+        self.obj.cmd_IFS_RELEASE(gcmd)
+        self.assertIn("F39 C1", self.link.asked)
+
     def test_shutdown_releases_a_waiting_caller(self):
         ## A caller blocked on a command when klippy goes down must not hang.
         request = IFS._Request("F13")

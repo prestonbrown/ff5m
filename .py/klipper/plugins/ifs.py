@@ -71,10 +71,15 @@ class IfsBusy(Exception):
 class _Request(object):
     """One command handed to the poll thread, and the answer coming back."""
 
-    __slots__ = ("command", "done", "response", "error")
+    __slots__ = ("command", "action", "done", "response", "error")
 
-    def __init__(self, command):
+    def __init__(self, command, action=None):
+        ## `command` is always the label used in errors. When `action` is set it
+        ## is run against IfsOperations instead of being written to the link, so
+        ## a caller gets the operations layer's payload checking rather than an
+        ## unvalidated write.
         self.command = command
+        self.action = action
         self.done = threading.Event()
         self.response = None
         self.error = None
@@ -268,7 +273,10 @@ class IFS(object):
         if request is None:
             return False
         try:
-            request.settle(response=self._link.request(request.command))
+            if request.action is not None:
+                request.settle(response=request.action(self._ops))
+            else:
+                request.settle(response=self._link.request(request.command))
         except Exception as exc:
             request.settle(error=str(exc))
             self._note_error("%s failed: %s" % (request.command, exc))
@@ -295,10 +303,21 @@ class IFS(object):
         Raises IfsBusy when nothing answers, RuntimeError when the board or the
         link did.
         """
+        return self._submit(_Request(command), command, timeout)
+
+    def run_operation(self, label, action, timeout=DEFAULT_COMMAND_TIMEOUT):
+        """Run one IfsOperations call on the poll thread.
+
+        The operations layer checks the board's reply payload, which is the only
+        thing that says whether a command happened - the board prefixes refusals
+        with "ok." exactly as it prefixes successes.
+        """
+        return self._submit(_Request(label, action=action), label, timeout)
+
+    def _submit(self, request, label, timeout):
         thread = self._thread
         if thread is None or not thread.is_alive():
             raise IfsBusy("the IFS poller is not running")
-        request = _Request(command)
         with self._queue_lock:
             self._queue.append(request)
         self._wake.set()
@@ -308,7 +327,7 @@ class IFS(object):
             if self.reactor.monotonic() > deadline:
                 self._forget(request)
                 raise IfsBusy("no answer to %s within %.1fs"
-                              % (command, timeout))
+                              % (label, timeout))
             self.reactor.pause(self.reactor.monotonic() + COMMAND_POLL_PAUSE)
         if request.error is not None:
             raise RuntimeError(request.error)
@@ -453,21 +472,23 @@ class IFS(object):
         return gcmd.get_int("CHANNEL", minval=1, maxval=self.channel_count)
 
     def cmd_IFS_CLAMP(self, gcmd):
+        ## Completes on the board's acknowledgement, NOT on a state transition.
+        ## F24 answers "F24 ok. chan N." and the board stays in `ready`; it
+        ## never reports CLAMPED for the channel, so waiting for that state
+        ## timed out every time while the clamp itself had already happened.
+        ## zmod's cmd_IFS_F24 waits on the same acknowledgement.
         channel = self._channel(gcmd)
-        self.execute("F24 C%d" % channel)
-        waiter = ifs_sequences.StateWaiter(channel, ifs_status.CLAMPED,
-                                           watch_stall=False)
-        self._finish(gcmd, self._await(gcmd, waiter,
-                                       gcmd.get_float("TIMEOUT", 15.0)),
-                     "clamp channel %d" % channel)
+        self.run_operation("F24 C%d" % channel, lambda ops: ops.clamp(channel))
+        gcmd.respond_info("clamped channel %d" % channel)
 
     def cmd_IFS_RELEASE(self, gcmd):
         channel = self._channel(gcmd)
-        self.execute("F39 C%d" % channel)
+        self.run_operation("F39 C%d" % channel,
+                           lambda ops: ops.release(channel))
         gcmd.respond_info("released channel %d" % channel)
 
     def cmd_IFS_RELEASE_ALL(self, gcmd):
-        self.execute("F18")
+        self.run_operation("F18", lambda ops: ops.release_all())
         gcmd.respond_info("released every channel")
 
     def cmd_IFS_STOP(self, gcmd):
