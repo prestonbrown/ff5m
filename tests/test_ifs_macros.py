@@ -80,13 +80,14 @@ class GotoStationTest(unittest.TestCase):
         ## and with no X move there is no reason to come forward first
         self.assertNotIn("_IFS_LEAVE_PURGE", commands, commands)
 
-    def test_lift_is_relative_not_an_absolute_z(self):
-        commands = station(GEOMETRY["chute_x"], x=0.0, y=0.0)
-        lift = commands[index_of(commands, r"MOVE_SAFE ")]
-        self.assertIn("ABSOLUTE=0", lift)
-        self.assertIn("Z=%s" % GEOMETRY["lift_dz"], lift)
-        ## it must precede all travel
-        self.assertLess(commands.index(lift), index_of(commands, r"G1 [XY]"))
+    def test_the_station_never_lifts(self):
+        ## zmod's _GOTO_TRASH_STANDARD has no Z move; the one lift of a change
+        ## happens at IFS_SELECT entry (see ChangeLiftTest). Arriving at the
+        ## back edge LOW is what keeps the Y entry below the wall hardware.
+        for start in ((0.0, 0.0), (200.0, 100.0), (200.0, 229.0)):
+            commands = station(GEOMETRY["chute_x"], x=start[0], y=start[1])
+            self.assertFalse(
+                [c for c in commands if "Z" in c], (start, commands))
 
     def test_homes_only_when_unhomed(self):
         self.assertIn("G28", station(GEOMETRY["chute_x"], x=0.0, y=0.0, homed=""))
@@ -338,6 +339,7 @@ class LoadedLaneTest(unittest.TestCase):
             "gcode_move": {"gcode_position": {"x": 100.0, "y": 90.0,
                                               "z": 5.0}},
             "fan_generic fanM106": {"speed": 0.6},
+            "gcode_macro _IFS_GEOMETRY": GEOMETRY,
         }
 
     def render(self, macro, params, **kwargs):
@@ -1152,33 +1154,60 @@ class ClearExtruderTest(unittest.TestCase):
                          commands)
 
 
-class StationLiftTest(unittest.TestCase):
-    """The lift is relative, so it must not happen on every station visit.
+class ChangeLiftTest(unittest.TestCase):
+    """zmod's _A_CHANGE_FILAMENT lifts the bed 5 mm, ONCE, before any travel.
 
-    A tool change visits the back edge four times - chute, cutter, pad, chute.
-    Lifting each time stacked to Z 55, 105, 155, 205 and then the ceiling on a
-    real mid-print change, leaving the nozzle the height of the machine above
-    the bed and dripping. Behind safe_y the head is already clear of the part.
+    Its own log line says so ("Moving the bed down 5 mm"). Anything bigger
+    measured as clipping the back-wall hardware at the Y229 station entries -
+    zmod arrives at part-height +5 and its stations never lift at all. And the
+    50 mm we used to lift here was zmod's custom_park_dz, which belongs to
+    PAUSE/CANCEL parking (_TOOLHEAD_PARK_PAUSE_CANCEL), not to tool changes.
     """
 
-    def render(self, y):
-        return render_macro(HW, "_IFS_GOTO_STATION", printer={
-            "gcode_macro _IFS_GEOMETRY":
-                load_macro(HW, "_IFS_GEOMETRY").variables,
-            "toolhead": {"homed_axes": "xyz"},
-            "gcode_move": {"gcode_position": {"x": 52.5, "y": y, "z": 5.0}},
-        }, params={"X": 52.5}).commands
+    PARAMS = {"tube_mm": 1000.0, "ifs_speed": 1200.0, "purge_extra_mm": 90.0,
+              "first_purge_mm": 100.0, "first_purge_speed": 300.0,
+              "first_fan": 0.0, "second_purge_mm": 30.0,
+              "second_purge_speed": 300.0, "second_fan": 255.0,
+              "hub_clear_mm": 300.0, "unload_ifs_mm": 70.0,
+              "unload_extruder_mm": 60.0, "unload_speed": 600.0,
+              "cut_before_mm": 0.0, "cut_after_mm": 5.0}
+
+    def select(self, slot=1, current=4):
+        return render_macro(HW, "IFS_SELECT", printer={
+            "ifs": {"connected": True, "error": None,
+                    "loaded_channels": [1, 2, 4], "params": self.PARAMS},
+            "extruder": {"target": 205.0},
+            "filament_switch_sensor toolhead": {"filament_detected": True},
+            "save_variables": {"variables": {"ifs_loaded": current,
+                                             "ifs_at_hub": current}},
+            "print_stats": {"state": "printing"},
+            "gcode_move": {"gcode_position": {"x": 100.0, "y": 90.0,
+                                              "z": 5.0}},
+            "fan_generic fanM106": {"speed": 0.6},
+            "gcode_macro _IFS_SENSOR_HOLD": {"was_enabled": 1},
+            "gcode_macro _IFS_GEOMETRY": GEOMETRY,
+        }, params={"SLOT": slot}).commands
 
     def lifts(self, commands):
         return [c for c in commands if c.startswith("MOVE_SAFE")]
 
-    def test_it_lifts_coming_out_of_the_print_area(self):
-        self.assertEqual(len(self.lifts(self.render(90.0))), 1)
+    def test_it_lifts_once_relative_at_change_entry(self):
+        commands = self.select()
+        lifts = self.lifts(commands)
+        self.assertEqual(len(lifts), 1, commands)
+        self.assertIn("ABSOLUTE=0", lifts[0])
+        self.assertIn("Z=%s" % GEOMETRY["lift_dz"], lifts[0])
 
-    def test_it_does_not_lift_again_at_the_back_edge(self):
-        ## safe_y and beyond: already clear, and the lift would stack.
-        self.assertEqual(self.lifts(self.render(220.0)), [])
-        self.assertEqual(self.lifts(self.render(229.0)), [])
+    def test_the_lift_precedes_every_move_and_save(self):
+        ## Before the load chain, before even the save: the head must be off
+        ## the part before anything else travels.
+        commands = self.select()
+        self.assertEqual(commands.index(self.lifts(commands)[0]), 0,
+                         commands)
+
+    def test_the_noop_select_does_not_lift(self):
+        commands = self.select(slot=4, current=4)
+        self.assertEqual(self.lifts(commands), [])
 
 
 class ToolChangeTest(unittest.TestCase):
@@ -1213,6 +1242,7 @@ class ToolChangeTest(unittest.TestCase):
                                               "z": 5.0}},
             "fan_generic fanM106": {"speed": 0.6},
             "gcode_macro _IFS_SENSOR_HOLD": {"was_enabled": 1},
+            "gcode_macro _IFS_GEOMETRY": GEOMETRY,
         }
 
     def select(self, **kwargs):
