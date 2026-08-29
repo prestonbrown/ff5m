@@ -112,7 +112,7 @@ class LoadTest(unittest.TestCase):
             "ifs": {
                 "connected": connected, "error": None,
                 "loaded_channels": [1, 2, 4],
-                "params": {"load_empty_mm": 600.0, "load_full_mm": 550.0,
+                "params": {"tube_mm": 1000.0, "ifs_speed": 1200.0,
                            "first_purge_mm": 100.0, "first_purge_speed": 300.0,
                            "first_fan": 0.0, "second_purge_mm": 30.0,
                            "second_purge_speed": 300.0, "second_fan": 255.0},
@@ -125,17 +125,20 @@ class LoadTest(unittest.TestCase):
         return render_macro(HW, "IFS_LOAD", printer=self.printer(**kwargs),
                             params={"SLOT": 1, "TEMP": 220}).commands
 
-    def test_it_feeds_a_real_length(self):
+    def test_it_feeds_the_tube_length_at_ifs_speed(self):
+        ## zmod's _INSERT_PRUTOK_IFS: LEN=filament_tube_length (1000, "the
+        ## teflon tube from IFS to head") at filament_ifs_speed (1200). The
+        ## bug this guards rendered "LENGTH=" with nothing after it.
         feed = [c for c in self.render() if c.startswith("IFS_FEED")]
         self.assertEqual(len(feed), 1, feed)
-        ## The bug rendered "LENGTH=" with nothing after it.
-        self.assertIn("LENGTH=600", feed[0])
+        self.assertIn("LENGTH=1000", feed[0])
+        self.assertIn("SPEED=1200", feed[0])
 
-    def test_an_already_loaded_extruder_uses_the_shorter_distance(self):
-        ## zmod picks filament_autoinsert_full_length when the extruder is
-        ## occupied; the board refuses anything longer than these.
-        feed = [c for c in self.render(loaded=True) if c.startswith("IFS_FEED")]
-        self.assertIn("LENGTH=550", feed[0])
+    def test_the_feed_ends_on_the_toolhead_sensor(self):
+        ## The length is a bound, not a target - without this a full tube of
+        ## filament is pushed regardless of it arriving early.
+        feed = [c for c in self.render() if c.startswith("IFS_FEED")]
+        self.assertIn("UNTIL=toolhead", feed[0])
 
     def test_it_heats_before_parking(self):
         commands = self.render()
