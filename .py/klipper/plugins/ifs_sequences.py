@@ -218,6 +218,13 @@ class Parameters(object):
         ## toolhead sensor, so it rests below the extruder gear rather than in
         ## it (zmod's filament_autoinsert_ret_length).
         "autoinsert_ret_mm": 90.0,
+        ## How far a threaded lane retreats to give up the shared path at the
+        ## hub. Only one lane fits there, so a load of a different lane has to
+        ## move the incumbent out of the way first. Measured: 200 mm was enough
+        ## to let a blocked lane through, and this leaves margin. It must stay
+        ## well under load_empty_mm, or the retreat pushes the lane back out of
+        ## the IFS entirely.
+        "hub_clear_mm": 300.0,
         ## The shear either side of the cut, from zmod's _CUT_PRUTOK
         ## (FILAMENT_UNLOAD_BEFORE_CUTTING / _AFTER_CUTTING). The AD5X cuts
         ## filament by driving the toolhead into a fixed blade, and the stub

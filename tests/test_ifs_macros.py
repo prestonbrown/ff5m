@@ -108,14 +108,15 @@ class AutoinsertTest(unittest.TestCase):
 
     PARAMS = {"tube_mm": 1000.0, "ifs_speed": 1200.0,
               "load_empty_mm": 600.0, "load_full_mm": 550.0,
-              "autoinsert_ret_mm": 90.0}
+              "autoinsert_ret_mm": 90.0, "hub_clear_mm": 300.0}
 
-    def printer(self, occupied=False, loaded=(1, 2, 4)):
+    def printer(self, occupied=False, loaded=(1, 2, 4), at_hub=0):
         return {
             "ifs": {"connected": True, "error": None,
                     "loaded_channels": list(loaded), "params": self.PARAMS},
             "extruder": {"target": 0.0},
             "filament_switch_sensor toolhead": {"filament_detected": occupied},
+            "save_variables": {"variables": {"ifs_at_hub": at_hub}},
         }
 
     def render(self, channel=2, **kwargs):
@@ -135,13 +136,38 @@ class AutoinsertTest(unittest.TestCase):
         self.assertIn("SPEED=1200", feed[0])
         self.assertIn("UNTIL=toolhead", feed[0])
 
-    def test_an_occupied_extruder_only_comes_up_to_the_hub(self):
-        ## filament_autoinsert_full_length, waiting on READY - the sensor is
-        ## already tripped by whatever is loaded, so it cannot be the signal.
-        feed = self.feeds(self.render(occupied=True))
-        self.assertEqual(len(feed), 1, feed)
-        self.assertIn("LENGTH=550", feed[0])
-        self.assertIn("UNTIL=done", feed[0])
+    def test_an_occupied_extruder_leaves_the_lane_at_its_entrance(self):
+        """Only one lane fits in the shared path, so the rest do not move.
+
+        zmod feeds filament_autoinsert_full_length here and packs the hub. This
+        is the failure that cost the evening: threading lane 4 parked it 90mm
+        below the sensor, then lanes 2 and 1 were told to thread into it, and
+        all three jammed. Lane 4's next load stalled after exactly 90mm.
+        """
+        commands = self.render(occupied=True)
+        self.assertEqual(self.feeds(commands), [], commands)
+        self.assertEqual([c for c in commands if c.startswith("IFS_CLAMP")],
+                         [], commands)
+        self.assertTrue(any(c.startswith("IFS_MARK_INSERTED")
+                            for c in commands), commands)
+
+    def test_a_lane_already_at_the_hub_also_blocks_threading(self):
+        ## And this is the case the toolhead sensor cannot see: a lane threaded
+        ## but not loaded sits 90mm SHORT of the sensor, so the sensor reads
+        ## empty while the shared path is taken.
+        commands = self.render(channel=2, occupied=False, at_hub=4)
+        self.assertEqual(self.feeds(commands), [], commands)
+
+    def test_the_lane_already_at_the_hub_may_still_re_thread_itself(self):
+        ## It is the one lane that cannot collide with itself.
+        commands = self.render(channel=2, occupied=False, at_hub=2)
+        self.assertEqual(len(self.feeds(commands)), 1, commands)
+
+    def test_threading_records_that_the_lane_owns_the_hub(self):
+        saves = [c for c in self.render() if c.startswith("SAVE_VARIABLE")]
+        self.assertEqual(len(saves), 1, saves)
+        self.assertIn("VARIABLE=ifs_at_hub", saves[0])
+        self.assertIn("VALUE=2", saves[0])
 
     def test_it_backs_off_the_gear_once_the_tip_arrives(self):
         ## filament_autoinsert_ret_length. Leaving the tip inside the extruder
@@ -153,11 +179,13 @@ class AutoinsertTest(unittest.TestCase):
         self.assertLess(index_of(commands, r"IFS_FEED\b"),
                         index_of(commands, r"IFS_RETRACT\b"))
 
-    def test_the_occupied_branch_does_not_back_off(self):
-        ## Nothing arrived at a sensor, so there is nothing to back away from.
-        self.assertEqual(
-            [c for c in self.render(occupied=True)
-             if c.startswith("IFS_RETRACT")], [])
+    def test_the_blocked_branch_moves_nothing_at_all(self):
+        ## No feed, no retract, no clamp. The lane stays where the board's own
+        ## insertion left it, which is the one position known to be safe.
+        commands = self.render(occupied=True)
+        for verb in ("IFS_FEED", "IFS_RETRACT", "IFS_CLAMP"):
+            self.assertEqual([c for c in commands if c.startswith(verb)], [],
+                             commands)
 
     def test_it_stops_the_board_before_touching_the_lane_again(self):
         ## UNTIL=toolhead returns while the board is still feeding - the sensor
@@ -273,35 +301,68 @@ class LoadedLaneTest(unittest.TestCase):
               "unload_speed": 600.0, "first_purge_mm": 100.0,
               "first_purge_speed": 300.0, "first_fan": 0.0,
               "second_purge_mm": 30.0, "second_purge_speed": 300.0,
-              "second_fan": 255.0}
+              "second_fan": 255.0, "hub_clear_mm": 300.0}
 
-    def printer(self, recorded=0, selector=0, occupied=False):
+    def printer(self, recorded=0, selector=0, occupied=False, at_hub=0):
         return {
             "ifs": {"connected": True, "error": None,
                     "loaded_channels": [1, 2, 4],
                     "active_channel": selector, "params": self.PARAMS},
             "extruder": {"target": 220.0},
             "filament_switch_sensor toolhead": {"filament_detected": occupied},
-            "save_variables": {"variables": {"ifs_loaded": recorded}},
+            "save_variables": {"variables": {"ifs_loaded": recorded,
+                                            "ifs_at_hub": at_hub}},
         }
 
     def render(self, macro, params, **kwargs):
         return render_macro(HW, macro, printer=self.printer(**kwargs),
                             params=params).commands
 
-    def test_a_load_records_the_lane_it_loaded(self):
-        commands = self.render("IFS_LOAD", {"SLOT": 2, "TEMP": 220})
-        saves = [c for c in commands if c.startswith("SAVE_VARIABLE")]
-        self.assertEqual(len(saves), 1, commands)
-        self.assertIn("VARIABLE=ifs_loaded", saves[0])
-        self.assertIn("VALUE=2", saves[0])
+    def saved(self, commands):
+        """{variable: value} for every SAVE_VARIABLE the macro emitted."""
+        out = {}
+        for c in commands:
+            if not c.startswith("SAVE_VARIABLE"):
+                continue
+            bits = dict(w.split("=", 1) for w in c.split()[1:] if "=" in w)
+            out[bits["VARIABLE"]] = bits["VALUE"]
+        return out
 
-    def test_an_unload_clears_the_record(self):
+    def test_a_load_records_the_lane_it_loaded(self):
+        ## Both facts: what is in the nozzle, and who owns the shared path.
+        commands = self.render("IFS_LOAD", {"SLOT": 2, "TEMP": 220})
+        self.assertEqual(self.saved(commands),
+                         {"ifs_loaded": "2", "ifs_at_hub": "2"})
+
+    def test_an_unload_clears_both_records(self):
+        ## The retract takes it out of the nozzle AND out of the shared path.
         commands = self.render("IFS_UNLOAD", {"SLOT": 2, "TEMP": 220},
                                recorded=2, occupied=True)
-        saves = [c for c in commands if c.startswith("SAVE_VARIABLE")]
-        self.assertEqual(len(saves), 1, commands)
-        self.assertIn("VALUE=0", saves[0])
+        self.assertEqual(self.saved(commands),
+                         {"ifs_loaded": "0", "ifs_at_hub": "0"})
+
+    def test_a_load_moves_a_parked_lane_out_of_the_shared_path(self):
+        """The lane the toolhead sensor cannot see.
+
+        A lane threaded but never loaded sits 90mm SHORT of the sensor, so the
+        sensor reads empty while the hub is taken. Feeding into that jams both:
+        measured, lane 1 stalled after exactly the 90mm lane 4 had backed off.
+        """
+        commands = self.render("IFS_LOAD", {"SLOT": 1, "TEMP": 220},
+                               recorded=0, at_hub=4)
+        back = [c for c in commands if c.startswith("IFS_RETRACT")]
+        self.assertEqual(len(back), 1, commands)
+        self.assertIn("CHANNEL=4", back[0])
+        self.assertIn("LENGTH=300", back[0])
+        self.assertLess(index_of(commands, r"IFS_RETRACT\b"),
+                        index_of(commands, r"IFS_FEED\b"))
+
+    def test_a_load_leaves_its_own_parked_lane_alone(self):
+        ## Loading the lane that already holds the hub: nothing to move.
+        commands = self.render("IFS_LOAD", {"SLOT": 4, "TEMP": 220},
+                               recorded=0, at_hub=4)
+        self.assertEqual([c for c in commands if c.startswith("IFS_RETRACT")],
+                         [], commands)
 
     def test_an_unload_with_no_slot_uses_the_recorded_lane(self):
         commands = self.render("IFS_UNLOAD", {"TEMP": 220}, recorded=4,
