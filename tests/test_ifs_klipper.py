@@ -634,6 +634,31 @@ class TestCommandQueue(unittest.TestCase):
         self.assertIn("F112", self.link.asked)
         self.assertNotIn("F18", self.link.asked)
 
+    def test_diagnostics_goes_through_the_queue(self):
+        """Fourteen queries must not race the poll thread for the link.
+
+        Reading the link straight from klipper's thread let the poller and the
+        diagnostics read split each other's replies: the output varied between
+        calls - stall counts on one, raw silk on the next - and the status poll
+        that landed mid-batch came back empty and reported the board as
+        disconnected. With no poller there is nothing to run on, so this must
+        report a failure rather than quietly reading the link itself.
+        """
+        self.obj._thread = None
+        gcmd = fakes.FakeGcmd({})
+        self.obj.cmd_IFS_DIAGNOSTICS(gcmd)
+        self.assertTrue(any("diagnostics failed" in r
+                            for r in gcmd.gcode.responses), gcmd.gcode.responses)
+        self.assertEqual(self.link.asked, [])
+
+    def test_diagnostics_reports_when_the_poller_runs_it(self):
+        ## The contrast: same command, poll thread alive, real output.
+        self.link.replies = [""] * 30
+        gcmd = fakes.FakeGcmd({})
+        self.obj.cmd_IFS_DIAGNOSTICS(gcmd)
+        self.assertTrue(any("IFS firmware" in r
+                            for r in gcmd.gcode.responses), gcmd.gcode.responses)
+
     def test_shutdown_releases_a_waiting_caller(self):
         ## A caller blocked on a command when klippy goes down must not hang.
         request = IFS._Request("F13")

@@ -57,6 +57,9 @@ COMMAND_POLL_PAUSE = 0.05
 ## A move can take a while: a metre of filament at 1200 mm/min is fifty
 ## seconds, and a cold-ish nozzle makes a purge slower still.
 DEFAULT_MOVE_TIMEOUT = 120.0
+## A diagnostics read is fourteen queries and takes about five seconds on the
+## board, so it needs longer than an ordinary command.
+DIAGNOSTICS_TIMEOUT = 30.0
 ## How long to let the board finish acting on a command it already accepted.
 ## Clamping is mechanical and quick; this only has to outlast that.
 SETTLE_TIMEOUT = 15.0
@@ -738,7 +741,18 @@ class IFS(object):
             gcmd.respond_info("IFS: not connected")
             return
         try:
-            diag = ifs_diagnostics.read_diagnostics(self._link, self.capabilities)
+            ## Through the queue, like every other command. Reading the link
+            ## straight from klipper's thread raced the poll thread for it: the
+            ## two readers split each other's replies, so the output varied
+            ## between calls - stall counts on one, raw silk on the next - and
+            ## the status poll that landed mid-batch came back empty and
+            ## reported the board as disconnected. Fourteen queries is a long
+            ## race to leave open.
+            diag = self.run_operation(
+                "diagnostics",
+                lambda ops: ifs_diagnostics.read_diagnostics(
+                    ops.link, self.capabilities),
+                timeout=DIAGNOSTICS_TIMEOUT)
         except Exception as exc:
             gcmd.respond_info("IFS: diagnostics failed: %s" % exc)
             return

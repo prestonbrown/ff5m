@@ -50,6 +50,16 @@ class IfsOperations(object):
         self._channel_count = channel_count
 
     @property
+    def link(self):
+        """The link these operations run on.
+
+        Exposed so a caller that needs a batch of raw queries can run them on
+        the poll thread through run_operation, rather than reaching for the
+        object's own link from klipper's thread and racing the poller for it.
+        """
+        return self._link
+
+    @property
     def channel_count(self):
         """Channels this board has, probed if the link managed to ask."""
         if self._channel_count is not None:
