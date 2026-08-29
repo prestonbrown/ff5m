@@ -1197,6 +1197,12 @@ class ChangeLiftTest(unittest.TestCase):
         self.assertEqual(len(lifts), 1, commands)
         self.assertIn("ABSOLUTE=0", lifts[0])
         self.assertIn("Z=%s" % GEOMETRY["lift_dz"], lifts[0])
+        ## Every parameter must be key=value. A token without '=' (F1500 for
+        ## F=1500) is a malformed command to klipper's parser, which raised
+        ## straight through the console path and shut a printer down.
+        import re as _re
+        for token in lifts[0].split()[1:]:
+            self.assertRegex(token, r"^[A-Za-z_]+=", (token, lifts[0]))
 
     def test_the_lift_precedes_every_move_and_save(self):
         ## Before the load chain, before even the save: the head must be off
