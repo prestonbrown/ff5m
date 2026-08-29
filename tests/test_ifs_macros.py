@@ -340,6 +340,7 @@ class LoadedLaneTest(unittest.TestCase):
                                               "z": 5.0}},
             "fan_generic fanM106": {"speed": 0.6},
             "gcode_macro _IFS_GEOMETRY": GEOMETRY,
+            "toolhead": {"homed_axes": "xyz"},
         }
 
     def render(self, macro, params, **kwargs):
@@ -1172,7 +1173,7 @@ class ChangeLiftTest(unittest.TestCase):
               "unload_extruder_mm": 60.0, "unload_speed": 600.0,
               "cut_before_mm": 0.0, "cut_after_mm": 5.0}
 
-    def select(self, slot=1, current=4):
+    def select(self, slot=1, current=4, homed="xyz"):
         return render_macro(HW, "IFS_SELECT", printer={
             "ifs": {"connected": True, "error": None,
                     "loaded_channels": [1, 2, 4], "params": self.PARAMS},
@@ -1186,6 +1187,7 @@ class ChangeLiftTest(unittest.TestCase):
             "fan_generic fanM106": {"speed": 0.6},
             "gcode_macro _IFS_SENSOR_HOLD": {"was_enabled": 1},
             "gcode_macro _IFS_GEOMETRY": GEOMETRY,
+            "toolhead": {"homed_axes": homed},
         }, params={"SLOT": slot}).commands
 
     def lifts(self, commands):
@@ -1213,6 +1215,13 @@ class ChangeLiftTest(unittest.TestCase):
 
     def test_the_noop_select_does_not_lift(self):
         commands = self.select(slot=4, current=4)
+        self.assertEqual(self.lifts(commands), [])
+
+    def test_it_does_not_lift_an_unhomed_z(self):
+        ## zmod guards its lift the same way: a Z move on an unhomed axis
+        ## raises, and a raise from the console path shuts the printer down.
+        ## _IFS_GOTO_STATION homes when needed; the lift is simply skipped.
+        commands = self.select(homed="xy")
         self.assertEqual(self.lifts(commands), [])
 
 
@@ -1249,6 +1258,7 @@ class ToolChangeTest(unittest.TestCase):
             "fan_generic fanM106": {"speed": 0.6},
             "gcode_macro _IFS_SENSOR_HOLD": {"was_enabled": 1},
             "gcode_macro _IFS_GEOMETRY": GEOMETRY,
+            "toolhead": {"homed_axes": "xyz"},
         }
 
     def select(self, **kwargs):
