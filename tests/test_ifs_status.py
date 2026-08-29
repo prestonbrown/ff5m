@@ -146,10 +146,23 @@ class TestMasks(unittest.TestCase):
                              insert_mask=0, stall_mask=0, channel_count=2)
         self.assertEqual(result.loaded_channels, [1, 2])
 
+
+    def test_the_insert_mask_is_a_request_queue_not_a_record(self):
+        """F23 CLEARS the bit, so a set bit means "please thread this".
+
+        Measured on the printer: after threading channel 4 and acknowledging it
+        with F23, channel 4 left the mask, while channels 1 and 2 - whose
+        threading had failed before their F23 - stayed in it. Reading it as
+        "channels that are inserted" gets the meaning exactly backwards.
+        """
+        asking = status(ffs_channels_insert=0b1001).pending_insert_channels
+        self.assertEqual(asking, [1, 4])
+        self.assertEqual(status(ffs_channels_insert=0).pending_insert_channels,
+                         [])
     def test_insert_mask_keeps_every_channel(self):
         ## zmod reduces this with int.bit_length(), which returns the highest
         ## set bit: 0b101 becomes 3 and channel 1's insert is lost.
-        self.assertEqual(status(ffs_channels_insert=0b101).inserted_channels,
+        self.assertEqual(status(ffs_channels_insert=0b101).pending_insert_channels,
                          [1, 3])
 
 

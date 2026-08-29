@@ -449,7 +449,7 @@ class IFS(object):
             "active_channel": None,
             "loaded_channels": [],
             "moving_channels": [],
-            "inserted_channels": [],
+            "pending_insert_channels": [],
             ## Macros own the choreography, so they need the numbers. Sourced
             ## from the printer's own Multicolour block where available.
             "params": self.params.as_dict(),
@@ -462,7 +462,7 @@ class IFS(object):
                 "active_channel": status.active_channel,
                 "loaded_channels": status.loaded_channels,
                 "moving_channels": status.moving_channels,
-                "inserted_channels": status.inserted_channels,
+                "pending_insert_channels": status.pending_insert_channels,
             })
         return info
 

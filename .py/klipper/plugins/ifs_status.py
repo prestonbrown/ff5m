@@ -162,8 +162,15 @@ class IfsStatus(object):
         return mask_to_channels(self.motion_mask, self.channel_count)
 
     @property
-    def inserted_channels(self):
-        """Every channel with filament pushed in - not just the highest."""
+    def pending_insert_channels(self):
+        """Channels the board is ASKING us to thread, not ones already done.
+
+        Measured: after F23 on channel 4 the bit CLEARED, while channels 1 and 2
+        - whose threading had failed before their F23 - stayed set. So the mask
+        is a request queue that F23 acknowledges, and calling it "inserted" says
+        the opposite of what it means. Every channel, not just the highest:
+        zmod collapses it with bit_length() and loses the rest.
+        """
         return mask_to_channels(self.insert_mask, self.channel_count)
 
     @property
