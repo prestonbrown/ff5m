@@ -106,9 +106,13 @@ Ours does: park, heat, clamp, feed, purge, wipe. **Gaps, in order of severity:**
    still leaks the mute; `_IFS_PURGE` resumes on entry to heal that. zmod has
    the same hole.
 3. ~~No F23~~ - **done**, `IFS_MARK_INSERTED`, and the load ends with it.
-4. ~~No unload-first~~ - **done**, `_IFS_CLEAR_EXTRUDER`, which both the load and
-   the unload begin with. A lane cannot be fed while another lane's filament
-   occupies the hub; the incoming filament simply pushes against it.
+4. ~~No unload-first~~ - **done**. zmod's load opens with
+   `IFS_REMOVE_CURRENT_PRUTOK`, which runs a full `IFS_REMOVE_PRUTOK` and pulls
+   the old strand back into its own lane. Ours does the same now that the loaded
+   lane is on record: `IFS_LOAD` calls `IFS_UNLOAD` for it, and falls back to
+   `_IFS_CLEAR_EXTRUDER` only when no lane is recorded and there is nothing to
+   retract. Clearing just the extruder left the old filament at the hub, which
+   is where the incoming lane arrives.
 
    **There is no shared bowden on an AD5X.** Each lane runs its own tube the
    whole way and the hub is mounted ON the toolhead, feeding the extruder a few
