@@ -17,8 +17,8 @@ Related: `docs/FIRMWARE_5x_COMPAT.md` for the stock-firmware compatibility notes
 this sits alongside.
 
 > **`strings(1)` does not find these.** Use an explicit printable-run regex. And
-> do not filter runs by "looks like a word" - that drops `F15 ok.` and `F18 ok`,
-> which is how a first pass reported 20 opcodes instead of 32.
+> do not filter runs by "looks like a word" - that drops `F15 ok.` and `F18 ok`
+> and undercounts the opcode table by a third.
 
 ## Wire
 
@@ -47,14 +47,14 @@ is its own read loop - it calls `read()` for **one byte at a time**, so a 127-by
 reply is 127 syscalls. Reading in blocks gets the same reply in ~165 ms.
 
 **The `0xFF` commit byte is a host habit, not a protocol requirement.** The stock
-FlashForge host sends one ~200 ms after every command - that is where zmod's came
-from - but the board does not wait for it: all four combinations return an
-identical 127-byte `F13` reply when sent directly to the board:
+FlashForge host sends one ~200 ms after every command, but the board does not wait
+for it: all four combinations return an identical 127-byte `F13` reply when sent
+directly to the board:
 
 | command sent | reply |
 |---|---|
 | `F13 \r\n` - space only (stock form, as captured) | yes |
-| `F13\r\n` + `0xFF` - zmod's form | yes |
+| `F13\r\n` + `0xFF` | yes |
 | `F13\r\n` - neither | yes |
 | `F13 \r\n` + `0xFF` - both | yes |
 
@@ -63,13 +63,14 @@ Sending the commit byte also forces a delay before it, which is a hard 200 ms on
 every command for nothing.
 
 **There is no `\r\n` at the end of a reply.** A 126-byte `F13` response contains no
-CR and no LF anywhere. What delimits a reply is silence, which is why `zmod_ifs.py`'s
-0.2 s read timeout is not a safety net - it *is* the framing. A reader that blocks for
-a newline waits forever. (`F21` is the exception: it embeds CRLF *between* its three
+CR and no LF anywhere. What delimits a reply is silence, which makes the read timeout
+not a safety net but the framing itself. A reader that blocks for a newline waits
+forever. (`F21` is the exception: it embeds CRLF *between* its three
 lines. See below.)
 
 The trailing space is on every command stock sends - `F13 \r\n`, `F24 C2 \r\n`,
-`F10 C2 L600 S1200 \r\n`. zmod sends none and works, so it too looks optional.
+`F10 C2 L600 S1200 \r\n` - and the A/B above shows the board answers without it
+too. Both are cosmetic on 3.0.6.
 
 `/proc/tty/driver` shows `uart4` at `tx:0 rx:0` under a Forge-X bring-up, because
 we stop the stock UI and ship no IFS driver. Under stock, `firmwareExe` owns it.
@@ -83,8 +84,7 @@ missing from any driver:
 image breaks this. That is free request/response correlation on the wire - a
 reply can be matched to its request without driver-side bookkeeping, and a stale
 or unsolicited line can be discarded instead of parsed as the answer to whatever
-was asked last. `zmod_ifs.py` does not use it; it tracks its own `#<id>` slot
-instead.
+was asked last.
 
 **2. `ok.` is an echo, not a status.** `F10 ok. FFS not ready.` is a *failure*.
 Success has to be read from the payload after the prefix, never from `ok.`
@@ -166,9 +166,9 @@ not. Measured with an empty channel as the control:
 | channel 3, **empty** | `F10 ok. FFS not ready.` (refused) | clear |
 | channel 1, **loaded** | `F10 ok. FFS channel 1 feeding.` | **set**, then clear when done |
 
-The same bit sets for the duration of an `F11` retract. `zmod_ifs.py` agrees
-without saying so: its wait declares a stall when the bit reads **clear** for
-several consecutive polls during a commanded move.
+The same bit sets for the duration of an `F11` retract. A stall, then, is the
+*absence* of this bit sustained over several polls while a move is commanded -
+a single clear sample is noise, because the bit also toggles as the motor steps.
 
 So a jam is the *absence* of this bit while something was told to move. Reading
 it as "stalled" inverts every motion check - healthy moves look jammed and jams
@@ -179,21 +179,20 @@ precondition check: `F10` on a lane with no filament answers `FFS not ready.`
 
 ### Where `channel_count` comes from: nowhere, on this firmware
 
-`zmod_ifs.py` regexes `channel_count:\s*(\d+)` out of the `F13` line. **That field
-is not in 3.0.6's format string**, so on this board the regex never matches and
-the value stays 0. The field list does move across revisions: a captured 3.0.5
-`F13` reply carries a trailing `vibr: %d` that 3.0.6 never emits. On 3.0.6 the
-fields present are exactly `FFS_state`, `silk_state`, `chan`,
-`ffs_channels_insert`, `stall_state`, `jinsi_GCONF`, `qiehuan_GCONF`.
+A `channel_count` field that some drivers parse out of `F13` **is not in 3.0.6's
+format string** - the regex never matches and the value stays 0. The field list
+does move across revisions: a captured 3.0.5 `F13` reply carries a trailing
+`vibr: %d` that 3.0.6 never emits. On 3.0.6 the fields present are exactly
+`FFS_state`, `silk_state`, `chan`, `ffs_channels_insert`, `stall_state`,
+`jinsi_GCONF`, `qiehuan_GCONF`.
 
-ZMOD's actual channel count is neither probed nor parsed: it is the `color_limit`
-config option, `config.getint('color_limit', 4)`. Every install is hardcoded to
-four by default. `F19` is the real probe - see below.
+Nothing on the wire names the channel count except `F19` - ask it, rather than
+assuming four. See below.
 
 ### State values
 
-A base plus a per-channel stride of 11 (`FFS_STATUS_DELTA`), which is why zmod's
-comments read "18, 29, 40" / "22, 33, 44" / "26, 37, 48" / "23, 34, 45":
+A base plus a per-channel stride of 11 (`FFS_STATUS_DELTA`), which produces the
+per-channel values "18, 29, 40" / "22, 33, 44" / "26, 37, 48" / "23, 34, 45":
 
 | Base | Meaning |
 |-----:|---------|
@@ -205,51 +204,67 @@ comments read "18, 29, 40" / "22, 33, 44" / "26, 37, 48" / "23, 34, 45":
 | 15 | unloading |
 | 127 | driver error |
 
-A value of **2** also appears, for under a second at the start of a clamp. zmod
-has no name for it and never waits on it; treat it as "busy, not ready".
+A value of **2** also appears, for under a second at the start of a clamp. It is
+unnamed; treat it as "busy, not ready".
 
 `clamped` (7) is real but its duration is not predictable - measured at 3.8 s on
 one channel and 0.2 s on another in one sequence of clamps. Anything that waits
 for it to *arrive* will sometimes miss it entirely. Wait for the return to
-`ready` instead, which is what zmod does.
+`ready` instead.
 
-### Return codes (driver-side, from `zmod_ifs.py`)
+### Sequencing rules the board enforces
 
-`0` ok · `1` extruder sensor tripped · `2` filament sensor tripped · `3` stall ·
-`4` timeout waiting for a status · `5` program exit · `6` retry
+Measured, each one the hard way:
+
+- **A command is acknowledged before it is finished.** `F24 ok. chan 1.` means
+  the board took the opcode, not that the clamp closed. Send the next opcode
+  into that window and it answers `FFS not ready.`. Check the ack, then wait
+  for the state to come back to `ready`.
+- **Success is the return to `ready`, never the arrival of an activity state.**
+  The per-channel activity is only the window in which sensor conditions are
+  judged, and it can be over before the next poll: `clamped` measured at 3.8 s
+  on one channel and 0.2 s on another in the same session. Waiting for an
+  activity to *arrive* times out on a board that is working perfectly.
+- **Refusals are prefixed like successes.** `F10 ok. FFS not ready.` is a
+  refusal and `F10 ok. FFS channel 1 feeding.` is a success; only the payload
+  separates them. Every opcode must be checked against its expected reply.
+- **Judge motion at a fast cadence.** The motion bit toggles; sampling it once
+  a second reads a running motor as stalled. While a move is being judged,
+  poll at 0.2 s and require several consecutive clear samples.
 
 ## Every opcode the firmware answers
 
-32 opcodes, 58 distinct response strings. **ZMOD uses 9.** Responses below are
-verbatim, including the `F<n> ok.` prefix (`%d`/`%02x` are the firmware's own
-format specifiers).
+32 opcodes, 58 distinct response strings. Responses below are verbatim,
+including the `F<n> ok.` prefix (`%d`/`%02x` are the firmware's own format
+specifiers). Nine of them are enough to drive the whole machine (the operations
+layer); the rest are diagnostics and capability reads.
 
-| Opcode | Response | Used by ZMOD |
+| Opcode | Response |
 |--------|----------|:---:|
-| `F10` | `F10 ok. FFS channel N feeding.` / `... FFS channel not exist.` / `... FFS not ready.` / `... No channel selected.` | yes |
-| `F11` | `F11 ok. FFS channel N exiting.` + same error set | yes |
-| `F12` | `F12 ok. %d %d %d %d` | no |
-| `F13` | the status line above | yes |
-| `F14` | `F14 ok. stall: %d %d %d %d` | no |
-| `F15` | `F15 ok.` | yes |
-| `F18` | `F18 ok` *(no trailing period)* | yes |
+| `F10` | `F10 ok. FFS channel N feeding.` / `... FFS channel not exist.` / `... FFS not ready.` / `... No channel selected.` |
+| `F11` | `F11 ok. FFS channel N exiting.` + same error set |
+| `F12` | `F12 ok. %d %d %d %d` |
+| `F13` | the status line above |
+| `F14` | `F14 ok. stall: %d %d %d %d` |
+| `F15` | `F15 ok.` |
+| `F18` | `F18 ok` *(no trailing period)* |
 | `F19` | `F19 ok. four color. version: 3.0.6` | **no** |
-| `F20` | `F20 ok.` | no |
-| `F21` | `F21 ok.` + ` silk: %d %d %d %d` + ` stall: %d %d %d %d` **(3 lines)** | no |
-| `F22` | `F22 ok. ffs_channels_insert: %d` | no |
-| `F23` | `F23 ok. chan N.` / `F23 ok. no chan.` | yes |
-| `F24` | `F24 ok. chan N.` / `... FFS channel not exist.` / `... No channel selected.` | yes |
-| `F30` | `F30 ok.` | no |
-| `F39` | `F39 ok. FFS channel N release.` + error set | yes |
-| `F40` | `F40 ok.stall count: C1: %d C2: %d C3: %d C4: %d` | no |
-| `F41` | `F41 ok.GCONF: %02x%02x%02x%02x` | no |
-| `F42` | `F42 ok.stepper_motor: %d stepper_motor_irun: %d` | no |
-| `F43` | `F43 ok.` | no |
-| `F44` | `F44 ok.DRV_STATUS: %02x%02x%02x%02x` | no |
-| `F45` | `F45 ok.GSTAT: %02x%02x%02x%02x` | no |
-| `F50`-`F54` | `GCONF`,`GSTAT`,`CHOPCONF`,`DRV_STATUS`,`PWMCONF` - driver 1 | no |
-| `F60`-`F64` | the same five - driver 2 | no |
-| `F112` | `F112 ok.` | yes |
+| `F20` | `F20 ok.` |
+| `F21` | `F21 ok.` + ` silk: %d %d %d %d` + ` stall: %d %d %d %d` **(3 lines)** |
+| `F22` | `F22 ok. ffs_channels_insert: %d` |
+| `F23` | `F23 ok. chan N.` / `F23 ok. no chan.` |
+| `F24` | `F24 ok. chan N.` / `... FFS channel not exist.` / `... No channel selected.` |
+| `F30` | `F30 ok.` |
+| `F39` | `F39 ok. FFS channel N release.` + error set |
+| `F40` | `F40 ok.stall count: C1: %d C2: %d C3: %d C4: %d` |
+| `F41` | `F41 ok.GCONF: %02x%02x%02x%02x` |
+| `F42` | `F42 ok.stepper_motor: %d stepper_motor_irun: %d` |
+| `F43` | `F43 ok.` |
+| `F44` | `F44 ok.DRV_STATUS: %02x%02x%02x%02x` |
+| `F45` | `F45 ok.GSTAT: %02x%02x%02x%02x` |
+| `F50`-`F54` | `GCONF`,`GSTAT`,`CHOPCONF`,`DRV_STATUS`,`PWMCONF` - driver 1 |
+| `F60`-`F64` | the same five - driver 2 |
+| `F112` | `F112 ok.` |
 
 ## What the unused two-thirds buys us
 
@@ -329,8 +344,8 @@ filament in 1, 2 and 4).
 
 ## Versioning
 
-`zmod_ifs.py` accepts `F112 ok. yes.` as well as `F112 ok.`, and **firmware 3.0.6
-never emits the `yes.` variant**. So responses differ across IFS firmware
+A `F112 ok. yes.` variant is accepted by some drivers and **firmware 3.0.6 never
+emits it**. Responses differ across IFS firmware
 revisions. The missing `channel_count` field is a second instance of the same
 thing. Probe `F19` and branch on the version rather than assuming this table
 holds for every board.
@@ -448,7 +463,6 @@ that are inserted" gets it backwards. This repo's status object publishes it as
   nothing; do not send them blind on a loaded machine.
 - Whether the trailing space and the `0xFF` byte matter to any **other** IFS
   firmware revision. On 3.0.6 neither is needed: the stock FlashForge host
-  sends the byte ~200 ms after every command (an independently circulated
-  protocol table records it, and zmod replicates the habit), the board accepts
-  commands with and without it, and the byte costs a hard 200 ms of delay per
-  command when a driver sends it.
+  sends the byte ~200 ms after every command, the board accepts commands with
+  and without it, and the byte costs a hard 200 ms of delay per command when a
+  driver sends it.

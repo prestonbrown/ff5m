@@ -185,6 +185,14 @@ see it: a lane threaded but not loaded sits short of the sensor.
 - **IFS_PURGE**
   - **Description**: Purge the loaded lane through the nozzle over the chute,
     then shake and wipe. For a colour that has not fully changed over.
+
+Tool changes purge by colour distance: the first pass scales between 50 mm and
+the printer's full setting (100 mm stock) with how far apart the outgoing and
+incoming slots' registered colours are - close colours flush less, opposite
+colours the full length. An unregistered colour on either side always gets the
+full length, and a material type change gets the full length plus an extra
+flush on top. The scale is visible in the log line
+`IFS: close colours, first purge pass 66.2mm not 100.0mm`.
   - **Parameters**: `TEMP` (optional; defaults to the loaded material's
     handling temperature).
 

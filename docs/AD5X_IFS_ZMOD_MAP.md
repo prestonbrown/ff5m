@@ -13,7 +13,7 @@ Sources, all in ZMOD 1.7.1:
 
 ## The rules the board actually enforces
 
-These cost several failed runs each, so they lead.
+Each of these is enforced by the board, not by convention, so they lead.
 
 **A command is acknowledged before it is finished.** `F24 ok. chan 1.` says the
 board took the opcode, not that it clamped. Send the next opcode into that
@@ -54,10 +54,7 @@ else is pulling, and at 300 mm/min it reads as stopped within seconds.
 **One reader.** Every exchange with the board goes through the poll thread, via
 `run_operation`. The link is not thread-safe and the poller is always mid-F13,
 so a second reader does not get a clean answer - it gets whichever line arrives
-first, and so does the poller. `IFS_DIAGNOSTICS` read the link directly for
-fourteen queries and the two readers split each other's replies: its own output
-varied between calls and the status poll that landed mid-batch came back empty
-and reported the board as disconnected.
+first, and so does the poller.
 
 **Counts:** `stall_count` 3, `silk_count` 1, `retry_count` 3.
 
@@ -183,7 +180,7 @@ Ours does: park, heat, clamp, feed, purge, wipe. **Gaps, in order of severity:**
 behaviour it never had: `IFS_EJECT` for taking a lane out of the machine, hub
 ownership so two lanes cannot be threaded into the same place, and a gate
 (`tools/lint/check_gcode_safety.py`) against the exception that shuts klippy
-down - which bit us through zmod's own code path as well as ours.
+down.
 
 ### Eject - `_REMOVE_PRUTOK_IFS` ("Unloading filament Extruder + IFS")
 
@@ -217,25 +214,17 @@ pass and then onto the wiper, which smears it rather than removing it.
 | `_GOTO_TRASH` / `_GOTO_TRASH_STANDARD` | `_IFS_PARK_FOR_PURGE` via `_IFS_GOTO_STATION` |
 | `_CLEAR_REZINA` | `_IFS_WIPE` |
 | `_SBROS_TRASH` (shake off, no extrusion) | `_IFS_SHAKE` |
-| `_MOVE_TO_CUT_PREPARE_POSITION` | **missing** (no cutter) |
+| `_MOVE_TO_CUT_PREPARE_POSITION` | folded into `_IFS_CUT`, which travels to the clear position, drags the shear, and withdraws the stub as one sequence |
 
 ## Where copying zmod turned out to be right
 
-- **The toolhead sensor's thresholds are stock's**, 0.30 and 0.72. They were
-  briefly replaced with a much narrower pair, 0.015 and 0.020, chosen from the
-  endpoints of two measured clusters. Sweeping between those endpoints - the tip
-  retracted a millimetre at a time and pushed back - showed there are no
-  clusters: it is one proximity curve, flat near 0.008 while a strand covers the
+- **The toolhead sensor's thresholds are stock's**, 0.30 and 0.72. Sweeping the
+  sensor - the tip retracted a millimetre at a time and pushed back - shows one
+  proximity curve, not clusters: flat near 0.008 while a strand covers the
   sensor, through a knee at 9 mm, resting at 0.023 after a completed load, and
-  only reaching 0.398 with the toolhead genuinely empty.
-
-  The narrow table was wrong on hardware twice over. It called a resting load
-  ABSENT, so the next load said "extruder already empty", skipped the cut and
-  the 60 mm withdraw, and drove the incoming lane into a strand the gear was
-  still gripping - the stall that looked like broken hardware. And its FAULT
-  band sat on the knee, so an ordinary tip 10 mm back read as a failing sensor.
-  0.30 sits in the only real gap, six times above the highest present reading
-  and a quarter below the lowest absent one.
+  only reaching 0.398 with the toolhead genuinely empty. 0.30 sits in the only
+  real gap, six times above the highest present reading and a quarter below the
+  lowest absent one; anything inside the curve misreads one end or the other.
 
 - **The extruder withdraw co-pulls with the lane.** zmod's `_IFS_REMOVE_PRUTOK`
   issues `G1 E-nozzle_cleaning_length` and an `IFS_F11` of the same length at
@@ -260,21 +249,18 @@ pass and then onto the wiper, which smears it rather than removing it.
   rather than the part - **X never travels while the head is behind `safe_y`**,
   because that is where the wall hardware is.
 
-- **A stalled load feed is not fatal, because in zmod it cannot be.**
-  `cmd_IFS_F10` ends in `print_result()`, which only prints; a stall reports
-  "Filament N stalled in IFS", runs `IFS_F112`, and the caller carries on to
-  `_SBROS_TRASH_DAVIM`. Ours raised a gcode error there, ending the load before
-  the co-push that completes it. `SOFT=1` now matches zmod. Scope this claim
-  carefully: the lane 1 stalls that prompted the change were a real obstruction
-  at the combiner, cleared by hand, and the soft path has never fired on this
-  printer. A healthy lane reaches the toolhead sensor, which sits UPSTREAM of
-  the extruder gear.
+- **A stalled load feed is not fatal.** The load feed ENDS by arriving at the
+  extruder gear, and the IFS cannot push past a gear that is not turning - so
+  stopping short is how the feed finishes and the co-push completes it. Failing
+  the load there aborts it before the one step that can save it. Scope the
+  softness: a stall can also be a real obstruction at the combiner, which needs
+  a hand, and the soft path has never fired on this printer. A healthy lane
+  reaches the toolhead sensor, which sits UPSTREAM of the extruder gear.
 
 - **Both purge passes go to the chute.** `_SBROS_TRASH_DAVIM` opens with
   `_GOTO_TRASH` and zmod calls it once per pass, so both of its purges land in
-  the bin. Copying the extrusion without the move put our second 30 mm pass in
-  free air at X78.0 Y220.0, in front of the wiper pad, because `_IFS_WIPE` had
-  just moved the head there. Traced: it now runs at X52.5 Y229.0.
+  the bin. A pass that purges wherever the last wipe left the head fires onto
+  the wiper pad - and purging onto the wiper is how the wiper stops being one.
 
 ## Deliberate deviations
 
@@ -286,10 +272,9 @@ Everything else should copy zmod. These do not, for stated reasons:
   than avoided by polling quickly. Stronger than a timing assumption.
 - **A move says HOW it ended, but a missed sensor is not a failure.** zmod's
   checked feed returns `RET_OK` when the board simply finishes; ours reports
-  `not_reached` and carries on. Making it a failure was tried and **reverted**:
-  it stopped a load whose filament was already at the toolhead entry, before the
-  co-push that would have pulled it in. Reporting the difference is useful,
-  acting on it is not.
+  `not_reached` and carries on. Acting on the difference stops loads whose
+  filament is already at the toolhead entry, before the co-push that would pull
+  it in. Reporting the difference is useful; acting on it is not.
 - **A move can back off through the feed** (`BACKOFF=`), applied only when the
   sensor is what ended it. zmod decides the same thing in python off
   `RET_EXTRUDER`. It cannot live in the macro: a klipper gcode_macro is rendered
