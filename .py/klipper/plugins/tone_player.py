@@ -91,16 +91,30 @@ class PWMAudio:
             self.duty_cycle = dc
 
 
-## Where the buzzer lives. Not every board has one: the AD5X has no
-## /sys/class/pwm at all, because its buzzer belongs to the stock firmwareExe
-## process rather than to Linux.
+## Where the buzzer lives, per board. Not every board has one.
+##
+## AD5M: sysfs PWM at /sys/class/pwm/pwmchip0/pwm6.
+## AD5X: the buzzer (pc12) hangs off Ingenic's PWM2 block behind the stock
+##       soc_pwm.ko driver, which exposes a misc device (/dev/jz_pwm) rather
+##       than sysfs; the fx-pwm tool in our rootfs speaks its ioctl ABI. The
+##       whole tune is one subprocess, so playback never blocks klippy's
+##       reactor per note.
 PWM_CHIP = 0
 PWM_DEVICE = 6
 
+FX_PWM = "/usr/bin/fx-pwm"
+BUZZER_GPIO = "pc12"
+JZ_PWM_DEVICE = "/dev/jz_pwm"
+
+
+def fx_pwm_available():
+    """Whether the fx-pwm tool and its device are both present."""
+    return Path(FX_PWM).is_file() and Path(JZ_PWM_DEVICE).exists()
+
 
 def buzzer_available(chip=PWM_CHIP):
-    """Whether this board exposes a PWM buzzer to userspace at all."""
-    return Path("/sys/class/pwm/pwmchip%d" % chip).is_dir()
+    """Whether this board exposes a PWM buzzer to userspace in any form."""
+    return fx_pwm_available() or Path("/sys/class/pwm/pwmchip%d" % chip).is_dir()
 
 
 class TonePlayer:
@@ -151,6 +165,10 @@ class TonePlayer:
             gcmd.respond_raw("Done")
 
     def _play(self, notes):
+        if fx_pwm_available():
+            self._play_fx_pwm(notes)
+            return
+
         pwm = PWMAudio(PWM_CHIP, PWM_DEVICE)
         try:
             for tone, duration in notes:
@@ -164,6 +182,20 @@ class TonePlayer:
                 self.reactor.pause(now + duration / 1000)
         finally:
             pwm.disable()
+
+    def _play_fx_pwm(self, notes):
+        """One subprocess plays the whole tune; the reactor never waits.
+
+        The tool's NOTES grammar is this plugin's (freq:ms pairs, a bare
+        number a rest), so the tune string is handed over verbatim. It ends
+        with the channel released, so nothing is left driving the pin.
+        """
+        import subprocess
+        tune = " ".join(
+            "%s:%s" % (tone, duration) for (tone, duration) in notes)
+        subprocess.Popen(
+            [FX_PWM, "tone", BUZZER_GPIO, tune],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
     def _parse_notes(self, gcmd):
         notes_str = gcmd.get("NOTES")
