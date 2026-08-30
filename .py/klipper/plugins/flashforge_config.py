@@ -21,15 +21,14 @@ import tempfile
 
 PATH = "/usr/prog/config/Adventurer5M.json"
 
-## FFMInfo indexes slots from 1. Index 0 is not a lane: zmod_color reads it as
-## `materialName`/`materialColor`, i.e. what is currently loaded in the
-## extruder. Treated as such here, and kept separate from the lanes so a wrong
-## guess cannot silently become a fifth channel.
+## FFMInfo indexes slots from 1. Index 0 is not a lane: it is the extruder's
+## current material (`materialName`/`materialColor`). Treated as such here, and
+## kept separate from the lanes so a wrong guess cannot silently become a fifth
+## channel.
 LOADED_SLOT = 0
 
-## Stock's own filament-sensor thresholds. Recorded because they are almost
-## certainly where zmod's 0.3/0.72 came from - and our measured raw ADC is
-## 0.008 present / 0.043 absent, nowhere near either. Stock is presumably
+## Stock's own filament-sensor thresholds. Recorded for reference only: our
+## measured raw ADC is 0.008 present / 0.043 absent, nowhere near either. Stock is presumably
 ## comparing against a different scale (a resistance conversion), so these are
 ## exposed for reference and deliberately NOT wired into our classifier.
 SENSOR_MIN_KEY = "FilamentSenserMin"
@@ -101,9 +100,9 @@ class FlashForgeConfig(object):
 
         NOT from `FFMInfo.channel`. That field reads 4 on a four-lane machine
         with lane 4 loaded, which is consistent with "the lane count" and with
-        "the current lane" at the same time - and zmod reads it as the current
-        lane (`get_current_channel_from_config`). Deriving the count from it
-        would list a single slot the day it means what zmod thinks it means.
+        "the current lane" at the same time (current_channel below reads it as
+        the latter). Deriving the count from it would list a single slot the
+        day it means the current lane.
         Counting ffmType<n> keys needs no interpretation at all.
 
         `F13` has no channel_count on firmware 3.0.6 and `F19` reports it as an
@@ -117,7 +116,7 @@ class FlashForgeConfig(object):
         return max(lanes) if lanes else None
 
     def current_channel(self, document=None):
-        """Which lane FFMInfo says is loaded, or None. zmod's reading."""
+        """Which lane FFMInfo says is loaded, or None."""
         value = self.section("FFMInfo", document).get("channel")
         if not isinstance(value, (int, float)):
             return None
@@ -178,10 +177,8 @@ class FlashForgeConfig(object):
     def multicolour(self, document=None):
         """Stock's own load, purge and unload distances and speeds.
 
-        The `Multicolour` block. Worth preferring over any constant we might
-        invent: zmod's "defaults" are these numbers copied out - its
-        filament_unload_into_tube 70 is UnloadIFSSpace, nozzle_cleaning_length
-        60 is UnloadESpace, filament_extruder_speed 300 is FristESpeed.
+        The `Multicolour` block, worth preferring over any constant we might
+        invent: it is what the stock firmware itself runs with.
         """
         return dict(self.section("Multicolour", document))
 

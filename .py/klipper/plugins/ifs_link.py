@@ -7,8 +7,8 @@
 ##
 ## The protocol is documented in docs/AD5X_IFS_PROTOCOL.md, recovered from the
 ## board's own firmware image rather than from a driver. The framing (the 0xFF
-## commit byte, the ~200 ms gap before it, the port parameters) is taken from
-## ghzserg's zmod_ifs.py, which is the only known working driver.
+## commit byte, the ~200 ms gap before it, the port parameters) is the derived
+## portion the attribution below covers, taken from a driver proven to work.
 ##
 ## Copyright (C) 2026, Preston Brown
 ## Portions derived from zmod (C) 2025-2026 ghzserg <https://github.com/ghzserg/zmod/>
@@ -33,8 +33,8 @@ READ_TIMEOUT = 0.2
 ## Measured on an IFS board running firmware 3.0.6: the board answers identically
 ## with and without the trailing 0xFF, and with and without a space before the
 ## CRLF. All four combinations returned the same 127-byte F13 reply. FlashForge's
-## own firmware sends the space and never the commit byte; zmod does the reverse.
-## Neither is required, so the default sends neither extra and skips the delay -
+## own firmware sends the space and never the commit byte. Neither extra is
+## required, so the default sends neither and skips the delay -
 ## that is a hard 200 ms saved on every single command.
 ##
 ## SEND_COMMIT_BYTE stays as an escape hatch. One board at one firmware revision

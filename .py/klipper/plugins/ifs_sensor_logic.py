@@ -1,6 +1,6 @@
 ## Filament-sensing decisions for the AD5X, with no klipper in them.
 ##
-## Two unrelated sensors get conflated because ZMOD puts them in one file:
+## Two unrelated sensors, easily conflated:
 ##
 ##   * The TOOLHEAD sensor is an analog input on the extruder board
 ##     (`temperature_sensor filamentValue`, eboard:PA3, declared as a thermistor
@@ -78,8 +78,8 @@ def toolhead_bands(present_max, absent_min):
     return ((present_max, PRESENT), (absent_min, ABSENT), (None, FAULT))
 
 
-## ZMOD's own thresholds, which are stock firmware's: `value >= 0.72 if value >
-## 0.3 else True`. They are the defaults here because the sweep showed the
+## Stock firmware's own thresholds: `value >= 0.72 if value > 0.3 else True`.
+## They are the defaults here because the sweep showed the
 ## narrow table this used to carry was WRONG ON HARDWARE, twice over:
 ##
 ##   - A completed load rests at 0.023, which that table called ABSENT. The next
@@ -98,8 +98,8 @@ AD5X_PRESENT_MAX = 0.30
 AD5X_ABSENT_MIN = 0.72
 AD5X_TOOLHEAD = toolhead_bands(AD5X_PRESENT_MAX, AD5X_ABSENT_MIN)
 
-## zmod's table as data, for a test that pins where the two still differ: above
-## 0.72 zmod says PRESENT and this says FAULT. Same call either way with
+## The stock classifier as data (same bounds as above, PRESENT above 0.72
+## rather than FAULT), for a test that pins where ours differs. Same call either way with
 ## `fail_safe` on - a railed sensor must not pause a running print - but ours
 ## keeps the fault visible through classify() instead of reporting filament
 ## that is not there.

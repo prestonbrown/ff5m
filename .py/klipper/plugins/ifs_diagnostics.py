@@ -1,7 +1,7 @@
 ## Diagnostics for the AD5X IFS board.
 ##
-## The board answers 32 opcodes and ZMOD uses 9. This module is most of the
-## difference: firmware version, cumulative stall counts, raw per-channel sensor
+## The board answers 32 opcodes; the operations layer uses nine of them. This
+## module is most of the difference: firmware version, cumulative stall counts, raw per-channel sensor
 ## values, and both TMC stepper drivers' registers. None of it reaches any UI
 ## today on any firmware.
 ##

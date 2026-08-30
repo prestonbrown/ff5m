@@ -66,8 +66,7 @@ class IfsToolheadSensor(ifs_sensor_base.IfsSensorBase):
                     sorted(self._query_adc.adc.keys()))
                 self._warned = True
             return None
-        ## klipper returns (value, timestamp) in that order. zmod unpacks it
-        ## the other way round and compensates further down; do not copy that.
+        ## klipper returns (value, timestamp) in that order.
         value, _timestamp = channel.get_last_value()
         return value
 

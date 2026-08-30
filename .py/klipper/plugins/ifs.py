@@ -63,21 +63,19 @@ DIAGNOSTICS_TIMEOUT = 30.0
 ## How long to let the board finish acting on a command it already accepted.
 ## Clamping is mechanical and quick; this only has to outlast that.
 SETTLE_TIMEOUT = 15.0
-## What zmod polls F13 at inside wait_for_state (its HOST_REPORT_TIME). The
-## background cadence is fine for status but far too coarse to judge motion:
-## the board's motion bit toggles, so three 1s samples can all land in gaps
-## while the motor is running and read as a stall that never happened.
+## How fast to poll F13 while a move runs. The background cadence is fine for
+## status but far too coarse to judge motion: the board's motion bit toggles,
+## so three 1s samples can all land in gaps while the motor is running and
+## read as a stall that never happened.
 MOVE_POLL_INTERVAL = 0.2
 
 ## How many times a move is re-issued after the board reports a driver fault.
-## zmod's retry_count, and its wait_for_state is where the recovery lives: the
-## moment F13 reads DRV_ERROR it sends F15 and returns RET_RETRY, and the caller
-## re-sends the same opcode. Ours used to fail the command outright, so a driver
-## that dropped out ended the run instead of being recovered from.
+## The recovery lives in the wait: the moment F13 reads DRV_ERROR, send F15 and
+## re-send the same opcode. Failing the command instead means a driver that
+## dropped out ends the run instead of being recovered from.
 DEFAULT_RETRY_COUNT = 3
 
-## What runs when the board reports filament pushed into a lane. zmod fires
-## _IFS_AUTOINSERT the same way, off its poll thread, and it is the step that
+## What runs when the board reports filament pushed into a lane: the step that
 ## puts a lane in a known position instead of wherever a human left it.
 AUTOINSERT_SCRIPT = "IFS_AUTOINSERT CHANNEL=%d"
 
@@ -142,10 +140,9 @@ class IFS(object):
             "stall_count", ifs_sequences.DEFAULT_CONFIRMATIONS, minval=1)
         self.silk_count = config.getint(
             "silk_count", ifs_sequences.DEFAULT_RUNOUT_CONFIRMATIONS, minval=1)
-        ## zmod has no switch for this and always threads an inserted lane. A
-        ## printer that moves filament on its own the moment someone touches it
-        ## is worth being able to turn off, so this is a switch that defaults
-        ## to zmod's behaviour rather than a change to it.
+        ## Whether an inserted lane is threaded automatically. Defaults to
+        ## threading it: a printer that moves filament on its own the moment
+        ## someone touches it is worth being able to turn off.
         self.autoinsert = config.getboolean("autoinsert", True)
         self.params = ifs_sequences.Parameters(
             tube_mm=config.getfloat("tube_length", 1000.0, above=0.),
@@ -159,7 +156,7 @@ class IFS(object):
         self._queue = []
         self._queue_lock = threading.Lock()
         ## How many callers are watching a move right now. Non-zero means the
-        ## poll thread runs at zmod's cadence instead of the idle one.
+        ## poll thread runs at the move cadence instead of the idle one.
         self._watchers = 0
         self._thread = None
         self._link = None
@@ -298,12 +295,11 @@ class IFS(object):
         return True
 
     def _handle_inserted(self, channels):
-        """Announce an insert, then thread the lane as zmod does.
+        """Announce an insert, then thread the lane.
 
         Runs on the reactor, never on the poll thread. Failures are logged and
-        dropped rather than raised: this is not somebody's command, and zmod's
-        _safe_run_script swallows them for the same reason - a lane that will
-        not thread must not take klippy down with it.
+        dropped rather than raised: this is not somebody's command, and a lane
+        that will not thread must not take klippy down with it.
         """
         self.printer.send_event("ifs:filament_inserted", channels)
         if not self.autoinsert:
@@ -545,13 +541,9 @@ class IFS(object):
     def _finish(self, gcmd, outcome, what, channel=None, soft=False):
         """Report an outcome, and stop the board if it was a bad one.
 
-        `soft` is zmod's behaviour, and it is the ONLY behaviour zmod has:
-        cmd_IFS_F10 calls print_result() and IFS_F112 and returns. print_result
-        only prints - it cannot raise - so a stalled load feed in zmod reports
-        "Filament N stalled in IFS", stops the board, and the caller carries
-        straight on to _SBROS_TRASH_DAVIM, the co-push purge.
-
-        That is not laxity, it is the geometry. A load feed ENDS by arriving at
+        `soft` reports the problem, stops the board, and returns the outcome
+        without raising, so the caller carries straight on to the co-push
+        purge. That is not laxity, it is the geometry. A load feed ENDS by arriving at
         the extruder gear, and the IFS cannot push filament past a gear that is
         not turning - the comment in _IFS_PURGE says so in as many words. So
         the feed stopping short is the expected way for it to finish, not a
@@ -585,7 +577,7 @@ class IFS(object):
             logging.warning("IFS: could not stop after %s: %s",
                             outcome.kind, exc)
         if outcome.kind == ifs_sequences.TIMED_OUT:
-            ## zmod's timeout path is F112 then F18. A timeout means we no
+            ## The timeout path is F112 then F18. A timeout means we no
             ## longer know which channel the board thinks it is on, so let go
             ## of all of them.
             self._let_go("F18", outcome)
@@ -593,8 +585,7 @@ class IFS(object):
             ## A move that failed knows its channel, so it lets go of just that
             ## one. A klipper macro has no finally, so the release written after
             ## the feed never runs once the feed raises - which is how two lanes
-            ## sat gripped for hours after one failed run. zmod's AUTOINSERT
-            ## ends with F39 whether or not the feed worked, for this reason.
+            ## sat gripped for hours after one failed run.
             self._let_go("F39 C%d" % channel, outcome)
         raise gcmd.error("%s failed: %s%s"
                          % (what, outcome.kind,
@@ -616,8 +607,8 @@ class IFS(object):
         ## board does pass through `clamped ch=N`, for a few seconds at that
         ## (measured: 3.8 s on channel 4, 0.2 s on channel 2), but how long is
         ## the selector's business and a short one is missed between polls.
-        ## zmod's cmd_IFS_F24 waits on the acknowledgement and then on READY,
-        ## which is true whether or not the transition was seen.
+        ## The wait is on the acknowledgement and then on READY, which is true
+        ## whether or not the transition was seen.
         channel = self._channel(gcmd)
         self._run(gcmd, "F24 C%d" % channel, lambda ops: ops.clamp(channel))
         self._settle(gcmd, channel, "clamp channel %d" % channel)
@@ -631,9 +622,9 @@ class IFS(object):
         gcmd.respond_info("released channel %d" % channel)
 
     def cmd_IFS_MARK_INSERTED(self, gcmd):
-        ## zmod's IFS_F23, the last IFS step of its load. Without it the board
-        ## is never told the lane is occupied, so its own view of which channels
-        ## hold filament goes stale as soon as we load one.
+        ## The last IFS step of a load. Without it the board is never told the
+        ## lane is occupied, so its own view of which channels hold filament
+        ## goes stale as soon as we load one.
         channel = self._channel(gcmd)
         self._run(gcmd, "F23 C%d" % channel,
                   lambda ops: ops.mark_inserted(channel))
@@ -660,9 +651,8 @@ class IFS(object):
     def _settle(self, gcmd, channel, what, timeout=SETTLE_TIMEOUT):
         """Wait for the board to come back to READY after a command.
 
-        zmod follows the acknowledgement of both F24 and F39 with
-        wait_for_state(), which returns when F13 reports READY. The
-        acknowledgement only says the opcode was accepted - the board is still
+        Both F24 and F39 are followed by this wait, which returns when F13
+        reports READY. The acknowledgement only says the opcode was accepted - the board is still
         acting on it, and the next opcode sent meanwhile is refused with "FFS
         not ready.". A feed issued straight after a clamp hit exactly that.
         """
@@ -714,7 +704,7 @@ class IFS(object):
         self._run(gcmd, label, send)
 
         if gcmd.get_int("SLEEP", 0):
-            ## zmod's SLEEP=1: fire the opcode and pause for a fixed fraction of
+            ## SLEEP=1: fire the opcode and pause for a fixed fraction of
             ## the move rather than watching state at all. It is used where the
             ## EXTRUDER is driving the same filament, and there the lane's
             ## motion bit is not a stall signal - something else is pulling, and
@@ -724,20 +714,17 @@ class IFS(object):
                                + (length * 20) // speed + 1)
             return None
 
-        ## CHECK mirrors zmod's: it turns on BOTH judgements its checked calls
-        ## pass, silk and stall, against the channel's activity state - so a
-        ## lane that ran out is reported as an empty lane rather than as a jam.
-        ## Only the LOAD feed asks for it. zmod's unload is a plain
-        ## `IFS_F11 LEN SPEED` that waits for READY and nothing else, and
+        ## CHECK turns on BOTH judgements, silk and stall, against the
+        ## channel's activity state - so a lane that ran out is reported as an
+        ## empty lane rather than as a jam. Only the LOAD feed asks for it: a
+        ## retract is a plain move that waits for READY and nothing else, and
         ## watching a retract for stalls failed one that had worked: the motion
         ## stopping IS how a retract ends.
         ## BACKOFF exists because a klipper macro is rendered ONCE, before any
         ## of it runs: a template cannot look at the toolhead sensor after its
         ## own feed, because that read happened before the feed was sent. So
         ## "retract this much, but only if you actually reached the sensor" has
-        ## to be decided here, where the outcome is known. zmod decides the same
-        ## thing off its return code (RET_EXTRUDER) in python, for the same
-        ## reason.
+        ## to be decided here, where the outcome is known.
         backoff = gcmd.get_float("BACKOFF", 0., minval=0.)
         check = gcmd.get_int("CHECK", 0)
         for attempt in range(self.retry_count):
@@ -751,8 +738,8 @@ class IFS(object):
             outcome = self._await(gcmd, waiter, timeout, until=until)
             if outcome.kind != ifs_sequences.DRIVER_ERROR:
                 break
-            ## zmod resets the driver on every DRV_ERROR, including the last
-            ## one it gives up on, so the board is not left faulted.
+            ## The driver is reset on every DRV_ERROR, including the last one
+            ## we give up on, so the board is not left faulted.
             self._run(gcmd, "F15 C", lambda ops: ops.reset_driver())
             if attempt + 1 < self.retry_count:
                 gcmd.respond_info("%s channel %d: driver fault, reset and "
@@ -760,7 +747,7 @@ class IFS(object):
                                   % (what, channel, attempt + 2,
                                      self.retry_count))
                 self._run(gcmd, label, send)
-        ## SOFT=1 is zmod's non-fatal feed. Only the load asks for it; an
+        ## SOFT=1 is the non-fatal feed. Only the load asks for it; an
         ## autoinsert thread still fails loudly, because nothing follows it that
         ## could rescue a lane that never arrived.
         result = self._finish(gcmd, outcome,
@@ -791,8 +778,8 @@ class IFS(object):
 
         A soft feed cannot say whether the load worked, because arriving at the
         gear and never arriving at all end the same way. The toolhead sensor
-        can, once the extruder has had its turn at the filament. zmod never
-        asks, and quietly purges air when a lane did not make it.
+        can, once the extruder has had its turn at the filament - never
+        asking means quietly purging air when a lane did not make it.
         """
         present = self._toolhead_has_filament()
         if present is None:

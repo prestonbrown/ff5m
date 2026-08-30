@@ -29,10 +29,7 @@ from . import flashforge_config
 ## Stored form is always '#'-prefixed whatever the caller spelled.
 COLOUR = re.compile(r"^#?(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6})$")
 
-## What each material wants the nozzle at to be pushed through it, from zmod's
-## `temp_defaults`. This is the ONLY thing zmod varies by material: every other
-## number - purge lengths, feed speeds, tube length - is one global set, and its
-## per-material override file ships with no overrides in it.
+## What each material wants the nozzle at to be pushed through it.
 ##
 ## These are handling temperatures, not print temperatures. They only have to
 ## melt the filament enough to move; the slicer still owns what a print runs at.
@@ -45,7 +42,7 @@ TEMPERATURES = {
     "PETG": 250.0,
     "PETG-CF": 250.0,
 }
-## Prefix for adding or overriding one, mirroring zmod's `filament_<TYPE>:`:
+## Prefix for adding or overriding one:
 ##
 ##     [ifs_materials]
 ##     temp_ASA: 260
@@ -152,8 +149,8 @@ class IfsMaterials(object):
         """What to heat the nozzle to in order to move this material.
 
         None for a material we have no number for, INCLUDING an empty slot.
-        zmod silently substitutes PLA there, which quietly runs ABS at 220 and
-        snaps it off in the heatbreak; saying "I do not know" lets the caller
+        Substituting PLA's 220 there quietly runs ABS at 220 and snaps it off
+        in the heatbreak; saying "I do not know" lets the caller
         insist on a TEMP= instead of guessing on the user's behalf.
         """
         if not material:

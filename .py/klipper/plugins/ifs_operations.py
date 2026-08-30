@@ -9,8 +9,9 @@
 ## about klippy, so it is exercised off-rig against a scripted board.
 ##
 ## Command syntax and the expected replies are in docs/AD5X_IFS_PROTOCOL.md.
-## The nine opcodes and their exact argument order match ghzserg's zmod_ifs.py,
-## which is the only known working driver.
+## The nine opcodes and their exact argument order match a driver proven to
+## work on this board, and are part of the derivation the attribution below
+## covers.
 ##
 ## Copyright (C) 2026, Preston Brown
 ## Portions derived from zmod (C) 2025-2026 ghzserg <https://github.com/ghzserg/zmod/>

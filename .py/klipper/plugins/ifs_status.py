@@ -6,13 +6,12 @@
 ## testable on its own.
 ##
 ## The line's shape is in docs/AD5X_IFS_PROTOCOL.md, recovered from the board's
-## firmware. Two departures from ghzserg's zmod_ifs.py, both deliberate and both
-## covered by tests:
+## firmware. Two decisions here are deliberate and both are covered by tests:
 ##
-##   * A line that does not parse raises. zmod's regex-per-field approach leaves
-##     every field at 0 when the line is garbled, which is indistinguishable
-##     from a real "idle, nothing loaded, no stalls" reading.
-##   * ffs_channels_insert is treated as the bitmask it is. zmod reduces it with
+##   * A line that does not parse raises. Leaving missing fields at 0 makes a
+##     garbled line read as "idle, nothing loaded, no stalls" - indistinguishable
+##     from a real one.
+##   * ffs_channels_insert is treated as the bitmask it is. Reducing it with
 ##     int.bit_length(), which returns the highest set bit, so filament inserted
 ##     into two channels at once reports only the higher one and the lower
 ##     channel's insert event is lost.
@@ -47,10 +46,10 @@ ACTIVITY_NAMES = {
     DRIVER_ERROR: "driver_error",
 }
 
-## Only these four are ever observed carrying a channel offset: zmod's own
-## comments enumerate them ("18, 29, 40" for CLAMPED, "22, 33, 44" for LOADING,
-## "23, 34, 45" for UNCLAMPING, "26, 37, 48" for UNLOADING) and its operations
-## only ever wait on LOADING and UNLOADING with a port. POLLING, READY and
+## Only these four are ever observed carrying a channel offset ("18, 29, 40"
+## for CLAMPED, "22, 33, 44" for LOADING, "23, 34, 45" for UNCLAMPING,
+## "26, 37, 48" for UNLOADING); the only channel-scoped waits a move ever needs
+## are LOADING and UNLOADING. POLLING, READY and
 ## DRIVER_ERROR are whole-board conditions and are not offset here - inventing
 ## an offset for them would be claiming knowledge the evidence does not support.
 CHANNELED_ACTIVITIES = (CLAMPED, LOADING, UNCLAMPING, UNLOADING)
@@ -127,8 +126,7 @@ class IfsStatus(object):
 
     ## The wire field is called `stall_state`, but it reports MOTION: measured
     ## with an empty channel as a control, the bit is SET while that channel's
-    ## filament is moving and CLEAR when it is not. zmod's wait agrees - it
-    ## declares a jam when the bit goes CLEAR during a commanded move. Naming it
+    ## filament is moving and CLEAR when it is not. Naming it
     ## after what it means, not what the firmware calls it, because a method
     ## called is_stalled() that returns true for healthy motion is a trap.
     def __init__(self, state, silk_mask, active_channel, insert_mask,
@@ -169,7 +167,7 @@ class IfsStatus(object):
         - whose threading had failed before their F23 - stayed set. So the mask
         is a request queue that F23 acknowledges, and calling it "inserted" says
         the opposite of what it means. Every channel, not just the highest:
-        zmod collapses it with bit_length() and loses the rest.
+        collapsing it with bit_length() loses the rest.
         """
         return mask_to_channels(self.insert_mask, self.channel_count)
 
@@ -240,8 +238,8 @@ class InsertWatcher(object):
 
     The board reports insert as a level, not an event, so an autoload must fire
     on the transition. Per channel, because two channels can gain filament
-    between two polls and both events matter - zmod collapses the mask to its
-    highest bit and loses the lower one.
+    between two polls and both events matter - collapsing the mask to its
+    highest bit would lose the lower one.
 
     Insertions are only reported while the board is ready; during a load or an
     unload the mask moves for reasons that are not a user pushing filament in.
@@ -249,8 +247,8 @@ class InsertWatcher(object):
     The first reading only ever primes: whatever the board already had inserted
     when we started watching was not pushed in by anyone just now, and acting on
     it would mean klippy driving filament in three lanes at once every time it
-    restarts. zmod has this hole - its Insert starts at 0, so its first non-zero
-    reading looks like an edge.
+    restarts. Without the priming, a watcher starting from 0 reads the first
+    non-zero mask as an edge and fires on it.
     """
 
     def __init__(self):

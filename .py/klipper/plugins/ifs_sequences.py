@@ -6,8 +6,7 @@
 ## becomes true", and this is that watching, with no klipper and no serial in
 ## it so the decisions can be tested on their own.
 ##
-## Semantics follow ghzserg's wait_for_state, which is the only working
-## reference: a sensor condition is only meaningful while the board is in the
+## A sensor condition is only meaningful while the board is in the
 ## state the command put it in, and it has to hold for several consecutive
 ## polls before it counts. A single sample is noise - measured on hardware, a
 ## clean 20 mm retract sets the stall bit in passing.
@@ -32,22 +31,21 @@ TIMED_OUT = "timed_out"
 
 ## Outcomes that mean "stop and deal with it", as opposed to a normal finish.
 ##
-## NOT_REACHED is deliberately NOT one of them. zmod's checked feed returns
-## RET_OK when the board simply completes the move, and its macro carries
-## straight on to the co-push, where the EXTRUDER gear pulls the filament the
-## last stretch in. Failing there instead stopped a load whose filament was
+## NOT_REACHED is deliberately NOT one of them. A checked feed that simply
+## completes the move is allowed to carry straight on to the co-push, where
+## the EXTRUDER gear pulls the filament the last stretch in. Failing there instead stopped a load whose filament was
 ## sitting at the toolhead entry waiting for exactly that - "lane 1 is stuck at
 ## the toolhead entry, the filament isn't gripped by the gears yet". It is
 ## still worth reporting, because a feed that ended on the sensor and one that
 ## merely ran out of length are different things.
 PROBLEMS = frozenset([STALLED, RUNOUT, DRIVER_ERROR, TIMED_OUT])
 
-## Consecutive matching polls before a condition counts. zmod keeps two
-## separate counts and so do we: a stall has to persist (its motion bit toggles,
-## so single samples read as stopped all the time), while the lane's own
-## filament bit is steady and one reading of it is enough.
-DEFAULT_CONFIRMATIONS = 3      # zmod's stall_count
-DEFAULT_RUNOUT_CONFIRMATIONS = 1   # zmod's silk_count
+## Consecutive matching polls before a condition counts. Two separate counts:
+## a stall has to persist (the motion bit toggles, so single samples read as
+## stopped all the time), while the lane's own filament bit is steady and one
+## reading of it is enough.
+DEFAULT_CONFIRMATIONS = 3
+DEFAULT_RUNOUT_CONFIRMATIONS = 1
 
 
 class Outcome(object):
@@ -76,7 +74,7 @@ class StateWaiter(object):
     Feed it every F13 reading. It returns an Outcome each time; keep going
     while that is WAITING.
 
-    `watch_runout` turns on zmod's silk check: the lane's own filament bit
+    `watch_runout` turns on the silk check: the lane's own filament bit
     going FALSE during a move. Both are only tested while the board is in
     `activity`, because outside that state the bits are describing something we
     did not ask for.
@@ -126,12 +124,10 @@ class StateWaiter(object):
             self._runout_run = self._stall_run = 0
 
         if status.is_ready:
-            ## zmod's wait_for_state returns success the moment F13 reports
-            ## READY, with no precondition that the activity was ever seen:
-            ##     if state == FFS_STATUS_READY: return True, RET_OK, ...
-            ## Requiring the activity first meant a transition the poll missed -
-            ## it polls every second, zmod every 0.2 - hung until the timeout and
-            ## then blamed the board for "never reaching loading" when the move
+            ## Success the moment F13 reports READY, with no precondition that
+            ## the activity was ever seen. Requiring the activity first meant a
+            ## transition the poll missed - at the background's one-second
+            ## cadence - hung until the timeout and then blamed the board for "never reaching loading" when the move
             ## had actually finished. Reaching the activity is not the success
             ## condition; coming back from it is.
             ##
@@ -142,13 +138,12 @@ class StateWaiter(object):
         return Outcome(WAITING, status, elapsed)
 
     def _check_sensors(self, status, elapsed):
-        ## Silk first, as zmod checks it first: a lane that lost its filament
-        ## has also stopped moving, and "there is nothing to feed" is the more
-        ## useful of the two answers.
+        ## Silk first: a lane that lost its filament has also stopped moving,
+        ## and "there is nothing to feed" is the more useful of the two
+        ## answers.
         if self.watch_runout:
-            ## zmod's silk={'count': silk_count, 'status': False} -> RET_SILK,
-            ## "No filament N in IFS". It is a FAILURE in both directions: on a
-            ## load the spool ran out, on an unload the strand left the lane.
+            ## It is a FAILURE in both directions: on a load the spool ran
+            ## out, on an unload the strand left the lane.
             if status.has_filament(self.channel):
                 self._runout_run = 0
             else:
@@ -161,7 +156,7 @@ class StateWaiter(object):
         if self.watch_stall:
             ## The board's motion bit is SET while filament moves, so a jam is
             ## its sustained ABSENCE during a move we asked for. Measured with
-            ## an empty channel as the control; zmod's wait agrees.
+            ## an empty channel as the control.
             if status.is_moving(self.channel):
                 self._seen_motion = True
                 self._stall_run = 0
@@ -205,8 +200,7 @@ class StateWaiter(object):
 ## part Jinja cannot do: a command plus the wait that decides whether it worked.
 ##
 ## This is the numbers those macros need, taken from the printer's OWN
-## `Multicolour` block rather than constants we invented. zmod's "defaults" are
-## these values copied out, so this reads the source rather than the copy.
+## `Multicolour` block rather than constants we invented.
 
 
 class Parameters(object):
@@ -218,7 +212,7 @@ class Parameters(object):
 
     A load does NOT feed `tube_mm`: the board refuses an over-long feed outright
     ("F10 C1 L1000 S1200 refused: FFS not ready."), so `load_empty_mm` and
-    `load_full_mm` carry zmod's proven autoinsert distances instead. The feed
+    `load_full_mm` carry the autoinsert distances instead. The feed
     still ends early when the toolhead sensor sees filament, so a part-fed lane
     cannot overshoot; the distance is the board's limit, not the target.
     """
@@ -229,14 +223,14 @@ class Parameters(object):
         "second_fan": 255.0,
         "unload_extruder_mm": 60.0, "unload_ifs_mm": 70.0,
         "unload_speed": 600.0,
-        ## How far a load feeds, straight from zmod's defaults
-        ## (filament_autoinsert_empty_length / _full_length). The board does NOT
-        ## cap a feed at these: "F10 C1 L1000 S1200 refused: FFS not ready." was
-        ## a clamp that had not settled yet, and zmod's own load asks for 1000.
+        ## How far a load feeds (the autoinsert empty and full lengths). The
+        ## board does NOT cap a feed at these: "F10 C1 L1000 S1200 refused:
+        ## FFS not ready." was a clamp that had not settled yet, and a working
+        ## load feeds a full 1000.
         "load_empty_mm": 600.0, "load_full_mm": 550.0,
         ## How far a freshly threaded lane backs off once its tip reaches the
         ## toolhead sensor, so it rests below the extruder gear rather than in
-        ## it (zmod's filament_autoinsert_ret_length).
+        ## it.
         "autoinsert_ret_mm": 90.0,
         ## How far a threaded lane retreats to give up the shared path at the
         ## hub. Only one lane fits there, so a load of a different lane has to
@@ -246,16 +240,15 @@ class Parameters(object):
         ## the IFS entirely.
         "hub_clear_mm": 300.0,
         ## Extra purge when the incoming material is a DIFFERENT TYPE from the
-        ## one coming out, on top of each pass's normal length - zmod's
-        ## filament_drop_length_add, which it passes to both of its passes.
+        ## one coming out, on top of each pass's normal length - both passes
+        ## get it.
         ## A colour change flushes in the volume stock allows for; a material
         ## change also has to flush a melt that behaves differently, and PETG
         ## ghosting through the next PLA is the failure it exists to stop.
-        ## It is a flat addition, not a matrix: zmod compares the type strings
+        ## It is a flat addition, not a matrix: the type strings are compared
         ## and nothing more, so PLA -> PLA-CF costs the same as PLA -> ABS.
         "purge_extra_mm": 90.0,
-        ## The shear either side of the cut, from zmod's _CUT_PRUTOK
-        ## (FILAMENT_UNLOAD_BEFORE_CUTTING / _AFTER_CUTTING). The AD5X cuts
+        ## The shear either side of the cut. The AD5X cuts
         ## filament by driving the toolhead into a fixed blade, and the stub
         ## left behind has to come back out of the extruder afterwards.
         "cut_before_mm": 0.0, "cut_after_mm": 5.0,
