@@ -730,6 +730,31 @@ class UsbStorageTest(unittest.TestCase):
         self.assertIn("action:prompt_begin", result.stdout)
         self.assertIn("action:prompt_show", result.stdout)
 
+    def test_a_kernel_without_swap_support_skips_before_any_work(self):
+        """The AD5X's stock kernel is built without CONFIG_SWAP.
+
+        Measured on the machine: /proc/swaps does not exist and every swapon
+        fails with ENOSYS, so no mode this script offers can work there. The
+        skip has to happen before allocation: dd-ing a 64 MB swap file and
+        mkswap-ing it, only for swapon to refuse, is wasted eMMC wear. MOD is
+        pointed at an empty temp dir so a gate that fails to fire cannot
+        touch a real rootfs while this test runs.
+        """
+        environment = dict(self.environment)
+        environment["PROC_SWAPS"] = str(self.root / "no-such-proc-swaps")
+        environment["INIT_SWAP_LIBRARY_ONLY"] = "0"
+        environment["MOD"] = str(self.root / "mod")
+
+        result = subprocess.run(
+            ["bash", str(INIT_SWAP)],
+            env=environment, text=True, stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT, check=False)
+
+        self.assertEqual(result.returncode, 0, result.stdout)
+        self.assertIn("no swap support", result.stdout, result.stdout)
+        self.assertNotIn("Generating swap file", result.stdout, result.stdout)
+        self.assertFalse((self.root / "mod" / "root" / "swap").exists())
+
 
 if __name__ == "__main__":
     unittest.main()

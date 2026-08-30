@@ -22,6 +22,21 @@ CFG_PATH="${CFG_PATH:-/opt/config/mod_data/variables.cfg}"
 source "$SWAP_SCRIPT_DIR/usb_storage.sh"
 
 
+# A kernel built without swap support has no /proc/swaps at all, and every
+# swapon in this script would fail with ENOSYS after doing allocation work
+# (measured on the AD5X: its stock 5.10 kernel answers swapon(2) with ENOSYS
+# and SwapTotal reads 0). The entry exists on any swap-capable kernel even
+# with zero swap active - the AD5M and CC1 both have it - so this skips
+# exactly the incapable machines and says why once, before the default MMC
+# mode spends eMMC wear on a file nothing can use. Redirectable for tests,
+# like every other path this script reads.
+PROC_SWAPS="${PROC_SWAPS:-/proc/swaps}"
+if [ ! -e "$PROC_SWAPS" ]; then
+    echo "// Kernel has no swap support (no $PROC_SWAPS); skipping swap setup"
+    exit 0
+fi
+
+
 SWAP_SIZE="${SWAP_SIZE-${1-64M}}"
 
 if [ -z "$SWAP_SIZE" ]; then
