@@ -89,23 +89,23 @@ class TestSplitResponse(unittest.TestCase):
 
     def test_space_after_ok(self):
         self.assertEqual(IFS.split_response("F13 ok. FFS_state: 5 chan: 2"),
-                         (13, "FFS_state: 5 chan: 2"))
+                         ("F13", "FFS_state: 5 chan: 2"))
 
     def test_no_space_after_ok(self):
         ## F40-F64 omit the separator. Splitting on "ok. " would lose the payload.
         self.assertEqual(
             IFS.split_response("F40 ok.stall count: C1: 0 C2: 3"),
-            (40, "stall count: C1: 0 C2: 3"))
+            ("F40", "stall count: C1: 0 C2: 3"))
 
     def test_f18_has_no_period(self):
-        self.assertEqual(IFS.split_response("F18 ok"), (18, ""))
+        self.assertEqual(IFS.split_response("F18 ok"), ("F18", ""))
 
     def test_three_digit_opcode(self):
-        self.assertEqual(IFS.split_response("F112 ok."), (112, ""))
+        self.assertEqual(IFS.split_response("F112 ok."), ("F112", ""))
 
     def test_trailing_space_is_stripped(self):
         self.assertEqual(IFS.split_response("F23 ok. chan 2. "),
-                         (23, "chan 2."))
+                         ("F23", "chan 2."))
 
     def test_unprefixed_line_is_rejected(self):
         ## An F21 continuation line, which must never be read as a reply head.
@@ -217,7 +217,7 @@ class TestErrorPayloads(unittest.TestCase):
     def test_ffs_not_ready_is_an_error(self):
         link, _, _ = make_open_link({10: "F10 ok. FFS not ready. "})
         response = link.request("F10 C1 L100 S1200")
-        self.assertEqual(response.opcode, 10)
+        self.assertEqual(response.opcode, "F10")
         self.assertEqual(response.payload, "FFS not ready.")
         self.assertTrue(response.is_error)
 
@@ -255,7 +255,7 @@ class TestMultiLine(unittest.TestCase):
                                      13: "F13 ok. FFS_state: 5 chan: 2"})
         link.request("F21")
         response = link.request("F13")
-        self.assertEqual(response.opcode, 13)
+        self.assertEqual(response.opcode, "F13")
         self.assertEqual(response.payload, "FFS_state: 5 chan: 2")
 
     def test_single_line_replies_do_not_pay_the_drain(self):
@@ -273,14 +273,14 @@ class TestResync(unittest.TestCase):
         link, _, _ = make_open_link({24: "F24 ok. chan 2. "},
                                     preloaded=["F13 ok. FFS_state: 5 "])
         response = link.request("F24 C2")
-        self.assertEqual(response.opcode, 24)
+        self.assertEqual(response.opcode, "F24")
         self.assertEqual(response.payload, "chan 2.")
         self.assertEqual(link.stale_lines, 1)
 
     def test_an_orphaned_continuation_line_is_discarded(self):
         link, _, _ = make_open_link({13: "F13 ok. FFS_state: 5 "},
                                     preloaded=[" stall: 0 0 0 0 "])
-        self.assertEqual(link.request("F13").opcode, 13)
+        self.assertEqual(link.request("F13").opcode, "F13")
         self.assertEqual(link.stale_lines, 1)
 
     def test_a_hopelessly_desynced_link_gives_up(self):
@@ -323,7 +323,7 @@ class TestTimeoutAndRetry(unittest.TestCase):
         fake._commit = flaky
         fake.script[13] = ["F13 ok. FFS_state: 5 "]
         response = link.request("F13")
-        self.assertEqual(response.opcode, 13)
+        self.assertEqual(response.opcode, "F13")
         self.assertEqual(calls["n"], 2)
 
     def test_retries_zero_means_one_attempt(self):

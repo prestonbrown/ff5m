@@ -163,6 +163,10 @@ class IFS(object):
         self._ops = None
         self._failures = 0
         self._inserts = ifs_status.InsertWatcher()
+        ## Notified with every IfsStatus on the poll thread. Optional
+        ## companions (the IFS Jacker) parse their own fields out of the
+        ## raw line; a listener must be cheap and must never raise.
+        self._status_listeners = []
 
         ## Guarded by _lock.
         self._status = None
@@ -288,6 +292,15 @@ class IFS(object):
             self._status = status
             self._connected = True
             self._error = None
+        for listener in self._status_listeners:
+            try:
+                listener(status)
+            except Exception as exc:
+                logging.exception("IFS: status listener failed: %s", exc)
+                try:
+                    self._status_listeners.remove(listener)
+                except ValueError:
+                    pass
         inserted = self._inserts.update(status)
         if inserted:
             self.reactor.register_async_callback(
@@ -406,6 +419,15 @@ class IFS(object):
     def latest_status(self):
         with self._lock:
             return self._status
+
+    def add_status_listener(self, listener):
+        """Call `listener(status)` with every F13, on the poll thread.
+
+        One reader owns the link, so a companion that wants the status stream
+        subscribes here rather than opening the port. Exceptions are contained:
+        a broken listener is dropped, never the poll.
+        """
+        self._status_listeners.append(listener)
 
     @property
     def capabilities(self):

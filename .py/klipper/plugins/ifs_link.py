@@ -80,7 +80,10 @@ _COUNT_WORDS = {
     "five": 5, "six": 6, "seven": 7, "eight": 8,
 }
 
-_PREFIX_RE = re.compile(r"^F(\d{1,3})\s+ok\.?\s*")
+## F<n> for the IFS board itself; Z<n> for pass-through devices that jack the
+## link (the IFS Jacker sits between host and board and answers Z opcodes the
+## bare board cannot - which is exactly how it is detected).
+_PREFIX_RE = re.compile(r"^([FZ]\d{1,3})\s+ok\.?\s*")
 
 
 class IfsLinkError(Exception):
@@ -105,7 +108,7 @@ class IfsResponse(object):
         return self.payload in ERROR_PAYLOADS
 
     def __repr__(self):
-        return "IfsResponse(F%s, %r%s)" % (
+        return "IfsResponse(%s, %r%s)" % (
             self.opcode, self.payload,
             ", +%d line(s)" % len(self.extra) if self.extra else "")
 
@@ -146,16 +149,17 @@ def parse_capabilities(text):
 
 
 def split_response(line):
-    """Split "F13 ok. rest" into (13, "rest"). Returns None without the prefix.
+    """Split "F13 ok. rest" into ("F13", "rest"); None without the prefix.
 
-    The separator after "ok." is inconsistent in the firmware - F10-F24 and F39
-    put a space there, F40-F64 do not - so the prefix is matched as a unit
-    rather than by splitting on "ok. ".
+    The opcode keeps its letter, so F and Z replies of the same number stay
+    distinct. The separator after "ok." is inconsistent in the firmware -
+    F10-F24 and F39 put a space there, F40-F64 do not - so the prefix is
+    matched as a unit rather than by splitting on "ok. ".
     """
     match = _PREFIX_RE.match(line or "")
     if match is None:
         return None
-    return int(match.group(1)), line[match.end():].strip()
+    return match.group(1), line[match.end():].strip()
 
 
 def _default_serial_factory():
@@ -273,10 +277,12 @@ class IfsLink(object):
 
     @staticmethod
     def _opcode_of(command):
-        match = re.match(r"\s*F(\d{1,3})", command or "")
+        ## The opcode is carried as its "F13"/"Z2" string so an F and a Z of
+        ## the same number can never be correlated with each other.
+        match = re.match(r"\s*([FZ]\d{1,3})\b", command or "")
         if match is None:
             raise IfsLinkError("not an IFS command: %r" % command)
-        return int(match.group(1))
+        return match.group(1)
 
     def _write_frame(self, command):
         self._serial.write((command + COMMAND_SUFFIX).encode())
@@ -313,11 +319,11 @@ class IfsLink(object):
         return dropped
 
     def _read_response(self, opcode):
-        """Find the line that echoes our opcode, discarding stale ones."""
+        """Find the line that echoes our opcode ("F13"/"Z2"), dropping stale ones."""
         for _ in range(self.MAX_STALE_LINES + 1):
             line = self._read_line()
             if line is None:
-                raise IfsTimeout("silent after F%d" % opcode)
+                raise IfsTimeout("silent after %s" % opcode)
             split = split_response(line)
             if split is None:
                 ## An unprefixed line here belongs to a previous multi-line
@@ -326,15 +332,16 @@ class IfsLink(object):
                 logging.debug("IFS: dropping unprefixed line %r", line)
                 continue
             seen, payload = split
-            if seen != opcode:
+            if seen != opcode:   # seen is the "F<n>"/"Z<n>" echo tag
                 self.stale_lines += 1
                 logging.debug("IFS: dropping F%d reply while awaiting F%d",
                               seen, opcode)
                 continue
-            extra = self._drain_extra() if opcode in MULTILINE_OPCODES else []
+            extra = self._drain_extra() if opcode.startswith("F") and \
+                int(opcode[1:]) in MULTILINE_OPCODES else []
             return IfsResponse(opcode, payload, extra, line)
         raise IfsLinkError(
-            "link out of sync: %d lines without an F%d reply"
+            "link out of sync: %d lines without an %s reply"
             % (self.MAX_STALE_LINES + 1, opcode))
 
     def _drain_extra(self):
