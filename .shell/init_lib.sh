@@ -190,7 +190,12 @@ fix_config() {
         --config /opt/config/printer.base.cfg \
         --data $TMP_CFG_PATH \
         --params "$(_cfg_path init.move.cfg)"; then
-        # TODO: Merge with defaults?
+        # The dump holds only what the printer's own base cfg carries - a
+        # param it lacks is absent rather than defaulted from the fallback
+        # body. That is deliberate: the stock config is the authority on its
+        # own hardware, and a named param missing from it is an anomaly to
+        # surface, not to paper over with another machine's default. An
+        # entirely empty dump already raises inside cfg_backup.
         DATA_MOVE_CFG=$TMP_CFG_PATH
     else
         DATA_MOVE_CFG="$(_cfg_path data.init.move.cfg)"
