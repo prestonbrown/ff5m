@@ -1,0 +1,12 @@
+# Rootfs identities the AD5X image builder accepts.
+#
+# One line per rootfs: <md5>  <KNOWN|FORBIDDEN>  <note>
+# KNOWN     ships: built by forgex-br (our buildroot external tree).
+# FORBIDDEN never ships: tracked here so a release build fails loudly
+#           instead of silently embedding someone else's release.
+#
+# A new forgex-br build gets its md5 appended here (see ROOTFS.md).
+# An md5 in neither state requires ALLOW_UNPINNED_ROOTFS=1 to proceed.
+
+f7ef1da7e623f39cc6fbe484d9081911  KNOWN      forgex-br ad5x, buildroot 2025.02.4, built 2026-08-24
+71153b915392ca4d935c714a1b7c7446  FORBIDDEN  ZMOD 1.7.1 release rootfs (the early bring-up borrow)

@@ -18,9 +18,11 @@
 ##   img/forgex-*.raw.xz  flash-time status frames (extra members; painted by
 ##                        the installer - tolerated by the superset contract)
 ##
-## The rootfs is NOT built here. For the first proof it is borrowed (a known-good
-## MIPS Buildroot rootfs); point BUILDROOT_TAR at it. The clean M2 rootfs swaps
-## in later by pointing BUILDROOT_TAR at platform/buildroot's output instead.
+## The rootfs is NOT built here. Point BUILDROOT_TAR at a rootfs produced by
+## forgex-br (our buildroot external tree; see ROOTFS.md). Its md5 is verified
+## against rootfs.md5: ours builds are listed KNOWN, the early bring-up borrow
+## is listed FORBIDDEN, and anything unknown needs ALLOW_UNPINNED_ROOTFS=1 -
+## so a release cannot silently embed a foreign or stale rootfs.
 set -euo pipefail
 exec 3>&1 1>&2   # progress/logs -> stderr; final artifact path -> stdout (fd3)
 
@@ -49,8 +51,16 @@ mod_params.json moonraker.conf sql telegram tuning.cfg version.txt"
 die() { echo "build_ad5x_image: $*" >&2; exit 1; }
 
 [ -n "$BUILDROOT_TAR" ] || die "BUILDROOT_TAR is required (path to the MIPS rootfs.tar.xz). \
-For the first proof point it at the borrowed known-good MIPS rootfs."
+Build it with forgex-br: see tools/release/ROOTFS.md."
 [ -f "$BUILDROOT_TAR" ] || die "BUILDROOT_TAR not found: $BUILDROOT_TAR"
+
+# Whose rootfs is this? check_rootfs.sh owns the answer (exit 1 foreign,
+# 2 unpinned without override, 0 known/allowed); its output carries the why.
+if ! check_out=$("$REPO_ROOT/tools/release/check_rootfs.sh" "$BUILDROOT_TAR" 2>&1); then
+    die "rootfs check refused BUILDROOT_TAR:
+$check_out"
+fi
+echo "  $check_out"
 [ -f "$AD5X_DIR/flashforge_init.sh" ] || die "installer missing: $AD5X_DIR/flashforge_init.sh"
 [ -f "$REPO_ROOT/.shell/common.sh" ] || die "common.sh missing"
 [ -f "$REPO_ROOT/version.txt" ] || die "version.txt missing"
