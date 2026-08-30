@@ -1,20 +1,5 @@
-#!/bin/sh
-# shellcheck shell=bash
-# forge-x bash trampoline. This is a bash script, but the AD5X stock host ships
-# no /bin/bash (read-only squashfs, BusyBox), so a #!/bin/bash shebang cannot
-# start it. Run under #!/bin/sh and, when bash is absent, re-exec under the
-# mod's own bash via the rootfs loader (FORGEX_BASH_* from platform.sh). A no-op
-# indirection where /bin/bash exists (AD5M: one extra exec), and skipped when
-# the file is sourced (the test harness sources it).
-if [ "${_FORGEX_BASHED:-}" != "$0" ] && { [ -z "${BASH_SOURCE:-}" ] || [ "${BASH_SOURCE:-}" = "$0" ]; }; then
-    _FORGEX_BASHED="$0"; export _FORGEX_BASHED
-    if command -v bash >/dev/null 2>&1; then exec bash "$0" "$@"; fi
-    _fx_dir=$(cd "$(dirname "$0")" 2>/dev/null && pwd)
-    if [ -f "$_fx_dir/platform.sh" ]; then _fx_p="$_fx_dir/platform.sh"; else _fx_p="$_fx_dir/../platform.sh"; fi
-    # shellcheck source=/dev/null
-    . "$_fx_p"
-    exec "$FORGEX_BASH_LD" --library-path "$FORGEX_BASH_LIBPATH" "$FORGEX_BASH_BIN" "$0" "$@"
-fi
+#!/bin/bash
+
 
 ## Update configuration file
 ##

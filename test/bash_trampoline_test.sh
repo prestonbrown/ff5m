@@ -4,8 +4,10 @@
 # The trampoline prelude lets a #!/bin/bash mod script run on a host that has no
 # /bin/bash (AD5X stock: read-only squashfs, BusyBox). It is #!/bin/sh, and when
 # bash is absent re-execs the script under the mod's own bash via the rootfs
-# loader. This suite exercises all branches off-rig with fixtures, so the prelude
-# never has to be trusted on faith on the printer.
+# loader. Only ad5x_bootstrap.sh ships one now: it runs BEFORE the installer
+# binds the bash-providing /bin superset, so it cannot rely on that bind; every
+# later script keeps its pristine #!/bin/bash. This suite exercises all branches
+# off-rig with fixtures, so the prelude never has to be trusted on faith.
 
 SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
 REPO_DIR=$(cd "$SCRIPT_DIR/.." && pwd)
@@ -24,10 +26,11 @@ trap 'rm -rf "$WORK"' EXIT
 
 # Single source of truth: lift the actual prelude (lines 1..first `fi`) from a
 # shipped trampolined script, so a drift in the real prelude drifts the fixture.
-PRELUDE=$(sed -n '1,/^fi$/p' "$REPO_DIR/.shell/commands/zconf.sh")
+PRELUDE=$(sed -n '1,/^fi$/p' "$REPO_DIR/.shell/ad5x_bootstrap.sh")
 case "$PRELUDE" in
     *_FORGEX_BASHED*) : ;;
-    *) _t_fail "prelude lifted from zconf.sh" "no trampoline found in zconf.sh"; finish ;;
+    *) _t_fail "prelude lifted from ad5x_bootstrap.sh" \
+        "no trampoline found in ad5x_bootstrap.sh"; finish ;;
 esac
 
 # A fixture = the real prelude + a body that reports which interpreter ran it.
