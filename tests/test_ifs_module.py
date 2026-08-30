@@ -137,7 +137,59 @@ class BareHostTest(unittest.TestCase):
         self.assertEqual(commands, ("M106 S255",))
 
 
+def split_outside_braces(line):
+    """Whitespace-split that keeps {...} interpolation groups atomic.
+
+    A written `MINIMUM={(temp - 2)|int}` renders to one value before klipper
+    ever sees the line, so the spaces inside the braces are not argument
+    separators and must not read as separate tokens.
+    """
+    tokens, depth, current = [], 0, ""
+    for char in line:
+        if char == "{":
+            depth += 1
+        elif char == "}":
+            depth = max(0, depth - 1)
+        if char.isspace() and depth == 0:
+            if current:
+                tokens.append(current)
+                current = ""
+        else:
+            current += char
+    if current:
+        tokens.append(current)
+    return tokens
+
+
 class ModuleShapeTest(unittest.TestCase):
+    def test_every_extended_command_argument_is_key_value(self):
+        """Multi-character commands take KEY=VALUE arguments, always.
+
+        Anything not shaped like G1/M106/T0 goes through klipper's extended
+        parser, which rejects bare word arguments outright - and on a
+        console-driven host that refusal is a shutdown, not an error dialog.
+        Measured twice on the printer: MOVE_SAFE Z5 (missing '=') and
+        _IFS_PART_FAN S0 both died there. Quoted lines are skipped: a RESPOND
+        message body may contain anything.
+        """
+        traditional = re.compile(r"^[A-Za-z][0-9]*$")
+        bad = []
+        for number, line in enumerate(
+                MODULE.read_text(encoding="utf-8").splitlines(), 1):
+            stripped = line.strip()
+            if (not stripped or stripped[0] in "#{;*"
+                    or '"' in stripped or "'" in stripped):
+                continue
+            tokens = split_outside_braces(stripped)
+            if (traditional.match(tokens[0])
+                    or not re.match(r"^[A-Za-z_][A-Za-z0-9_]*$", tokens[0])):
+                continue
+            for token in tokens[1:]:
+                if not re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", token):
+                    bad.append((number, stripped))
+                    break
+        self.assertEqual(bad, [])
+
     def test_the_host_file_includes_the_module(self):
         self.assertIn("[include ifs.cfg]",
                       HOST.read_text(encoding="utf-8"))

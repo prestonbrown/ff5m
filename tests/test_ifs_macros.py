@@ -779,8 +779,8 @@ class PurgeTest(unittest.TestCase):
             block = commands[max(0, shake - 5):shake]
             self.assertIn("G4 P4000", block, (shake, commands))
             fan = [i for i, c in enumerate(block)
-                   if c.startswith("_IFS_PART_FAN S")
-                   and c != "_IFS_PART_FAN S0"]
+                   if c.startswith("_IFS_PART_FAN S=")
+                   and c != "_IFS_PART_FAN S=0"]
             wait = [i for i, c in enumerate(block) if c == "G4 P4000"]
             self.assertTrue(fan and wait and fan[-1] < wait[-1],
                             (shake, commands))
