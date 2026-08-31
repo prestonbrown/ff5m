@@ -141,6 +141,10 @@ class TonePlayer:
         if not self.available:
             logging.info("TONE: no PWM buzzer on this board; tones are silent")
 
+        ## The fx-pwm subprocess playing the current tune, if any. Used to
+        ## drop tunes that arrive while one is still playing.
+        self._fx_child = None
+
         self.gcode.register_command("TONE", self.cmd_TONE)
 
     def cmd_TONE(self, gcmd):
@@ -207,6 +211,18 @@ class TonePlayer:
         got for free from process-spawn overhead.
         """
         import subprocess
+        ## One tune at a time. A tune is a chain of five processes with
+        ## ~1 s of sleeps between them, and a UI that beeps per click
+        ## would stack whole chains that keep re-running the prelude long
+        ## after the user stopped clicking. New tunes arriving while one
+        ## is playing are dropped, not queued: the child exits when its
+        ## tune finishes, so poll() is the whole lifetime model. The
+        ## running chain is never killed - an interrupted fx-pwm can
+        ## orphan the channel's gpio claim, and that wedge only clears
+        ## on reboot.
+        if self._fx_child is not None and self._fx_child.poll() is None:
+            logging.info("TONE: a tune is still playing; dropping this one")
+            return
         tune = " ".join(
             "%s:%s" % (tone, duration) for (tone, duration) in notes)
         inner = "%s probe %s; sleep 0.3; " \
@@ -221,8 +237,9 @@ class TonePlayer:
         argv = ["/bin/sh", "-c", inner]
         if FX_CHROOT:
             argv = ["chroot", FX_CHROOT] + argv
-        subprocess.Popen(argv,
-                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        self._fx_child = subprocess.Popen(argv,
+                                          stdout=subprocess.DEVNULL,
+                                          stderr=subprocess.DEVNULL)
 
     def _parse_notes(self, gcmd):
         notes_str = gcmd.get("NOTES")
