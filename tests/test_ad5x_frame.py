@@ -701,6 +701,20 @@ class CollisionWatchdogParityTest(unittest.TestCase):
             HW_AD5X, value=999.0, weight_check=1, state="Printing")
         self.assertTrue(any(c.startswith("RESPOND") for c in commands))
 
+    def test_the_user_facing_alert_names_a_collision_not_grams(self):
+        ## "Bed pressure detected: 1240 g." tells the user nothing actionable.
+        ## The grams stay available to the log (the sensor's own out-of-range
+        ## line) and the console (the // line); the toast carries words.
+        commands = exceed_commands(
+            HW_AD5X, value=1240.0, weight_check=1, state="Printing")
+        toasts = [c for c in commands
+                  if c.startswith('RESPOND type="error"')]
+        self.assertTrue(any("collision" in c.lower() for c in toasts), toasts)
+        self.assertFalse(any(" g." in c for c in toasts), toasts)
+        self.assertTrue(any(
+            c.startswith('RESPOND PREFIX="//"') and "1240" in c
+            for c in commands), commands)
+
 
 if __name__ == "__main__":
     unittest.main()
