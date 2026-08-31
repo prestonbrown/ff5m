@@ -865,6 +865,14 @@ run_bootstrap() {
     echo "// [ad5x] Restoring config..."
     fix_config
 
+    # The IFS module's lane records moved into mod_data; carry the live file
+    # across so an update never orphans the loaded-lane state.
+    if [ -f /usr/data/config/ifs_variables.cfg ] \
+        && [ ! -f /opt/config/mod_data/ifs_variables.cfg ]; then
+        mv /usr/data/config/ifs_variables.cfg \
+           /opt/config/mod_data/ifs_variables.cfg
+    fi
+
     # Step 7. Launch klippy, detached. Stock app_startup.sh never launches it
     # (unlike the AD5M, where S55boot/boot.sh runs zstart_klipper), and Step 2
     # stopped the Qt UI that otherwise would, so the mod owns the launch - the
