@@ -896,8 +896,14 @@ run_bootstrap() {
     # Step 9. Done: klippy (Step 7) and the chroot services (Step 8) are up. Stock
     # app_startup.sh continues; it does not launch klippy itself.
     progress 9
-    ## Last, so the panel reflects a bring-up that actually finished.
-    show_status_card
+    ## Last, so the panel reflects a bring-up that actually finished. Must be
+    ## after the last progress() call: the progress bar paints /dev/fb0
+    ## directly and would tear whatever the UI has drawn. HelixScreen owns the
+    ## panel when the payload ships it (.bin/helixscreen); the status card is
+    ## the fallback for a payload without it, or helixscreen.sh disable.
+    if ! "$SCRIPTS"/helixscreen.sh start; then
+        show_status_card
+    fi
 
     echo "// [ad5x] Bootstrap complete."
     return 0
