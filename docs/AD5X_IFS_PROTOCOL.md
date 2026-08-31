@@ -80,8 +80,11 @@ we stop the stock UI and ship no IFS driver. Under stock, `firmwareExe` owns it.
 Three rules, all read straight off the firmware's format strings, and all three
 missing from any driver:
 
-**1. Every response echoes the request opcode: `F<n> ok.`** Not one string in the
-image breaks this. That is free request/response correlation on the wire - a
+**1. Every response echoes the request opcode: `F<n> ok.`** No string in the
+3.0.6 image breaks this. (One external tester recalls a reply variant without
+the trailing period on some revision - unconfirmed, but the module's prefix
+regex treats the dot as optional, so correlation survives it either way.)
+That is free request/response correlation on the wire - a
 reply can be matched to its request without driver-side bookkeeping, and a stale
 or unsolicited line can be discarded instead of parsed as the answer to whatever
 was asked last.
@@ -132,7 +135,7 @@ generally.
 | `F23 C<n>` | channel | mark filament inserted |
 | `F24 C<n>` | channel | clamp channel |
 | `F39 C<n>` | channel | release/unclamp channel |
-| `F112` | none | stop feeding |
+| `F112` | none | halt movement |
 
 ## The status line
 
@@ -174,13 +177,19 @@ So a jam is the *absence* of this bit while something was told to move. Reading
 it as "stalled" inverts every motion check - healthy moves look jammed and jams
 look healthy.
 
-Note also that the board **refuses to feed an empty channel**, which is a free
-precondition check: `F10` on a lane with no filament answers `FFS not ready.`
+Note also that on **3.0.6** the board **refuses to feed an empty channel**: `F10`
+on a lane with no filament answers `FFS not ready.` That refusal is a firmware
+behavior, not a protocol invariant - on **3.0.7 it is gone** (externally
+confirmed: `F10` and `F11` run with no channel clamped at all). A driver must
+gate feeds on its own presence data; this module's `loaded_channels` check is
+that gate, and the refusal was only ever a redundant backstop for it.
 
 ### Where `channel_count` comes from: nowhere, on this firmware
 
 A `channel_count` field that some drivers parse out of `F13` **is not in 3.0.6's
-format string** - the regex never matches and the value stays 0. The field list
+format string** - the regex never matches and the value stays 0. (The field
+originates in the IFS Jacker companion below, which multiplexes several IFSes
+onto one link; it was never the board's own.) The field list
 does move across revisions: a captured 3.0.5 `F13` reply carries a trailing
 `vibr: %d` that 3.0.6 never emits. On 3.0.6 the fields present are exactly
 `FFS_state`, `silk_state`, `chan`, `ffs_channels_insert`, `stall_state`,
@@ -340,7 +349,10 @@ filament in 1, 2 and 4).
   form of `F13`'s `silk_state`.
 - `F37` is reported by an external capture (a Telegram-circulated IFS table) to
   put the board into **firmware-update mode**. Never probe it from a working
-  install.
+  install - though it is recoverable: the native screen's IFS firmware update
+  reflashes the board (close the port, run
+  `/usr/prog/PROGRAM/control/IFSCommand /usr/prog/PROGRAM/control/ifs.hex
+  /dev/ttyS4`, re-probe with `F19`), and the board comes back.
 
 ## A companion on the wire: the IFS Jacker
 
@@ -360,6 +372,12 @@ emits it**. Responses differ across IFS firmware
 revisions. The missing `channel_count` field is a second instance of the same
 thing. Probe `F19` and branch on the version rather than assuming this table
 holds for every board.
+
+**3.0.7, externally checked:** the Wire section and response prefix rules carry
+over unchanged (independent tester, zmod source + hardware); the `0xFF` commit
+byte is not needed there either; and the empty-channel refusal documented above
+is gone - feed/unload opcodes run with nothing clamped. The `F19` probe remains
+the right place to branch when behavior differs.
 
 ## Ground truth
 
@@ -476,4 +494,18 @@ that are inserted" gets it backwards. This repo's status object publishes it as
   firmware revision. On 3.0.6 neither is needed: the stock FlashForge host
   sends the byte ~200 ms after every command, the board accepts commands with
   and without it, and the byte costs a hard 200 ms of delay per command when a
-  driver sends it.
+  driver sends it. On 3.0.7 it does not matter either (externally confirmed).
+- The stock UI's complete unload flow - opcode order, lengths, extruder
+  coordination - is still uncaptured (an unload needs filament loaded to the
+  nozzle to drive by hand). ninjamida (IFS Jacker's author) points to ghzserg
+  (zmod's author) as having answers; worth a capture session before trusting
+  our inferred order.
+
+## Host pacing (reference)
+
+Three known driver cadences, for anyone tuning poll intervals: the stock host
+polls every 200 ms idle and 1000 ms printing (per the community wiki's firmware
+analysis); zmod sends everything - polls and commands alike - on a 0.4 s tick
+plus execution delay, and that keeps up with a print. This module polls every
+`poll_interval` (default 1.0 s) at idle and drops to 0.2 s while a feed or
+unload is in flight and being watched.
