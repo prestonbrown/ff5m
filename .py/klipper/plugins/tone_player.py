@@ -105,6 +105,10 @@ PWM_DEVICE = 6
 FX_PWM = "/usr/bin/fx-pwm"
 BUZZER_GPIO = "pc12"
 JZ_PWM_DEVICE = "/dev/jz_pwm"
+## The soc_pwm parent clock feeding the channel divider. The tool's 50 MHz
+## default is wrong on this board: at 50 MHz assumed, 2-3 kHz notes land at
+## 15-25 kHz and are inaudible (measured by ear). 384 MHz is the AD5X truth.
+FX_PWM_BASE_HZ = 384000000
 
 
 def fx_pwm_available():
@@ -194,7 +198,8 @@ class TonePlayer:
         tune = " ".join(
             "%s:%s" % (tone, duration) for (tone, duration) in notes)
         subprocess.Popen(
-            [FX_PWM, "tone", BUZZER_GPIO, tune],
+            [FX_PWM, "tone", BUZZER_GPIO, tune,
+             "--base=%d" % FX_PWM_BASE_HZ],
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
     def _parse_notes(self, gcmd):
