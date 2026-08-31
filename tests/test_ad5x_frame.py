@@ -522,5 +522,68 @@ class PurgeLengthTest(unittest.TestCase):
         self.assertIn(30.0, self.extrusions(self.rendered(FIRST_MM=20)))
 
 
+class LoadCellTareTest(unittest.TestCase):
+    """The probe reads through a cell that has to be zeroed first.
+
+    Klipper only sees the conditioning MCU's verdict as a digital pin, and
+    that MCU compares the cell against a stored zero which drifts - measured
+    at 140 g with the nozzle in free air, which holds the pin triggered
+    permanently and fails every probing move before it moves. The AD5M has a
+    tare plugin for the same reason; this board needs its own because the
+    AD5M's looks up sections that do not exist here.
+    """
+
+    def plugin(self):
+        import importlib.util
+        path = ROOT / ".py" / "klipper" / "plugins" / "ad5x_load_cell.py"
+        spec = importlib.util.spec_from_file_location("ad5x_load_cell", path)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        return module
+
+    def test_reads_the_weight_out_of_a_reply(self):
+        parse = self.plugin().parse_weight
+        self.assertEqual(0.0, parse(b"command H7 ok. 8511562 0 g \r\n"))
+        self.assertEqual(140.0, parse(b"command H7 ok. 8511865 140 g \r\n"))
+        self.assertEqual(-3.0, parse("command H7 ok. 8511865 -3 g"))
+
+    def test_a_reply_without_a_weight_is_not_a_weight(self):
+        ## The tare reply carries a raw count and no unit. Reading it as a
+        ## weight would report a tare of eight million grams as success.
+        parse = self.plugin().parse_weight
+        self.assertIsNone(parse(b"command H1 ok. 8511666 \r\n"))
+        self.assertIsNone(parse(b""))
+        self.assertIsNone(parse(None))
+        self.assertIsNone(parse(b"garbage"))
+        self.assertIsNone(parse(b"command H7 ok. 8511865 x g"))
+
+    def test_the_unit_locates_the_value_not_a_fixed_column(self):
+        ## An added field must not silently shift which number is the weight.
+        parse = self.plugin().parse_weight
+        self.assertEqual(12.0, parse(b"command H7 ok. 1 2 3 12 g \r\n"))
+
+    def test_the_platform_declares_the_plugin(self):
+        self.assertIn("ad5x_load_cell", sections().sections())
+
+    def test_no_macro_shadows_the_plugin_command(self):
+        """A macro and the plugin cannot both register LOAD_CELL_TARE.
+
+        The no-op macro this replaced would win or collide at config time,
+        depending on parse order, and a silently-winning no-op is exactly the
+        failure we just spent an afternoon on.
+        """
+        self.assertNotIn("gcode_macro LOAD_CELL_TARE",
+                         sections().sections())
+
+    def test_the_clean_tares_on_its_way_out(self):
+        body = load_macro(HW_AD5X, "CLEAR_NOZZLE").gcode
+        self.assertIn("LOAD_CELL_TARE", body)
+        ## After the cooldown, because the cell reads differently hot and the
+        ## number that matters is the one held during the probing that
+        ## follows.
+        self.assertLess(body.index("clear_cooldown_temp"),
+                        body.index("LOAD_CELL_TARE"))
+
+
 if __name__ == "__main__":
     unittest.main()
