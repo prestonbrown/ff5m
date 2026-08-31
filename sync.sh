@@ -274,19 +274,19 @@ declare -a EXCLUDES=(
     "./sync.sh"
     "*/__pycache__"
     "./sync_remote.sh"
-    "./tests/"
+    "./tests"
     "./.bin/src/"
     "./.bin/lib/"
 )
 
 if [ "$SKIP_HEAVY" -eq 1 ]; then
     EXCLUDES+=(
-        "./.root/docs/"
-        "./.root/config/"
-        "./.root/klippy/"
-        "./.root/moonraker/"
-        "./.zsh/.oh-my-zsh/"
-        "./.bin/"
+        "./.root/docs"
+        "./.root/config"
+        "./.root/klippy"
+        "./.root/moonraker"
+        "./.zsh/.oh-my-zsh"
+        "./.bin"
     )
 fi
 
