@@ -363,6 +363,27 @@ class NozzleCleanTest(unittest.TestCase):
         self.assertLess(index_of(commands, r"_IFS_PARK_FOR_PURGE"),
                         index_of(commands, r"_IFS_PURGE\b"))
 
+    def test_both_heaters_start_before_either_wait(self):
+        ## The bed is the slow heater; a serial sequence that only sets the
+        ## nozzle after the bed has arrived doubles the clean's wall time.
+        commands = self.clean()
+        first_wait = index_of(commands, r"_WAIT_TEMPERATURE")
+        self.assertLess(index_of(commands, r"M140 S55(\.0)?\b"), first_wait)
+        self.assertLess(index_of(commands, r"M104 S220(\.0)?\b"), first_wait)
+
+    def test_the_cooldown_runs_the_part_fan(self):
+        ## Air across the block rather than time alone: fan on before the
+        ## cooldown wait, off after it, and the tare taken with it off so
+        ## airflow is not vibrating the cell while it is zeroed.
+        commands = self.clean()
+        cooldown = index_of(commands, r"_WAIT_TEMPERATURE CMD=M104 VALUE=120(\.0)?\b")
+        fan_on = index_of(commands, r"_IFS_PART_FAN S=255")
+        fan_off = index_of(commands, r"_IFS_PART_FAN S=0")
+        tare = index_of(commands, r"\bLOAD_CELL_TARE\b")
+        self.assertLess(fan_on, cooldown)
+        self.assertLess(cooldown, fan_off)
+        self.assertLess(fan_off, tare)
+
     def test_does_not_zero_the_gcode_offset(self):
         """The inherited clean zeroes the offset and never puts it back.
 
