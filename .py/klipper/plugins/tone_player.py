@@ -102,18 +102,24 @@ class PWMAudio:
 PWM_CHIP = 0
 PWM_DEVICE = 6
 
+## fx-pwm lives in the mod's rootfs chroot, while klippy itself runs on the
+## host (root=/, /usr/prog Python). Check the binary at its host-visible
+## path and exec it through the chroot; empty CHROOT on a non-chrooted
+## install runs the tool in place.
+FX_CHROOT = "/usr/data/.mod/.forge-x"
 FX_PWM = "/usr/bin/fx-pwm"
 BUZZER_GPIO = "pc12"
 JZ_PWM_DEVICE = "/dev/jz_pwm"
-## The soc_pwm parent clock feeding the channel divider. The tool's 50 MHz
-## default is wrong on this board: at 50 MHz assumed, 2-3 kHz notes land at
-## 15-25 kHz and are inaudible (measured by ear). 384 MHz is the AD5X truth.
-FX_PWM_BASE_HZ = 384000000
+## The soc_pwm parent clock feeding the channel divider. The tool's
+## assumed clock must be the raw parent: the DMA waveform runs at the
+## full ~500 MHz parent (count-coded ear tests on the rig: commanded x7.8).
+FX_PWM_BASE_HZ = 500000000
 
 
 def fx_pwm_available():
     """Whether the fx-pwm tool and its device are both present."""
-    return Path(FX_PWM).is_file() and Path(JZ_PWM_DEVICE).exists()
+    prefix = FX_CHROOT if FX_CHROOT else ""
+    return Path(prefix + FX_PWM).is_file() and Path(JZ_PWM_DEVICE).exists()
 
 
 def buzzer_available(chip=PWM_CHIP):
@@ -188,19 +194,35 @@ class TonePlayer:
             pwm.disable()
 
     def _play_fx_pwm(self, notes):
-        """One subprocess plays the whole tune; the reactor never waits.
+        """Play the tune via fx-pwm subprocesses; the reactor never waits.
 
-        The tool's NOTES grammar is this plugin's (freq:ms pairs, a bare
-        number a rest), so the tune string is handed over verbatim. It ends
-        with the channel released, so nothing is left driving the pin.
+        The prelude mirrors how stock drives the buzzer (firmwareExe shells
+        out to cmd_pwm, one process per command): probe, config, prescale
+        each as their own invocation before the tone process. Doing it all
+        inside one tone process is driver-clean but SILENT on the hardware
+        (measured by ear twice - separate invocations audible, single
+        process not; mechanism not bisected, recipe kept verbatim). The
+        whole chain runs inside one sh -c so klippy's reactor is never
+        blocked; the sleeps reproduce the gaps the separate stock commands
+        got for free from process-spawn overhead.
         """
         import subprocess
         tune = " ".join(
             "%s:%s" % (tone, duration) for (tone, duration) in notes)
-        subprocess.Popen(
-            [FX_PWM, "tone", BUZZER_GPIO, tune,
-             "--base=%d" % FX_PWM_BASE_HZ],
-            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        inner = "%s probe %s; sleep 0.3; " \
+                "%s config %s freq=50000000 max_level=300 " \
+                "active_level=1 accuracy_priority=freq; sleep 0.3; " \
+                "%s set_prescale %s 6; sleep 0.3; " \
+                "%s tone %s '%s' --base=%d" % (
+                    FX_PWM, BUZZER_GPIO,
+                    FX_PWM, BUZZER_GPIO,
+                    FX_PWM, BUZZER_GPIO,
+                    FX_PWM, BUZZER_GPIO, tune, FX_PWM_BASE_HZ)
+        argv = ["/bin/sh", "-c", inner]
+        if FX_CHROOT:
+            argv = ["chroot", FX_CHROOT] + argv
+        subprocess.Popen(argv,
+                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
     def _parse_notes(self, gcmd):
         notes_str = gcmd.get("NOTES")
