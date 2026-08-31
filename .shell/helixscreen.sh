@@ -92,8 +92,11 @@ start() {
     mkdir -p "$RUN_DIR" /opt/config/mod_data/log
 
     echo "// [helixscreen] Starting..."
+    # HELIX_ROOT is a host path ($MOD_ROOT is /usr/data/config/mod here);
+    # inside the chroot the same tree is only visible as /opt/config, where
+    # init_buildroot binds it. cd to that path, not the host one.
     chroot "$MOD" /bin/sh -c \
-        "cd $HELIX_ROOT && exec ./bin/helix-launcher.sh" \
+        "cd /opt/config/mod/.bin/helixscreen && exec ./bin/helix-launcher.sh" \
         >> "$LAUNCHER_LOG" 2>&1 &
     local launcher_pid=$!
     echo "$launcher_pid" > "$PID_FILE"
