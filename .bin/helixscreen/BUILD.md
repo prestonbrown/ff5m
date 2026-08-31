@@ -8,15 +8,19 @@ It is a build artifact, not source. Regenerate it after changing HelixScreen;
 do not hand-edit files here.
 
 - Source:   https://github.com/prestonbrown/helixscreen
-- Built from a temp branch (ad5x-ifs-ui-pkg, local only, not pushed):
-    69dabfb71 feat(mock): HELIX_MOCK_AMS=ifs-module drives the real IFS backend
-              (tip of feature/ad5x-ifs-ui at build time)
-    59c92e0c8 fix(sound): detect macro-only M300 buzzers and honor the speaker
-              override (cherry-picked from feature/ad5x-sound 64253dd5b; doc
-              citation line re-pins resolved via make regen-doc-links)
-  Everything below those two is feature/ad5x-ifs-ui's merged main lineage.
+- Built from feature/ad5x-ifs-ui HEAD b430ac179 (checked out on the local
+  temp branch ad5x-ifs-ui-pkg in .worktrees/ad5x-ifs-ui-pkg, not pushed):
+    b430ac179 fix(sound): detect macro-only M300 buzzers and honor the
+              speaker override (cherry-picked from helix-sound 64253dd5b;
+              the AD5X buzzer is a host GPIO behind [gcode_macro M300], not
+              an output_pin, so without this no sound backend installs)
+    d6a2257ec feat(ad5x): draw the IFS as it is - selector under the spools,
+              hub on the toolhead (two-box topology, no bypass, DB style
+              pins - carried here as assets/config/printer_database.json)
+    69dabfb71 feat(mock): HELIX_MOCK_AMS=ifs-module drives the real IFS
+              backend, and below it the branch's merged main lineage
 - Version:  0.99.118
-- Built:    2026-08-30, `NPROC_DOCKER_RUN=4 make ad5x-docker ENABLE_REMOTE_CONTROL=yes`
+- Built:    2026-08-30, `make ad5x-docker ENABLE_REMOTE_CONTROL=yes`
             (MIPS32r5, mipsel buildroot glibc, fbdev backend, stripped)
 
 Layout follows `make install DESTDIR=...` plus the release-ad5x packaging
@@ -39,7 +43,7 @@ Two files are rig-specific on top of the release layout:
 
 sha256 (build/ad5x/bin, at build time):
 
-    932e3ab9264377380db60c320dcb8902dde9bf696939e18a2aa1f9cf0498166a  helix-screen
+    f01a38b2f6bf4ec9974c1faa1c536bc95cd350c8d1f3a3a3bdc5f5528486073b  helix-screen
     da675622e49a2ea5e378a9f6de6947f0a541e1dc769c6953059401019652117a  helix-splash
     00220a5744fad46f311d5a182958d48c74978aac4f88d2ff4b7847de308fb8fe  helix-watchdog
 
