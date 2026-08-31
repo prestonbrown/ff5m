@@ -110,10 +110,28 @@ FX_CHROOT = "/usr/data/.mod/.forge-x"
 FX_PWM = "/usr/bin/fx-pwm"
 BUZZER_GPIO = "pc12"
 JZ_PWM_DEVICE = "/dev/jz_pwm"
-## The soc_pwm parent clock feeding the channel divider. The tool's
-## assumed clock must be the raw parent: the DMA waveform runs at the
-## full ~500 MHz parent (count-coded ear tests on the rig: commanded x7.8).
-FX_PWM_BASE_HZ = 500000000
+## Two-point tuner calibration (2026-08-31): commanded 700 Hz read
+## 3234 Hz and 1400 Hz read 6469 Hz on the rig while fx-pwm computed
+## halves at clock = 500M/6 - the DMA waveform steps at 385 MHz and the
+## channel's prescale register never reaches it. base 770M / prescale 2
+## makes the tool's clock exactly 385M, so commanded pitch IS real pitch.
+## Both numbers stay inside int32 for the tool's parse_long (MIPS long).
+FX_PWM_BASE_HZ = 770000000
+FX_PWM_PRESCALE = 2
+## The DMA period word is u16 halves: nothing below clock/131070 (~2.9 kHz
+## at 385M) is representable, and fx-pwm dies on such notes - silently
+## here, since its stderr goes to DEVNULL. Shift whole tunes up by octaves
+## until their lowest sounding note clears the floor; interval ratios are
+## preserved, so melodies keep their shape, just transposed.
+FX_PWM_FLOOR_HZ = 3000
+## A DMA loop held for tens of seconds wedges the vendor driver's disable
+## path (measured: a 30 s hold left an unkillable sounding tone until the
+## channel-disable register was poked directly; a 27-note pulsed sequence
+## wedged the same way at its final disable). Split long notes into pulses
+## of at most 1.5 s and cap a tune's TOTAL sounding time well inside the
+## regime proven clean (chains of ~1.2 s ran all day without wedging).
+FX_PWM_MAX_NOTE_MS = 1500
+FX_PWM_MAX_TOTAL_MS = 2500
 
 
 def fx_pwm_available():
@@ -125,6 +143,41 @@ def fx_pwm_available():
 def buzzer_available(chip=PWM_CHIP):
     """Whether this board exposes a PWM buzzer to userspace in any form."""
     return fx_pwm_available() or Path("/sys/class/pwm/pwmchip%d" % chip).is_dir()
+
+
+def fit_fx_pwm_band(notes):
+    """Transpose and shape a tune into what the DMA path can actually play.
+
+    Two hard limits measured on the rig (2026-08-31):
+    - The u16 period halves cannot represent anything below ~2.9 kHz, and
+      fx-pwm dies on such notes with stderr discarded - so a tune whose
+      lowest note is under the floor is octave-shifted up as a whole;
+      interval ratios survive and melodies keep their shape.
+    - Cumulative loop time in the tens of seconds wedges the driver's
+      teardown - so long notes become <=1.5 s pulses with short gaps and
+      a tune's total sounding time is capped.
+    """
+    sounding = [f for f, _ in notes if f > 0]
+    if sounding and min(sounding) < FX_PWM_FLOOR_HZ:
+        mult = 1
+        while min(sounding) * mult < FX_PWM_FLOOR_HZ and mult < 64:
+            mult *= 2
+        notes = [(f * mult if f > 0 else f, d) for f, d in notes]
+
+    out = []
+    budget = FX_PWM_MAX_TOTAL_MS
+    for freq, dur in notes:
+        if freq > 0:
+            if budget <= 0:
+                break
+            dur = min(dur, budget)
+            budget -= dur
+            while dur > FX_PWM_MAX_NOTE_MS:
+                out.append((freq, FX_PWM_MAX_NOTE_MS))
+                out.append((0, 60))
+                dur -= FX_PWM_MAX_NOTE_MS
+        out.append((freq, dur))
+    return out
 
 
 class TonePlayer:
@@ -223,17 +276,19 @@ class TonePlayer:
         if self._fx_child is not None and self._fx_child.poll() is None:
             logging.info("TONE: a tune is still playing; dropping this one")
             return
+        notes = fit_fx_pwm_band(notes)
         tune = " ".join(
             "%s:%s" % (tone, duration) for (tone, duration) in notes)
         inner = "%s probe %s; sleep 0.3; " \
                 "%s config %s freq=50000000 max_level=300 " \
                 "active_level=1 accuracy_priority=freq; sleep 0.3; " \
-                "%s set_prescale %s 6; sleep 0.3; " \
-                "%s tone %s '%s' --base=%d" % (
+                "%s set_prescale %s %d; sleep 0.3; " \
+                "%s tone %s '%s' --base=%d --prescale=%d" % (
                     FX_PWM, BUZZER_GPIO,
                     FX_PWM, BUZZER_GPIO,
-                    FX_PWM, BUZZER_GPIO,
-                    FX_PWM, BUZZER_GPIO, tune, FX_PWM_BASE_HZ)
+                    FX_PWM, BUZZER_GPIO, FX_PWM_PRESCALE,
+                    FX_PWM, BUZZER_GPIO, tune, FX_PWM_BASE_HZ,
+                    FX_PWM_PRESCALE)
         argv = ["/bin/sh", "-c", inner]
         if FX_CHROOT:
             argv = ["chroot", FX_CHROOT] + argv
