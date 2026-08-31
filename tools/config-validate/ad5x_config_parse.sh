@@ -414,6 +414,24 @@ main() {
 
     extract_stock "$tgz" "$WORK"
     transplant "$WORK/stage" "$CFG_DIR" "$WORK"
+
+    # Deprecated-option gate. klippy surfaces these only as runtime configfile
+    # status warnings (what Fluidd lists), never in klippy.log, so the gate
+    # reads the transplanted product itself. AD5X-only: the AD5M's older
+    # klippy requires max_accel_to_decel, so its overlay must keep it. Extend
+    # the list as newer stock deprecations surface.
+    if [ "$PLATFORM" = "ad5x" ]; then
+        local option
+        for option in max_accel_to_decel; do
+            if grep -qE "^[[:space:]]*${option}[[:space:]]*:" "$WORK/stage/printer.base.cfg"; then
+                echo
+                echo "RESULT: FAIL  deprecated option survived the transplant:"
+                echo "        $option in printer.base.cfg (.cfg.$PLATFORM/init.base.cfg should remove it)"
+                exit 1
+            fi
+        done
+    fi
+
     local klippy_py; klippy_py="$(overlay_klippy "$WORK")" || exit 2
     # Disposable mod-tree copy with the platform hardware-macro overlay applied.
     local modtree; modtree="$(stage_modtree "$WORK")" || exit 2
