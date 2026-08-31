@@ -198,6 +198,33 @@ class ModuleShapeTest(unittest.TestCase):
         self.assertIn("[include ifs.cfg]",
                       HOST.read_text(encoding="utf-8"))
 
+    def test_every_rename_parks_the_original_not_the_reverse(self):
+        """rename_existing parks an existing command under a new name: the
+        macro's OWN name is the command being overridden (TONE renaming to
+        _TONE, SET_PRINT_STATS_INFO to ..._BASE). The mirror shape - an
+        empty macro under the parked name renaming the shared command -
+        asks klippy for a command that never existed and kills it at
+        connect. Measured on the printer, twice, with two different macro
+        families before the shape was recognized.
+        """
+        inverted = []
+        for label, path in (("module", MODULE), ("host", HOST)):
+            macro = None
+            for number, line in enumerate(
+                    path.read_text(encoding="utf-8").splitlines(), 1):
+                header = re.match(r"^\[gcode_macro (\S+)\]", line.strip())
+                if header:
+                    macro = header.group(1)
+                    continue
+                parked = re.match(r"^rename_existing:\s*(\S+)",
+                                  line.strip())
+                if parked and macro is not None:
+                    if (macro.startswith("_") and macro.endswith("_BASE")
+                            and not parked.group(1).startswith("_")):
+                        inverted.append(("%s:%d" % (label, number), macro))
+                    macro = None
+        self.assertEqual(inverted, [])
+
     def test_the_shared_filament_verbs_route_to_the_ifs_lanes(self):
         """config/material.cfg's LOAD/UNLOAD/PURGE_FILAMENT are extruder-only
         moves. Every shared caller of them - M600's change prompt,
@@ -207,7 +234,7 @@ class ModuleShapeTest(unittest.TestCase):
         """
         text = HOST.read_text(encoding="utf-8")
         for verb in ("LOAD_FILAMENT", "UNLOAD_FILAMENT", "PURGE_FILAMENT"):
-            self.assertIn("rename_existing: %s" % verb, text)
+            self.assertIn("rename_existing: _%s_BASE" % verb, text)
         for target in ("IFS_LOAD", "IFS_UNLOAD", "IFS_PURGE"):
             self.assertIn(target, text)
 
