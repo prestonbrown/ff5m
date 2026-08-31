@@ -119,6 +119,24 @@ provide_host_bash() {
     mount --bind "$HOST_BIN_DIR" /bin
 }
 
+# Host-path aliases inside the chroot. klippy runs on the host and reports
+# host spellings ($KLIPPER_DIR, $DATA_MNT); moonraker runs in the chroot,
+# where the same inodes live at /opt/klipper and /data, and resolves the
+# paths klippy hands it directly - config_examples and docs for the update
+# check, $DATA_MNT for the file manager and the klipper log download. The
+# aliases make those spellings resolve without changing any path either
+# process already uses. Guarded per path: on the AD5M every host spelling
+# already coincides with its chroot spelling, so nothing is created there.
+_alias_host_paths() {
+    if [ "$KLIPPER_DIR" != /opt/klipper ]; then
+        mkdir -p "$MOD$(dirname "$KLIPPER_DIR")"
+        ln -fns /opt/klipper "$MOD$KLIPPER_DIR"
+    fi
+    if [ "$DATA_MNT" != /data ]; then
+        ln -fns /data "$MOD$DATA_MNT"
+    fi
+}
+
 init_buildroot() {
     init_chroot
 
@@ -131,6 +149,9 @@ init_buildroot() {
     mount --bind "$DATA_MNT" "$MOD"/data
     mount --bind /opt/config "$MOD"/opt/config
     mount --bind "$KLIPPER_DIR" "$MOD"/opt/klipper
+
+    # Host spellings for the chroot, after the binds they point through.
+    _alias_host_paths
 
     # Init printer_data - on the host /root (AD5M) or in the chroot (AD5X). See
     # provision_printer_data.

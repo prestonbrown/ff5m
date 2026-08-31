@@ -45,6 +45,19 @@ capture_provision() {
     ' _ "$INIT_LIB" 2>&1
 }
 
+# Record _alias_host_paths' links per board.
+capture_aliases() {
+    ARCH="$1" "$BASH_BIN" -c '
+        uname() { echo "$ARCH"; }
+        . "$1"
+        mount() { echo "mount $*"; }
+        sync() { :; }
+        mkdir() { echo "mkdir $*"; }
+        ln() { echo "ln $*"; }
+        _alias_host_paths
+    ' _ "$INIT_LIB" 2>&1
+}
+
 # --- tree contents: the logs target is the crux of the fix -------------------
 # AD5X $LOG_DIR=/usr/data/logs is invisible in the chroot; it must become
 # /data/logs (reachable via the $DATA_MNT bind), NOT the raw host path.
@@ -67,6 +80,25 @@ assert_contains "ad5m logs -> /data/logFiles (unchanged)" \
     "$ad5m_tree" "ln -fns /data/logFiles /root/printer_data/logs"
 assert_contains "ad5m gcodes -> /data (unchanged)" \
     "$ad5m_tree" "ln -fns /data /root/printer_data/gcodes"
+
+# --- host-path aliases: klippy reports host spellings, moonraker resolves ---
+# klippy runs on the host and hands moonraker /usr/prog/klipper and /usr/data
+# paths (config_examples/docs for the update check, the gcodes dir, the
+# klipper log); moonraker lives in the chroot, where those spellings do not
+# exist. The aliases make them resolve without changing any path either
+# process already uses.
+ad5x_aliases=$(capture_aliases mips)
+assert_contains "ad5x creates the klipper alias parent" \
+    "$ad5x_aliases" "mkdir -p /usr/data/.mod/.forge-x/usr/prog"
+assert_contains "ad5x aliases the host klipper dir into the chroot" \
+    "$ad5x_aliases" "ln -fns /opt/klipper /usr/data/.mod/.forge-x/usr/prog/klipper"
+assert_contains "ad5x aliases the host data mount into the chroot" \
+    "$ad5x_aliases" "ln -fns /data /usr/data/.mod/.forge-x/usr/data"
+ad5m_aliases=$(capture_aliases armv7l)
+case "$ad5m_aliases" in
+    *"ln "*) _t_fail "ad5m creates no aliases (spellings already agree)" "ln output present" ;;
+    *)       _t_pass "ad5m creates no aliases (spellings already agree)" ;;
+esac
 
 # --- dispatch: location + bind differ per board ------------------------------
 ad5x_prov=$(capture_provision mips)
