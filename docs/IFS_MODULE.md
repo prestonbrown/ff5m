@@ -51,6 +51,7 @@ the host's conveniences only when they are present.
        ifs_materials.py  flashforge_config.py
        ifs_sensor_base.py  ifs_sensor_logic.py
        ifs_toolhead_sensor.py  ifs_channel_sensor.py  ifs_diagnostics.py
+       ifs_jacker.py  (optional - the IFS Jacker companion, see below)
 
    (all from `.py/klipper/plugins/` in this repository). Nothing else is
    needed - klipper imports an extra when a config section names it.
@@ -77,6 +78,19 @@ it does not:
 | a `fan_generic` named in `_IFS_GEOMETRY.part_fan` | the part fan (purge-tail freeze, print fan restore) | stock `M106` |
 | `_CLIENT_VARIABLE` with `custom_park_x/y` | aiming the end-of-print park at the purge chute | your host's own end behavior |
 
+## The shared filament verbs
+
+A host that already defines `LOAD_FILAMENT` / `UNLOAD_FILAMENT` /
+`PURGE_FILAMENT` - this repository's shared macros do, as bare extruder moves -
+can point them at the module instead: rename each verb and forward to
+`IFS_LOAD` / `IFS_UNLOAD` / `IFS_PURGE`. That is what
+`macros/hw_base.ad5x.cfg` does on the AD5X, so `M600`'s change prompt,
+`LOAD_MATERIAL`'s action menu and slicer stop-gcode all drive the lanes
+without naming an IFS command. `SLOT=` passes through and otherwise the loaded
+lane is used; `SPEED=` is accepted and ignored, because lane speed is the
+board's own setting; `MATERIAL=` registers the slot's type first
+(`IFS_SET_MATERIAL`'s `TYPE=`).
+
 ## Tuning
 
 All station geometry is `[gcode_macro _IFS_GEOMETRY]` variables - chute,
@@ -91,6 +105,32 @@ printer's own `Multicolour` settings block when one exists.
 
 The wire protocol the board speaks, for anyone debugging at that level:
 [AD5X_IFS_PROTOCOL.md](AD5X_IFS_PROTOCOL.md).
+
+## Companion: the IFS Jacker
+
+The IFS Jacker (https://github.com/ninjamida/ifs-jacker) is a pass-through that
+sits between the host and the IFS board: F-opcode traffic goes through
+untouched, and the Jacker answers Z opcodes of its own. A bare board answers a
+Z command with silence, so detection is a capped probe - every silent attempt
+chased by an `F13`, which both proves the link alive and clears the command the
+board could not answer - and a machine without a Jacker is left alone after
+three silent probes.
+
+Copy `macros/ifs_jacker.cfg` next to `ifs.cfg` and include it only on a machine
+that has the device; it requires `[ifs]`. Two options:
+
+| `[ifs_jacker]` option | Default | What it is |
+|---|---|---|
+| `probe_delay` | 30 | seconds after startup before the first detection probe, so the IFS connects first |
+| `probe_attempts` | 3 | silent probes before giving up until the link is re-established |
+
+`IFSJ_CHECK` asks again and reports what it found (version, channel count,
+peripheral count). `IFSJ_Z1` to `IFSJ_Z5` send the companion's own commands -
+Z3 and Z4 need firmware 3.0, Z5 needs 2.2, and the plugin reports the
+requirement rather than guessing. Firmware 3.0 also brought peripherals: their
+state arrives appended to every status line as `p<id>_<param>` tuples,
+published under `peripherals` in the section's status object alongside
+`detected`, `version` and the counts.
 
 ## Notes
 

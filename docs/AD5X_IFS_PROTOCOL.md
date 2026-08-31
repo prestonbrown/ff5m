@@ -342,6 +342,17 @@ filament in 1, 2 and 4).
   put the board into **firmware-update mode**. Never probe it from a working
   install.
 
+## A companion on the wire: the IFS Jacker
+
+Everything above is the IFS board's own firmware. A machine with an IFS Jacker
+(https://github.com/ninjamida/ifs-jacker) carries a pass-through on this
+serial link: F traffic goes through untouched, the Jacker answers Z opcodes a
+bare board cannot, and firmware 3.0 and later appends its peripherals' state
+to every `F13` payload as `p<id>_<param>` tuples after the board's own fields.
+The status parser ignores fields it does not know, so the tuples change
+nothing for a machine without one. Detection and the `IFSJ_*` commands live in
+the module: [IFS_MODULE.md](IFS_MODULE.md#companion-the-ifs-jacker).
+
 ## Versioning
 
 A `F112 ok. yes.` variant is accepted by some drivers and **firmware 3.0.6 never

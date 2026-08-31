@@ -196,9 +196,12 @@ G1 E-<nozzle_cleaning_length>      retract, sensors disabled
 
 **The AD5X has a filament cutter** (`_CUT_PRUTOK`, and a `cutValue` ADC beside
 `filamentValue`) - now modelled as `_IFS_CUT`, and verified on hardware: the
-toolhead drives into a fixed blade at X -2.5, Y -7.5, Y first at F1800 then X at
-F600, because the slow X move IS the cut. Reversing them would drag the head
-across the front of the bed at the blade's depth.
+toolhead drives into a fixed blade at X -2.5, Y -7.5, and the slow X move IS
+the cut. Stock's own flow creeps in on Y at F1800 and then drags X at F600;
+ours runs the same shape at stock-derived travel rates - X to the corner
+F30000, Y approach and exit F6000 - with only the shear itself at F600.
+Reversing the two would drag the head across the front of the bed at the
+blade's depth.
 
 ### Purge - `_PURGE_PRUTOK_IFS`
 

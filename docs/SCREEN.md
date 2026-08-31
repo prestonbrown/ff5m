@@ -84,6 +84,23 @@ Headless mode disables the local UI and is intended for remote control or a cust
 
 Headless mode also uses the `auto` bed-mesh profile. Z offset, camera, and print control must be handled through Forge-X, Fluidd/Mainsail, or your own integration.
 
+### The AD5X panel: HelixScreen
+
+The display modes above describe the AD5M; the AD5X panel is HelixScreen, a
+touchscreen UI driving Moonraker, whatever the stored display mode says.
+
+HelixScreen's payload lives at `.bin/helixscreen` and starts once the boot
+bring-up has finished, after the progress bar is done painting the
+framebuffer. Control it over SSH:
+
+```sh
+/opt/config/mod/.shell/helixscreen.sh start|stop|restart|status|log|disable|enable
+```
+
+`disable` stands the UI down; the next boot then shows the one-shot status
+card, which is also the fallback whenever the payload is absent or fails to
+come up.
+
 ### Switching to Alternative Screens / Headless
 
 #### Switching to Feather Screen

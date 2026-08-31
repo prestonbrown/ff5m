@@ -65,6 +65,12 @@ Managed operations such as `START_PRINT`, `CLEAR_NOZZLE`, bed-mesh validation, f
     - `SPEED` (int, default: 450): Extrusion speed (mm/min).
     - `MATERIAL` (optional): Any name active in `_MATERIAL_CONFIG.heating_slots`. When supplied, the material is saved after a successful load and shown by Feather after restarts.
   - **Defaults**: Uses `load_distance` variable (125 mm).
+  - **On the AD5X**: the verb drives the IFS lane instead of the extruder. `SLOT=`
+    selects the lane and otherwise the loaded lane is re-threaded; with nothing
+    loaded the macro raises an error asking for `SLOT=`. `MATERIAL=` registers
+    the slot's type first (`IFS_SET_MATERIAL TYPE=`), `TEMP=` passes through, and
+    `SPEED=` is accepted and ignored because lane speed is the IFS board's own
+    setting.
 
 - **SET_MATERIAL**
   - **Description**: Saves the currently loaded material without changing temperatures or moving filament.
@@ -83,12 +89,22 @@ Managed operations such as `START_PRINT`, `CLEAR_NOZZLE`, bed-mesh validation, f
   - **Parameters**:
     - `SPEED` (int, default: 450): Retraction speed (mm/min).
   - **Defaults**: Uses `unload_distance` variable (75 mm).
+  - **On the AD5X**: runs `IFS_UNLOAD` on the loaded lane - the filament leaves
+    the nozzle and the lane stays threaded. `TEMP=` passes through; `SPEED=` is
+    accepted and ignored.
 
 - **PURGE_FILAMENT**
   - **Description**: Purges filament with a specified distance and speed, followed by a beep.
   - **Parameters**:
     - `SPEED` (int, default: 450): Extrusion speed (mm/min).
   - **Defaults**: Uses `purge_distance` variable (25 mm).
+  - **On the AD5X**: runs `IFS_PURGE` on the loaded lane at the chute. `TEMP=`
+    passes through; `SPEED=` is accepted and ignored.
+
+On the AD5X all three verbs are lane-aware because the platform file
+(`macros/hw_base.ad5x.cfg`) forwards them to the IFS implementation, so `M600`'s
+change prompt, `LOAD_MATERIAL`'s action menu, and slicer stop-gcode drive the
+lanes without naming an IFS command.
 
 - **LOAD_MATERIAL**
   - **Description**: Guides manual filament loading/changing with material selection prompts.
@@ -275,6 +291,10 @@ Lower-level commands, for when something has gone wrong: `IFS_CLAMP`,
 `IFS_MARK_INSERTED`, `IFS_RESET_DRIVER`, `IFS_SENSOR_VALUE`. `IFS_RELEASE_ALL`
 is the one to reach for if a lane is left gripped.
 
+A machine with an IFS Jacker pass-through on the serial link additionally
+registers `IFSJ_CHECK` and the `IFSJ_Z*` companion commands; see
+[The AD5X IFS module](IFS_MODULE.md#companion-the-ifs-jacker).
+
 ### Nozzle Cleaning
 
 - **CLEAR_NOZZLE**
@@ -357,6 +377,13 @@ is the one to reach for if a lane is left gripped.
   - **Description**: Stops all air circulation by disabling fans and resetting servo.
   - **Parameters**: None.
   - **Defaults**: Sets both fans to 0 speed, servo angle to 95°.
+
+The two-fan-plus-servo behaviour above is the AD5M's enclosure. **On the AD5X**
+there is one circulation fan (`[fan_generic chamber_fan]`, wired to PB7, fitted
+with the enclosure kit) and no damper, so there is no path to route between:
+`AIR_CIRCULATION_INTERNAL` and `AIR_CIRCULATION_EXTERNAL` both run that fan at
+full speed and `AIR_CIRCULATION_STOP` stops it. On a machine without the kit the
+fan object drives an unconnected header and nothing happens.
 
 ### Audio and Notifications
 

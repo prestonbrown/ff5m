@@ -89,6 +89,14 @@ Make sure every referenced profile actually exists before relying on this setup.
 
 If the bed-height variation was greater than about 1 mm, recalibrate the load-cell tare after the mechanical adjustment. See the [load-cell instructions in the FAQ](FAQ.md#resolving-the-issue-by-calibrating-the-load-cell). If the Stock screen is not active, you can temporarily boot it through `SKIP_MOD` to use the official FlashForge workflow.
 
+On the AD5X there is no host-side tare: `LOAD_CELL_TARE` is a no-op, and the
+load cell's zero is written by the stock screen application over its own
+serial link to the load-cell conditioning MCU - from its leveling flows and
+pre-print preparation, never at boot. Drift beyond what those flows correct is
+fixed by booting the stock system once and running its leveling
+(Settings → Level). On the AD5X the one-shot stock boot is requested by
+creating `/opt/config/mod/BOOT_FLAG_SKIP` and rebooting.
+
 ## Bed Mesh Calibration
 
 Run the Forge-X mesh workflow with the correct profile and realistic temperatures:
