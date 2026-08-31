@@ -551,5 +551,53 @@ class MotionAndIntegrationMacroTest(unittest.TestCase):
                 printer={"idle_timeout": {"state": "Printing"}})
 
 
+class StartPrintCellFrameTest(unittest.TestCase):
+    """Homing and probing must share one load-cell frame.
+
+    The probe's trigger plane moves with the cell's zero, which drifts
+    thermally by grams (measured 2026-08-31: hundreds of grams across a
+    heat-up, and two print starts whose purge tower dug into the plate by the
+    frame mismatch - homing entered one frame, the mid-flow clean tared, and
+    the mesh probed in the new one while Z0 still carried the old). The start
+    flow must tare before deriving Z0 from the probe and re-derive Z0 after
+    leveling, so the whole run shares the cell state and drift cancels.
+    """
+
+    def start_print(self, *, weight_check=True, skip_leveling=True):
+        start = macro_status(BASE, "_START_PRINT", zskip_leveling=skip_leveling)
+        return render_macro(BASE, "_START_PRINT", printer={
+            "gcode_macro _START_PRINT": start,
+            "gcode_macro START_PRINT": {"preparation_done": True},
+            "mod_params": {"variables": {
+                "safe_z": 10, "chamber_light_mode": "MANUAL", "display": 1,
+                "check_md5": 0, "print_leveling": False, "use_kamp": False,
+                "bed_mesh_validation": False, "midi_start": "",
+                "weight_check": weight_check, "disable_priming": True,
+            }},
+            "extruder": {"temperature": 25, "can_extrude": False},
+            "bed_mesh": {"profile_name": "default", "profiles": {"default": {}}},
+        }).commands
+
+    def test_homing_derives_z0_after_the_tare_when_checking(self):
+        commands = self.start_print()
+        self.assertLess(index := commands.index("LOAD_CELL_TARE"),
+                        commands.index("_HOME_IF_NEEDED"))
+
+    def test_no_tare_without_weight_check(self):
+        commands = self.start_print(weight_check=False)
+        self.assertNotIn("LOAD_CELL_TARE", commands)
+
+    def test_z_is_rehomed_after_leveling_in_the_frame_it_left(self):
+        for skip in (True, False):
+            with self.subTest(skip_leveling=skip):
+                commands = self.start_print(skip_leveling=skip)
+                leveling = next(i for i, c in enumerate(commands)
+                                if "LEVELING" in c)
+                priming = next(i for i, c in enumerate(commands)
+                               if "PRIMING" in c)
+                rehome = commands.index("G28 Z")
+                self.assertTrue(leveling < rehome < priming, commands)
+
+
 if __name__ == "__main__":
     unittest.main()
