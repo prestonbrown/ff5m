@@ -198,16 +198,27 @@ class ModuleShapeTest(unittest.TestCase):
         self.assertIn("[include ifs.cfg]",
                       HOST.read_text(encoding="utf-8"))
 
-    def test_every_rename_parks_the_original_not_the_reverse(self):
-        """rename_existing parks an existing command under a new name: the
-        macro's OWN name is the command being overridden (TONE renaming to
-        _TONE, SET_PRINT_STATS_INFO to ..._BASE). The mirror shape - an
-        empty macro under the parked name renaming the shared command -
-        asks klippy for a command that never existed and kills it at
-        connect. Measured on the printer, twice, with two different macro
-        families before the shape was recognized.
+    def test_renames_target_builtins_never_shared_macros(self):
+        """rename_existing parks an existing BUILTIN command under a new
+        name (TONE to _TONE, M24 to M24.1, SET_LED to _SET_LED). It cannot
+        override another gcode_macro: klippy merges same-named macro
+        sections, the merged object takes the rename path, the original
+        never registers, and klippy dies at connect demanding a command
+        nobody defined. Measured on the printer across three macro families
+        before the rule was pinned. Macro-over-macro overrides are plain
+        same-named sections in the platform file; this gate bans every
+        other shape of attempt.
         """
-        inverted = []
+        shared = set()
+        for path in (ROOT / "macros" / "base.cfg",
+                     ROOT / "config" / "material.cfg",
+                     ROOT / "macros" / "client.cfg",
+                     ROOT / "macros" / "headless.cfg"):
+            for line in path.read_text(encoding="utf-8").splitlines():
+                header = re.match(r"^\[gcode_macro (\S+)\]", line.strip())
+                if header:
+                    shared.add(header.group(1))
+        bad = []
         for label, path in (("module", MODULE), ("host", HOST)):
             macro = None
             for number, line in enumerate(
@@ -216,14 +227,11 @@ class ModuleShapeTest(unittest.TestCase):
                 if header:
                     macro = header.group(1)
                     continue
-                parked = re.match(r"^rename_existing:\s*(\S+)",
-                                  line.strip())
-                if parked and macro is not None:
-                    if (macro.startswith("_") and macro.endswith("_BASE")
-                            and not parked.group(1).startswith("_")):
-                        inverted.append(("%s:%d" % (label, number), macro))
+                if re.match(r"^rename_existing:", line.strip()):
+                    if macro is not None and macro in shared:
+                        bad.append(("%s:%d" % (label, number), macro))
                     macro = None
-        self.assertEqual(inverted, [])
+        self.assertEqual(bad, [])
 
     def test_the_shared_filament_verbs_route_to_the_ifs_lanes(self):
         """config/material.cfg's LOAD/UNLOAD/PURGE_FILAMENT are extruder-only
@@ -234,7 +242,7 @@ class ModuleShapeTest(unittest.TestCase):
         """
         text = HOST.read_text(encoding="utf-8")
         for verb in ("LOAD_FILAMENT", "UNLOAD_FILAMENT", "PURGE_FILAMENT"):
-            self.assertIn("rename_existing: _%s_BASE" % verb, text)
+            self.assertIn("[gcode_macro %s]" % verb, text)
         for target in ("IFS_LOAD", "IFS_UNLOAD", "IFS_PURGE"):
             self.assertIn(target, text)
 
