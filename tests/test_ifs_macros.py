@@ -98,6 +98,24 @@ class GotoStationTest(unittest.TestCase):
         approach = commands[index_of(commands, r"G1 Y%s\b" % GEOMETRY["station_y"])]
         self.assertIn("F3000", approach)
 
+    def test_the_crossing_to_the_station_travels_flat_out(self):
+        ## Travel and entry are different contracts: the crossing is empty
+        ## space at the stock travel rate, the entry runs beside the wall's
+        ## hardware at 50 mm/s. Reverting the crossing to a mid rate costs
+        ## every station visit the better part of a second.
+        commands = station(GEOMETRY["chute_x"], x=0.0, y=0.0)
+        crossing = commands[index_of(commands, r"G1 X%s\b" % GEOMETRY["chute_x"])]
+        self.assertIn("F30000", crossing)
+
+    def test_the_station_exit_travels_flat_out(self):
+        ## The exit off the back edge is travel too - stock leaves its
+        ## stations at full rate, and only the entry is slow.
+        commands = render_macro(
+            IFS, "_IFS_LEAVE_PURGE",
+            printer=at(GEOMETRY["chute_x"], GEOMETRY["station_y"])).commands
+        exit_y = commands[index_of(commands, r"G1 Y%s\b" % GEOMETRY["safe_y"])]
+        self.assertIn("F30000", exit_y)
+
 
 class AutoinsertTest(unittest.TestCase):
     """IFS_AUTOINSERT is zmod's cmd_IFS_AUTOINSERT, the step we never had.
@@ -930,7 +948,7 @@ class CutTest(unittest.TestCase):
         x = index_of(commands, r"G1 X-2\.5")
         self.assertLess(pre_x, y, commands)
         self.assertLess(y, x, commands)
-        self.assertIn("F12000", commands[pre_x])
+        self.assertIn("F30000", commands[pre_x])
         self.assertIn("F6000", commands[y])
         self.assertIn("F600", commands[x])
         ## And nothing else creeps: every other G1 is travel or extrusion.
@@ -1406,6 +1424,8 @@ class ChangeLiftTest(unittest.TestCase):
         self.assertEqual(len(lifts), 1, commands)
         self.assertIn("ABSOLUTE=0", lifts[0])
         self.assertIn("Z=%s" % GEOMETRY["lift_dz"], lifts[0])
+        ## The stock toolchange lift rate; both spellings must stay in step.
+        self.assertIn("F=3000", lifts[0])
         ## Every parameter must be key=value. A token without '=' (F1500 for
         ## F=1500) is a malformed command to klipper's parser, which raised
         ## straight through the console path and shut a printer down.
@@ -1442,14 +1462,14 @@ class ChangeLiftTest(unittest.TestCase):
         self.assertEqual(self.lifts(commands), [])
         self.assertIn("SAVE_GCODE_STATE NAME=ifs_lift", commands)
         self.assertIn("G91", commands)
-        self.assertIn("G1 Z%s F1500" % GEOMETRY["lift_dz"], commands)
+        self.assertIn("G1 Z%s F3000" % GEOMETRY["lift_dz"], commands)
         self.assertIn("RESTORE_GCODE_STATE NAME=ifs_lift MOVE=0", commands)
         lift = commands.index("SAVE_GCODE_STATE NAME=ifs_lift")
         restore = commands.index("RESTORE_GCODE_STATE NAME=ifs_lift MOVE=0")
         self.assertLess(lift, commands.index("G91"), commands)
         self.assertLess(commands.index("G91"),
-                        commands.index("G1 Z%s F1500" % GEOMETRY["lift_dz"]))
-        self.assertLess(commands.index("G1 Z%s F1500" % GEOMETRY["lift_dz"]),
+                        commands.index("G1 Z%s F3000" % GEOMETRY["lift_dz"]))
+        self.assertLess(commands.index("G1 Z%s F3000" % GEOMETRY["lift_dz"]),
                         restore)
 
 
@@ -1580,6 +1600,16 @@ class RestoreAfterChangeTest(unittest.TestCase):
         commands = self.render()
         self.assertGreater(index_of(commands, r"G1 Z5\.0"),
                            index_of(commands, r"G1 Y90\.0"))
+
+    def test_every_return_travel_runs_at_the_stock_rate(self):
+        ## Stock's post-change restore asks 500 mm/s on every axis and lets
+        ## the firmware clamp to each axis limit. The restore runs twice per
+        ## tool change; mid-rate feeds there cost a multi-colour print real
+        ## minutes.
+        commands = self.render()
+        for pattern in (r"G1 X100\.0", r"G1 Y90\.0", r"G1 Z5\.0"):
+            self.assertIn("F30000", commands[index_of(commands, pattern)],
+                          commands)
 
     def test_it_puts_the_prints_temperature_back_and_waits(self):
         commands = self.render()
