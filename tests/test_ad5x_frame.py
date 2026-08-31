@@ -57,6 +57,14 @@ def moves(commands):
     return [(axis(c, "X"), axis(c, "Y")) for c in commands if MOVE.match(c)]
 
 
+def index_of(commands, pattern):
+    """Where a command appears, so order can be asserted. Raises if absent."""
+    for position, command in enumerate(commands):
+        if re.match(pattern, command):
+            return position
+    raise AssertionError("no command matching %r in %r" % (pattern, commands))
+
+
 def effective(name):
     """The macro as the AD5X actually runs it.
 
@@ -301,6 +309,130 @@ class ParkRetargetTest(unittest.TestCase):
         self.assertEqual(self._value("park_at_cancel_x"), GEOMETRY["chute_x"])
         self.assertLessEqual(self._value("park_at_cancel_y"),
                              GEOMETRY["safe_y"])
+
+
+class NozzleCleanTest(unittest.TestCase):
+    """The clean flushes into the chute; it does not scrape the plate.
+
+    The inherited routine is shaped by hardware the AD5M has and this machine
+    does not, and the reverse. An AD5M cannot put molten plastic anywhere, so
+    its only cleaning mechanism is mechanical: probe a surface, then drag the
+    nozzle across it at 0.15mm. That is why it needs two probes and a height
+    reference at all. This machine flushes through the nozzle into the purge
+    chute, freezes the blob with the part fan, snaps it off and takes the
+    residue on the rubber wiper - so there is no height reference anywhere in
+    the sequence, and nothing it does needs to touch the bed.
+
+    Translating the AD5M's coordinates would have produced a machine that
+    scrapes its own print surface to do a job the wiper is sitting there to
+    do. These tests hold the override to delegation: every move goes through
+    ifs.cfg's routed station macros, and no raw XY leaves this macro.
+    """
+
+    def clean(self, loaded=True, mesh="MESH_DATA"):
+        state = printer_state(**{
+            "bed_mesh": {"profile_name": mesh},
+            "filament_switch_sensor toolhead": {"filament_detected": loaded},
+        })
+        state["mod_params"]["variables"]["clear_cooldown_temp"] = 120
+        return render_macro(HW_AD5X, "CLEAR_NOZZLE", printer=state,
+                            params={"EXTRUDER_TEMP": 220,
+                                    "BED_TEMP": 55}).commands
+
+    def test_commands_no_xy_of_its_own(self):
+        ## Every station approach has to go through _IFS_GOTO_STATION, which
+        ## owns the X-before-Y rule for the back wall. A raw G1 here is how
+        ## that rule gets bypassed.
+        for command in self.clean():
+            if MOVE.match(command):
+                self.assertIsNone(axis(command, "X"), command)
+                self.assertIsNone(axis(command, "Y"), command)
+
+    def test_never_probes(self):
+        ## There is no surface to probe: this machine has no cleaning board,
+        ## and a PROBE with nothing under the nozzle either fails or dives.
+        for command in self.clean():
+            self.assertFalse(command.startswith("PROBE"), command)
+            self.assertFalse(command.startswith("_CLEAR_NOZZLE_PROBE"),
+                             command)
+
+    def test_parks_at_the_chute_before_flushing(self):
+        commands = self.clean()
+        self.assertLess(index_of(commands, r"_IFS_PARK_FOR_PURGE"),
+                        index_of(commands, r"_IFS_PURGE\b"))
+
+    def test_does_not_zero_the_gcode_offset(self):
+        """The inherited clean zeroes the offset and never puts it back.
+
+        RESTORE_GCODE_STATE does not restore homing_origin, so the shared
+        routine leaves the applied Z offset on the floor for whatever runs
+        next. Nothing here needs a zeroed offset, because nothing here
+        references the bed, so the bug cannot arise rather than being fixed.
+        """
+        for command in self.clean():
+            self.assertNotIn("_SET_GCODE_OFFSET", command)
+
+    def test_restores_the_mesh_it_cleared(self):
+        commands = self.clean(mesh="MESH_DATA")
+        self.assertLess(index_of(commands, r"BED_MESH_CLEAR"),
+                        index_of(commands, r'BED_MESH_PROFILE LOAD="MESH_DATA"'))
+
+    def test_wipes_without_flushing_when_nothing_is_loaded(self):
+        ## Driving the extruder against no filament cleans nothing; the wiper
+        ## still has a job.
+        commands = self.clean(loaded=False)
+        self.assertFalse([c for c in commands if c.startswith("_IFS_PURGE")],
+                         commands)
+        index_of(commands, r"_IFS_WIPE")
+
+
+class WipeDelegationTest(unittest.TestCase):
+    """_CLEAR_NOZZLE's drag becomes the wiper pass.
+
+    The shared body drags the nozzle at probe+0.15mm between X-10 and X20 at
+    Y107..111 - on this machine, straight across the middle of the print
+    surface. Same intent, different hardware: the wiper does it.
+    """
+
+    def test_delegates_to_the_wiper(self):
+        commands = render_macro(HW_AD5X, "_CLEAR_NOZZLE",
+                                printer=printer_state()).commands
+        index_of(commands, r"_IFS_WIPE")
+        for command in commands:
+            if MOVE.match(command):
+                self.assertIsNone(axis(command, "X"), command)
+                self.assertIsNone(axis(command, "Y"), command)
+
+
+class PurgeLengthTest(unittest.TestCase):
+    """A clean asks for a shorter flush than a colour change.
+
+    _IFS_PURGE's lengths are sized for changing colour - 100mm then 30mm, from
+    the vendor's own multicolour figures. A clean only has to move enough
+    material to carry the residue out. FIRST_MM was already a parameter;
+    SECOND_MM is its twin, so the clean can ask rather than fork the macro.
+    """
+
+    def rendered(self, **params):
+        state = printer_state(**{
+            "ifs": {"params": {"first_purge_mm": 100.0, "first_fan": 0,
+                               "first_purge_speed": 300,
+                               "second_purge_mm": 30.0, "second_fan": 255,
+                               "second_purge_speed": 300}},
+        })
+        return render_macro(IFS, "_IFS_PURGE", printer=state,
+                            params=params).commands
+
+    def extrusions(self, commands):
+        return [axis(c, "E") for c in commands
+                if MOVE.match(c) and axis(c, "E") is not None]
+
+    def test_second_pass_length_is_overridable(self):
+        self.assertIn(10.0, self.extrusions(self.rendered(FIRST_MM=20,
+                                                          SECOND_MM=10)))
+
+    def test_second_pass_falls_back_to_the_configured_length(self):
+        self.assertIn(30.0, self.extrusions(self.rendered(FIRST_MM=20)))
 
 
 if __name__ == "__main__":
