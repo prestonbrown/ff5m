@@ -426,6 +426,53 @@ class StartPrintParkTest(unittest.TestCase):
                 self.assertIsNone(axis(command, "Y"), command)
 
 
+class StartPrintCleanTest(unittest.TestCase):
+    """Print start flushes at the chute, and does not leave a retracted tip.
+
+    Cleaning only during leveling means a print that loads a stored mesh gets
+    no clean at all, and the first layer starts through whatever the last job
+    left in the nozzle. This machine can flush at print start because it has
+    somewhere to put it, so it does.
+
+    The nozzle must NOT be retracted afterwards. A purge that ends retracted
+    starts the first extrusion behind the pressure it needs, which shows up as
+    a gap at the start of the first perimeter. _IFS_PURGE ends with the fan
+    off, G92 E0, a shake and a wipe - no retract - so delegating to it gives
+    us that; a hand-rolled sequence would have had to remember.
+    """
+
+    def clean(self, loaded=True):
+        return render_macro(HW_AD5X, "_START_PRINT_CLEAN", printer=printer_state(**{
+            "filament_switch_sensor toolhead": {"filament_detected": loaded},
+        })).commands
+
+    def test_flushes_at_the_chute(self):
+        index_of(self.clean(), r"_IFS_PURGE\b")
+
+    def test_never_ends_retracted(self):
+        for command in self.clean():
+            if MOVE.match(command):
+                extrude = axis(command, "E")
+                self.assertFalse(extrude is not None and extrude < 0, command)
+
+    def test_skips_the_flush_with_nothing_loaded(self):
+        self.assertFalse([c for c in self.clean(loaded=False)
+                          if c.startswith("_IFS_PURGE")])
+
+    def test_the_shared_default_does_nothing(self):
+        ## A machine with no chute has nowhere to put a print-start flush; it
+        ## cleans mechanically during leveling instead. The seam must be inert
+        ## there, not merely harmless.
+        self.assertEqual((), render_macro(BASE, "_START_PRINT_CLEAN",
+                                          printer=printer_state()).commands)
+
+    def test_start_print_cleans_after_heating_and_before_priming(self):
+        body = load_macro(BASE, "_START_PRINT").gcode
+        self.assertIn("_START_PRINT_CLEAN", body)
+        self.assertLess(body.index("_START_PRINT_CLEAN"),
+                        body.index("NAME=PRIMING"))
+
+
 class WipeDelegationTest(unittest.TestCase):
     """_CLEAR_NOZZLE's drag becomes the wiper pass.
 
