@@ -1328,17 +1328,26 @@ class ClearExtruderTest(unittest.TestCase):
 
 
 class EndPrintParkTest(unittest.TestCase):
-    """Print end parks over the chute, not the bed.
+    """Print end, pause and cancel park at the chute approach, not the bed.
 
     A nozzle at temperature keeps dripping after the last move; over the bed
-    that lands on the print surface or the part. Over the chute it lands in
-    the bin. The base END_PRINT parks at _CLIENT_VARIABLE's custom park
-    position, so the retarget writes the chute there once at startup - this
-    file loads before END_PRINT's own macro exists, which makes
-    rename_existing impossible and a delayed gcode the right hook.
+    that lands on the print surface or the part. At the chute's X, on the
+    plate's back edge, it lands away from the part. The base END_PRINT parks
+    at _CLIENT_VARIABLE's custom park position, so the retarget writes it
+    there once at startup - this file loads before END_PRINT's own macro
+    exists, which makes rename_existing impossible and a delayed gcode the
+    right hook.
+
+    The Y is safe_y and not station_y, which looks like the timid choice and
+    is not. Every host that consumes these variables parks with one combined
+    `G1 X.. Y..`, and that interpolates: a park ending at station_y arrives
+    behind the back wall while X is still crossing the wiper. safe_y is
+    defined as the lane X may be crossed at, so it is the only Y a park we do
+    not route ourselves may end on. Driving into the chute proper needs the
+    host's park split into separate X and Y moves.
     """
 
-    def test_the_park_is_retargeted_to_the_chute(self):
+    def test_the_park_is_retargeted_to_the_chute_approach(self):
         commands = render_macro(IFS, "_IFS_RETARGET_END_PARK", printer={
             "gcode_macro _IFS_GEOMETRY": GEOMETRY,
             "gcode_macro _CLIENT_VARIABLE": {"custom_park_x": 105.0,
@@ -1349,7 +1358,21 @@ class EndPrintParkTest(unittest.TestCase):
             " VALUE=%s" % GEOMETRY["chute_x"], commands)
         self.assertIn(
             "SET_GCODE_VARIABLE MACRO=_CLIENT_VARIABLE VARIABLE=custom_park_y"
-            " VALUE=%s" % GEOMETRY["station_y"], commands)
+            " VALUE=%s" % GEOMETRY["safe_y"], commands)
+
+    def test_the_park_never_ends_behind_the_back_wall(self):
+        ## The regression this pins: station_y here is a diagonal into the
+        ## wiper on every pause, filament change and runout.
+        commands = render_macro(IFS, "_IFS_RETARGET_END_PARK", printer={
+            "gcode_macro _IFS_GEOMETRY": GEOMETRY,
+            "gcode_macro _CLIENT_VARIABLE": {"custom_park_x": 105.0,
+                                             "custom_park_y": 105.0},
+        }).commands
+        for command in commands:
+            if "VARIABLE=custom_park_y" in command or \
+               "VARIABLE=park_at_cancel_y" in command:
+                parked_y = float(command.rsplit("VALUE=", 1)[1])
+                self.assertLessEqual(parked_y, GEOMETRY["safe_y"], command)
 
     def test_a_host_without_client_variables_keeps_its_own_park(self):
         ## The module must not assume the host parks through _CLIENT_VARIABLE;
