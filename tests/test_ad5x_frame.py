@@ -386,6 +386,46 @@ class NozzleCleanTest(unittest.TestCase):
         index_of(commands, r"_IFS_WIPE")
 
 
+class StartPrintParkTest(unittest.TestCase):
+    """The heat soak waits over the chute, not over the plate.
+
+    Whatever is left in the nozzle softens and drips while the bed comes up.
+    The shared park sits at X110 Y110, which is the AD5M's far corner and this
+    machine's dead centre, so on an AD5X the soak drools onto the middle of
+    the sheet the print is about to go on. There is a bin here; use it.
+
+    This is also why the shared macro holds the nozzle at its current
+    temperature through the soak rather than driving it to the print
+    temperature (base.cfg, "if extruder hot enough don't waste heat"). Heating
+    early over a plate means oozing onto it. Parked over the chute that
+    tradeoff is different, which is a follow-on change and not this one.
+    """
+
+    def test_start_print_delegates_its_park(self):
+        ## Both park sites - the pre-soak park and the return after mesh
+        ## validation - have to go through the seam, or the platform override
+        ## silently only covers one of them.
+        body = load_macro(BASE, "_START_PRINT").gcode
+        self.assertNotIn("X110 Y110", body)
+        self.assertIn("_START_PRINT_PARK", body)
+
+    def test_the_shared_park_is_unchanged(self):
+        ## Centre-origin machines must render exactly what they did before.
+        commands = render_macro(BASE, "_START_PRINT_PARK",
+                                printer=printer_state()).commands
+        self.assertEqual([(110.0, 110.0)],
+                         [m for m in moves(commands) if m != (None, None)])
+
+    def test_the_ad5x_park_goes_to_the_chute(self):
+        commands = render_macro(HW_AD5X, "_START_PRINT_PARK",
+                                printer=printer_state()).commands
+        index_of(commands, r"_IFS_PARK_FOR_PURGE")
+        for command in commands:
+            if MOVE.match(command):
+                self.assertIsNone(axis(command, "X"), command)
+                self.assertIsNone(axis(command, "Y"), command)
+
+
 class WipeDelegationTest(unittest.TestCase):
     """_CLEAR_NOZZLE's drag becomes the wiper pass.
 
