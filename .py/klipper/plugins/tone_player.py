@@ -251,24 +251,22 @@ class TonePlayer:
             pwm.disable()
 
     def _play_fx_pwm(self, notes):
-        """Play the tune via fx-pwm subprocesses; the reactor never waits.
+        """Play the tune via one fx-pwm subprocess; the reactor never waits.
 
-        The prelude mirrors how stock drives the buzzer (firmwareExe shells
-        out to cmd_pwm, one process per command): probe, config, prescale
-        each as their own invocation before the tone process. Doing it all
-        inside one tone process is driver-clean but SILENT on the hardware
-        (measured by ear twice - separate invocations audible, single
-        process not; mechanism not bisected, recipe kept verbatim). The
-        whole chain runs inside one sh -c so klippy's reactor is never
-        blocked; the sleeps reproduce the gaps the separate stock commands
-        got for free from process-spawn overhead.
+        The tone verb handles channel state itself (release-first, config,
+        prescale) and has run clean and audible bare - including on a
+        fresh boot - ever since the clock was tuner-calibrated. An earlier
+        era believed a separate probe/config/prescale prelude was required
+        (bare tones seemed silent); that silence is now explained as notes
+        below the representable floor dying in fx-pwm's range check, not
+        prelude dependence. One process, no sleeps: a click beeps almost
+        immediately instead of ~1.3 s later.
         """
         import subprocess
-        ## One tune at a time. A tune is a chain of five processes with
-        ## ~1 s of sleeps between them, and a UI that beeps per click
-        ## would stack whole chains that keep re-running the prelude long
-        ## after the user stopped clicking. New tunes arriving while one
-        ## is playing are dropped, not queued: the child exits when its
+        ## One tune at a time: the child lives for the tune's whole
+        ## duration, and a UI that beeps per click would otherwise stack
+        ## concurrent chains on one channel. New tunes arriving while one
+        ## is playing are dropped, not queued - the child exits when its
         ## tune finishes, so poll() is the whole lifetime model. The
         ## running chain is never killed - an interrupted fx-pwm can
         ## orphan the channel's gpio claim, and that wedge only clears
@@ -279,16 +277,8 @@ class TonePlayer:
         notes = fit_fx_pwm_band(notes)
         tune = " ".join(
             "%s:%s" % (tone, duration) for (tone, duration) in notes)
-        inner = "%s probe %s; sleep 0.3; " \
-                "%s config %s freq=50000000 max_level=300 " \
-                "active_level=1 accuracy_priority=freq; sleep 0.3; " \
-                "%s set_prescale %s %d; sleep 0.3; " \
-                "%s tone %s '%s' --base=%d --prescale=%d" % (
-                    FX_PWM, BUZZER_GPIO,
-                    FX_PWM, BUZZER_GPIO,
-                    FX_PWM, BUZZER_GPIO, FX_PWM_PRESCALE,
-                    FX_PWM, BUZZER_GPIO, tune, FX_PWM_BASE_HZ,
-                    FX_PWM_PRESCALE)
+        inner = "%s tone %s '%s' --base=%d --prescale=%d" % (
+            FX_PWM, BUZZER_GPIO, tune, FX_PWM_BASE_HZ, FX_PWM_PRESCALE)
         argv = ["/bin/sh", "-c", inner]
         if FX_CHROOT:
             argv = ["chroot", FX_CHROOT] + argv
