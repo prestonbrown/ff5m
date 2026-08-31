@@ -9,6 +9,144 @@ import logging
 import time
 
 
+## The cell is the same part on both boards and the tare is the same operation
+## on both - "H1" - but it is reached differently. On the AD5M the conditioning
+## MCU's H1 line is a GPIO the host toggles; on the AD5X it is a command sent
+## over a UART. Weight comes back the same way round: an ADC-backed temperature
+## sensor there, an "H7" query here. Only those two verbs differ, so they are
+## the seam and everything above them - the threshold, the contact guard, the
+## retries, cancelling a print whose tare cannot be trusted - is shared.
+
+
+class PinTareBackend:
+    """AD5M: H1 and the confirmation latch are GPIO lines."""
+
+    ## The MCU calls the probe triggered above this, so a reading this high
+    ## before taring means the nozzle is resting on something.
+    contact_grams = 200
+
+    def __init__(self, printer, run_gcode):
+        self._printer = printer
+        self._run_gcode = run_gcode
+
+    def bind(self):
+        self._weight = self._printer.lookup_object("temperature_sensor weightValue")
+        self._level_pin = self._printer.lookup_object("gcode_button check_level_pin")
+
+    def read_weight(self):
+        return self._weight.last_temp
+
+    def confirmed(self):
+        return bool(self._level_pin.last_state)
+
+    def tare(self):
+        logging.info("LOAD_CELL_TARE: Send tare request.")
+        # Tare is set by toggling level_h1 pin
+        timeout = 250
+        self._run_gcode(
+            "SET_PIN PIN=level_h1 VALUE=0",
+            f"WAIT TIME={timeout}",
+            "SET_PIN PIN=level_h1 VALUE=1",
+            f"WAIT TIME={timeout}",
+            "SET_PIN PIN=level_h1 VALUE=0",
+            f"WAIT TIME={timeout}",
+            "SET_PIN PIN=level_h1 VALUE=1",
+            f"WAIT TIME={timeout}",
+        )
+
+    def reset_confirmation(self):
+        logging.info("LOAD_CELL_TARE: Reset tare confirmation.")
+        # Toggle level clear pins
+        # This action resets level_pin, which we read later to confirm that the tare was reset.
+        timeout = 10
+        self._run_gcode(
+            "SET_PIN PIN=level_clear VALUE=0",
+            f"WAIT TIME={timeout}",
+            "SET_PIN PIN=level_clear VALUE=1",
+            f"WAIT TIME={timeout}",
+        )
+
+
+def parse_weight(line):
+    """Grams from an H7 reply, or None if this is not one.
+
+    Kept out of the backend so the wire format is testable with no printer
+    attached. A truncated or garbled read is None rather than an exception, so
+    the caller retries instead of failing the tare.
+    """
+    if not line:
+        return None
+    text = line.decode("utf-8", "ignore") if isinstance(line, bytes) else line
+    if "ok." not in text:
+        return None
+    fields = text.strip().split()
+    ## "command H7 ok. <raw> <grams> g" - locate the value by its unit rather
+    ## than by column, so an added field cannot shift which number is read as
+    ## the weight. The H1 reply has a raw count and NO unit, and must not parse
+    ## as a weight: reading it as one would report eight million grams.
+    for index, field in enumerate(fields):
+        if field == "g" and index:
+            try:
+                return float(fields[index - 1])
+            except ValueError:
+                return None
+    return None
+
+
+class SerialTareBackend:
+    """AD5X: the same H1/H7 commands, over a UART.
+
+    There is no confirmation latch on this board. `confirmed()` can only say
+    that the cell answers and now reads near zero, which H1 makes true whatever
+    state it was taken in - so it proves the tare executed, not that it was
+    taken against clear air. The contact guard upstream carries that instead,
+    which is why contact_grams is None here: measured drift on this board has
+    reached 140 g with the nozzle in free air, above the threshold that would
+    be needed to catch genuine contact, so weight cannot tell the two apart and
+    the guard has to be positional.
+    """
+
+    contact_grams = None
+
+    def __init__(self, printer, run_gcode, port, baud, tolerance, timeout):
+        self._printer = printer
+        self._run_gcode = run_gcode
+        self._port = port
+        self._baud = baud
+        self._tolerance = tolerance
+        self._timeout = timeout
+        self._last_weight = 0.0
+
+    def bind(self):
+        pass
+
+    def _exchange(self, command):
+        import serial  # deferred: only this board has the port
+
+        with serial.Serial(self._port, self._baud, timeout=self._timeout) as port:
+            port.reset_input_buffer()
+            port.write(command)
+            port.flush()
+            return port.readline()
+
+    def read_weight(self):
+        weight = parse_weight(self._exchange(b"H7\n"))
+        if weight is not None:
+            self._last_weight = weight
+        return self._last_weight
+
+    def confirmed(self):
+        return abs(self.read_weight()) <= self._tolerance
+
+    def tare(self):
+        logging.info("LOAD_CELL_TARE: Send tare request over %s.", self._port)
+        logging.info("LOAD_CELL_TARE: tare reply %r", self._exchange(b"H1\n"))
+
+    def reset_confirmation(self):
+        ## Nothing latches on this board, so there is nothing to clear.
+        pass
+
+
 class LoadCellTareGcode:
     def __init__(self, config):
         self.config = config
@@ -17,25 +155,41 @@ class LoadCellTareGcode:
 
         self.printer.register_event_handler("klippy:ready", self._init)
 
+        ## Default is the GPIO transport, so a board that says nothing behaves
+        ## exactly as it did before this seam existed.
+        transport = config.get("transport", "pins")
+        if transport == "serial":
+            self.backend = SerialTareBackend(
+                self.printer, self._run_gcode,
+                config.get("port", "/dev/ttyS7"),
+                config.getint("baud", 9600),
+                config.getfloat("tolerance", 5.0, minval=0.0),
+                config.getfloat("timeout", 2.0, above=0.0))
+        elif transport == "pins":
+            self.backend = PinTareBackend(self.printer, self._run_gcode)
+        else:
+            raise config.error(
+                "Unknown load_cell_tare transport '%s' (expected pins or serial)"
+                % transport)
+
         self.gcode.register_command("LOAD_CELL_TARE", self.cmd_LOAD_CELL_TARE)
 
     def _init(self):
         self.toolhead = self.printer.lookup_object("toolhead")
-        self.weight = self.printer.lookup_object("temperature_sensor weightValue")
         self.probe = self.printer.lookup_object("probe")
         self.mod_params = self.printer.lookup_object("mod_params")
-        self.level_pin = self.printer.lookup_object("gcode_button check_level_pin")
+        self.backend.bind()
 
     def _run_gcode(self, *cmds: str):
         self.gcode.run_script_from_command("\n".join(cmds))
 
     def _tare_confirmed(self):
-        return bool(self.level_pin.last_state)
+        return self.backend.confirmed()
 
     def cmd_LOAD_CELL_TARE(self, gcmd):
         t = time.time()
 
-        weight = self.weight.last_temp
+        weight = self.backend.read_weight()
         threshold_weight = self.mod_params.variables.get("cell_weight", 0)
 
         if weight < threshold_weight:
@@ -67,7 +221,7 @@ class LoadCellTareGcode:
                 ok = True
                 break
 
-            logging.info(f"LOAD_CELL_TARE: Attempt {i + 1}. No confirmation from level sensor. Weight: {self.weight.last_temp}")
+            logging.info(f"LOAD_CELL_TARE: Attempt {i + 1}. No confirmation from level sensor. Weight: {self.backend.read_weight()}")
 
         self._reset_tare_confirmation()
 
@@ -75,8 +229,9 @@ class LoadCellTareGcode:
             logging.info("LOAD_CELL_TARE: Tare confirmed.")
 
             self._run_gcode("WAIT TIME=100")
-            if abs(self.weight.last_temp) > threshold_weight:
-                return self._raise_error(f"Load cell tare failed: weight {self.weight.last_temp} > threshold {threshold_weight}")
+            settled = self.backend.read_weight()
+            if abs(settled) > threshold_weight:
+                return self._raise_error(f"Load cell tare failed: weight {settled} > threshold {threshold_weight}")
 
         elif self.config.getint("skip_tare_error", 0):
             return self._raise_error("Load cell tared, but no confirmation from level_pin; configured to skip.")
@@ -94,13 +249,19 @@ class LoadCellTareGcode:
         # Instead, we simply check the weight value since the MCU handles this in QUERY_PROBE.
         # It checks if the weight is greater than 200; if so, the probe is considered triggered
 
-        weight = self.weight.last_temp
-        if weight < 200:
-            logging.info("LOAD_CELL_TARE: No pressure to bed detected. OK!")
-            return
+        ## A board whose drift can exceed any threshold low enough to catch
+        ## contact cannot answer this from weight, so it clears Z every time
+        ## rather than deciding. Taring against the plate teaches the cell that
+        ## contact reads zero, and then nothing stops the nozzle until it is
+        ## pushing hard - the expensive failure, so guess in the safe direction.
+        if self.backend.contact_grams is not None:
+            weight = self.backend.read_weight()
+            if weight < self.backend.contact_grams:
+                logging.info("LOAD_CELL_TARE: No pressure to bed detected. OK!")
+                return
 
-        logging.info("LOAD_CELL_TARE: Detected bed pressure.")
-        self.gcode.respond_raw("!! Detected bed pressure. Please ensure the bed is clean!")
+            logging.info("LOAD_CELL_TARE: Detected bed pressure.")
+            self.gcode.respond_raw("!! Detected bed pressure. Please ensure the bed is clean!")
 
         self.gcode.run_script_from_command("SAVE_GCODE_STATE NAME=CELL_TARE")
 
@@ -133,33 +294,10 @@ class LoadCellTareGcode:
         raise self.gcode.error(msg)
 
     def _cell_tare(self):
-        logging.info("LOAD_CELL_TARE: Send tare request.")
-
-        # Tare is set by toggling level_h1 pin
-        timeout = 250
-        self._run_gcode(
-            "SET_PIN PIN=level_h1 VALUE=0",
-            f"WAIT TIME={timeout}",
-            "SET_PIN PIN=level_h1 VALUE=1",
-            f"WAIT TIME={timeout}",
-            "SET_PIN PIN=level_h1 VALUE=0",
-            f"WAIT TIME={timeout}",
-            "SET_PIN PIN=level_h1 VALUE=1",
-            f"WAIT TIME={timeout}",
-        )
+        self.backend.tare()
 
     def _reset_tare_confirmation(self):
-        logging.info("LOAD_CELL_TARE: Reset tare confirmation.")
-
-        # Toggle level clear pins
-        # This action resets level_pin, which we read later to confirm that the tare was reset.
-        timeout = 10
-        self._run_gcode(
-            "SET_PIN PIN=level_clear VALUE=0",
-            f"WAIT TIME={timeout}",
-            "SET_PIN PIN=level_clear VALUE=1",
-            f"WAIT TIME={timeout}",
-        )
+        self.backend.reset_confirmation()
 
 
 def load_config(config):

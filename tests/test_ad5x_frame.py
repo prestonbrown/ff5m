@@ -535,8 +535,8 @@ class LoadCellTareTest(unittest.TestCase):
 
     def plugin(self):
         import importlib.util
-        path = ROOT / ".py" / "klipper" / "plugins" / "ad5x_load_cell.py"
-        spec = importlib.util.spec_from_file_location("ad5x_load_cell", path)
+        path = ROOT / ".py" / "klipper" / "plugins" / "load_cell_tare.py"
+        spec = importlib.util.spec_from_file_location("load_cell_tare", path)
         module = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(module)
         return module
@@ -562,8 +562,12 @@ class LoadCellTareTest(unittest.TestCase):
         parse = self.plugin().parse_weight
         self.assertEqual(12.0, parse(b"command H7 ok. 1 2 3 12 g \r\n"))
 
-    def test_the_platform_declares_the_plugin(self):
-        self.assertIn("ad5x_load_cell", sections().sections())
+    def test_the_platform_declares_the_shared_plugin_on_this_transport(self):
+        ## The port reuses Forge-X's own tare plugin rather than a parallel
+        ## one, so every caller and every safety check is the shared code.
+        self.assertIn("load_cell_tare", sections().sections())
+        self.assertEqual("serial",
+                         sections()["load_cell_tare"]["transport"])
 
     def test_no_macro_shadows_the_plugin_command(self):
         """A macro and the plugin cannot both register LOAD_CELL_TARE.
