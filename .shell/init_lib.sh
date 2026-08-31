@@ -27,6 +27,20 @@ _chroot_data_path() {
     echo "/data${1#"$DATA_MNT"}"
 }
 
+# Platform config overrides: prefer .cfg.$PLATFORM/<file> when it exists, else
+# the shared .cfg/<file>. The existence test is on the host tree ($MOD_ROOT
+# maps to the chroot /opt/config/mod); the echoed path is the chroot spelling
+# both boards share. A board with no override dir (AD5M for most files) always
+# gets .cfg/. File scope, because the boot stages consume it in any order -
+# _init_printer_data needs it before fix_config has ever run.
+_cfg_path() {
+    if [ -f "$MOD_ROOT/.cfg.$PLATFORM/$1" ]; then
+        echo "/opt/config/mod/.cfg.$PLATFORM/$1"
+    else
+        echo "/opt/config/mod/.cfg/$1"
+    fi
+}
+
 # Build the printer_data tree at $1. The symlink targets are chroot-relative on
 # both boards - init_buildroot binds $DATA_MNT->$MOD/data and /opt/config->
 # $MOD/opt/config - so the contents are identical regardless of where the tree
@@ -49,6 +63,11 @@ _init_printer_data() {
     ln -fns /opt/config/mod/.shell "$pd"/scripts
 
     ln -fns /opt/config/mod/moonraker.conf "$pd"/config/moonraker.conf
+    # The board-flavoured include moonraker.conf pulls in. Symlinked rather
+    # than copied so it never dirties the update_manager git_repo, and always
+    # to a real file: the include raises when its target is missing, and
+    # _cfg_path's .cfg/ fallback guarantees one on every board.
+    ln -fns "$(_cfg_path moonraker.conf)" /opt/config/mod_data/platform.moonraker.conf
     ln -fns /opt/config/mod/.root/moonraker.asvc "$pd"/moonraker.asvc
 }
 
@@ -186,18 +205,6 @@ fix_config() {
 
     # Select board-specific macro overrides before Klipper reads the tree.
     apply_platform_macros
-
-    # Platform config overrides: prefer .cfg.$PLATFORM/<file> when it exists, else
-    # the shared .cfg/<file>. Echoes the CHROOT path (cfg_backup runs in the
-    # chroot); the existence test is on the host tree ($MOD_ROOT maps to the chroot
-    # /opt/config/mod). A board with no override dir (e.g. AD5M) always gets .cfg/.
-    _cfg_path() {
-        if [ -f "$MOD_ROOT/.cfg.$PLATFORM/$1" ]; then
-            echo "/opt/config/mod/.cfg.$PLATFORM/$1"
-        else
-            echo "/opt/config/mod/.cfg/$1"
-        fi
-    }
 
     # 1. Create dump with parameters from printer.base.cfg
     # Check if any parameters were found. cfg_backup.py runs INSIDE the chroot,

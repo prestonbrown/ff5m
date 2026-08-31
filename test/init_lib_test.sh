@@ -23,14 +23,19 @@ if [ -z "$BASH_BIN" ]; then
 fi
 
 # Record every `ln` the tree build issues, for a forced arch and a dest dir.
+# MOD_ROOT is repointed at the checkout after sourcing (as run_platform_macros
+# does): platform.sh leaves it at the on-device path, but the tree build now
+# resolves the platform moonraker variant through _cfg_path, whose existence
+# test must see the checkout's .cfg.$PLATFORM/.
 capture_tree() {
     ARCH="$1" DEST="$2" "$BASH_BIN" -c '
         uname() { echo "$ARCH"; }
         . "$1"
+        MOD_ROOT="$2"
         ln() { echo "ln $*"; }
         mkdir() { :; }
         _init_printer_data "$DEST"
-    ' _ "$INIT_LIB" 2>&1
+    ' _ "$INIT_LIB" "$REPO_DIR" 2>&1
 }
 
 # Record provision_printer_data'\''s dispatch (which dest, whether it binds).
@@ -80,6 +85,15 @@ assert_contains "ad5m logs -> /data/logFiles (unchanged)" \
     "$ad5m_tree" "ln -fns /data/logFiles /root/printer_data/logs"
 assert_contains "ad5m gcodes -> /data (unchanged)" \
     "$ad5m_tree" "ln -fns /data /root/printer_data/gcodes"
+
+# --- platform moonraker config: the include target, per board ----------------
+# moonraker.conf includes mod_data/platform.moonraker.conf; _cfg_path picks
+# the variant, so the symlink must be created whenever the tree is built (the
+# include raises if the target is missing).
+assert_contains "ad5x platform moonraker conf -> the ad5x variant" \
+    "$ad5x_tree" "ln -fns /opt/config/mod/.cfg.ad5x/moonraker.conf /opt/config/mod_data/platform.moonraker.conf"
+assert_contains "ad5m platform moonraker conf -> the shared variant" \
+    "$ad5m_tree" "ln -fns /opt/config/mod/.cfg/moonraker.conf /opt/config/mod_data/platform.moonraker.conf"
 
 # --- host-path aliases: klippy reports host spellings, moonraker resolves ---
 # klippy runs on the host and hands moonraker /usr/prog/klipper and /usr/data
