@@ -124,7 +124,7 @@ class Ad5xOverlayCfgTest(unittest.TestCase):
     def test_the_shipped_overlay_flips_weight_check_and_nothing_else(self):
         overlay = json.loads(
             (ROOT / "mod_params.ad5x.json").read_text(encoding="utf-8"))
-        self.assertEqual(overlay, {"weight_check": 1})
+        self.assertEqual(overlay, {"weight_check": 1, "weight_check_max": 2200})
         declared = json.loads(
             (ROOT / "mod_params.json").read_text(encoding="utf-8"))
         keys = {param["key"] for param in declared["parameters"]}

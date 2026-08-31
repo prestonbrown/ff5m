@@ -653,7 +653,7 @@ class WeightValueSectionTest(unittest.TestCase):
         self.assertEqual(len(matches), 1)
         options = matches[0]
         self.assertEqual(options["sensor_type"], "load_cell_serial")
-        self.assertEqual(options["trigger_value"], "1000")
+        self.assertEqual(options["trigger_value"], "1800")
         self.assertEqual(options["throttle"], "10")
         self.assertEqual(options["reschedule"], "False")
         self.assertIn("report_time", options)

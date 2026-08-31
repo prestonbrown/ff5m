@@ -1,3 +1,4 @@
 {
-  "weight_check": 1
+  "weight_check": 1,
+  "weight_check_max": 2200
 }
