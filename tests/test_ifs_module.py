@@ -129,7 +129,7 @@ class BareHostTest(unittest.TestCase):
         commands = render_macro(MODULE, "IFS_SELECT", printer=BARE_HOST,
                                 params={"SLOT": 1}).commands
         self.assertIn("G91", commands, commands)
-        self.assertIn("G1 Z5.0 F1500", commands, commands)
+        self.assertIn("G1 Z5.0 F3000", commands, commands)
 
     def test_the_part_fan_falls_back_to_m106(self):
         commands = render_macro(MODULE, "_IFS_PART_FAN", printer=BARE_HOST,
@@ -170,29 +170,46 @@ class ModuleShapeTest(unittest.TestCase):
         console-driven host that refusal is a shutdown, not an error dialog.
         Measured twice on the printer: MOVE_SAFE Z5 (missing '=') and
         _IFS_PART_FAN S0 both died there. Quoted lines are skipped: a RESPOND
-        message body may contain anything.
+        message body may contain anything. Both gcode-bearing files are
+        scanned: the module and the host file that carries its platform
+        overrides.
         """
         traditional = re.compile(r"^[A-Za-z][0-9]*$")
         bad = []
-        for number, line in enumerate(
-                MODULE.read_text(encoding="utf-8").splitlines(), 1):
-            stripped = line.strip()
-            if (not stripped or stripped[0] in "#{;*"
-                    or '"' in stripped or "'" in stripped):
-                continue
-            tokens = split_outside_braces(stripped)
-            if (traditional.match(tokens[0])
-                    or not re.match(r"^[A-Za-z_][A-Za-z0-9_]*$", tokens[0])):
-                continue
-            for token in tokens[1:]:
-                if not re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", token):
-                    bad.append((number, stripped))
-                    break
+        for label, path in (("module", MODULE), ("host", HOST)):
+            for number, line in enumerate(
+                    path.read_text(encoding="utf-8").splitlines(), 1):
+                stripped = line.strip()
+                if (not stripped or stripped[0] in "#{;*"
+                        or '"' in stripped or "'" in stripped):
+                    continue
+                tokens = split_outside_braces(stripped)
+                if (traditional.match(tokens[0])
+                        or not re.match(r"^[A-Za-z_][A-Za-z0-9_]*$",
+                                        tokens[0])):
+                    continue
+                for token in tokens[1:]:
+                    if not re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", token):
+                        bad.append(("%s:%d" % (label, number), stripped))
+                        break
         self.assertEqual(bad, [])
 
     def test_the_host_file_includes_the_module(self):
         self.assertIn("[include ifs.cfg]",
                       HOST.read_text(encoding="utf-8"))
+
+    def test_the_shared_filament_verbs_route_to_the_ifs_lanes(self):
+        """config/material.cfg's LOAD/UNLOAD/PURGE_FILAMENT are extruder-only
+        moves. Every shared caller of them - M600's change prompt,
+        LOAD_MATERIAL's action menu, slicer stop-gcode, typed gcode - must
+        land in the lane-aware IFS implementations instead, without the
+        caller knowing an IFS is fitted.
+        """
+        text = HOST.read_text(encoding="utf-8")
+        for verb in ("LOAD_FILAMENT", "UNLOAD_FILAMENT", "PURGE_FILAMENT"):
+            self.assertIn("rename_existing: %s" % verb, text)
+        for target in ("IFS_LOAD", "IFS_UNLOAD", "IFS_PURGE"):
+            self.assertIn(target, text)
 
     def test_the_module_declares_its_own_sections(self):
         text = MODULE.read_text(encoding="utf-8")
