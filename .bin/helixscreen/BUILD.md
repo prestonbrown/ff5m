@@ -8,11 +8,15 @@ It is a build artifact, not source. Regenerate it after changing HelixScreen;
 do not hand-edit files here.
 
 - Source:   https://github.com/prestonbrown/helixscreen
-- Branch:   feature/ad5x-ifs-ui
-- Commit:   69dabfb71aefca3c064e82b731716db483abb8af
-            (feat(mock): HELIX_MOCK_AMS=ifs-module drives the real IFS backend)
+- Built from a temp branch (ad5x-ifs-ui-pkg, local only, not pushed):
+    69dabfb71 feat(mock): HELIX_MOCK_AMS=ifs-module drives the real IFS backend
+              (tip of feature/ad5x-ifs-ui at build time)
+    59c92e0c8 fix(sound): detect macro-only M300 buzzers and honor the speaker
+              override (cherry-picked from feature/ad5x-sound 64253dd5b; doc
+              citation line re-pins resolved via make regen-doc-links)
+  Everything below those two is feature/ad5x-ifs-ui's merged main lineage.
 - Version:  0.99.118
-- Built:    2026-08-30, `make ad5x-docker ENABLE_REMOTE_CONTROL=yes`
+- Built:    2026-08-30, `NPROC_DOCKER_RUN=4 make ad5x-docker ENABLE_REMOTE_CONTROL=yes`
             (MIPS32r5, mipsel buildroot glibc, fbdev backend, stripped)
 
 Layout follows `make install DESTDIR=...` plus the release-ad5x packaging
@@ -35,7 +39,7 @@ Two files are rig-specific on top of the release layout:
 
 sha256 (build/ad5x/bin, at build time):
 
-    02f3be98cfbdcc9cdccee290d0845ae27db18e7a572ddfc7e4af7cfdee0c6c98  helix-screen
+    932e3ab9264377380db60c320dcb8902dde9bf696939e18a2aa1f9cf0498166a  helix-screen
     da675622e49a2ea5e378a9f6de6947f0a541e1dc769c6953059401019652117a  helix-splash
     00220a5744fad46f311d5a182958d48c74978aac4f88d2ff4b7847de308fb8fe  helix-watchdog
 
@@ -58,3 +62,10 @@ those. The Forge-X chroot ($MOD, our Buildroot 2025.02.4 rootfs) provides
 them; init_buildroot bind-mounts /opt/config into the chroot at the same
 path, and init_chroot shares /dev and /tmp, which is what gives the UI the
 framebuffer, the touchscreen evdev nodes, and a host-reachable ctl socket.
+
+Sound note: this build carries the macro-only M300 speaker detection, so a
+printer that defines [gcode_macro M300] (Forge-X wraps its native TONE) gets
+the M300 sound backend installed. The rig's mod_params variables.sound must
+be 1 or Forge-X's TONE wrapper drops every tone. No startup chime on buzzer
+machines - the chime fires before discovery installs the backend; judge
+sound by interaction feedback, not the boot chime.
