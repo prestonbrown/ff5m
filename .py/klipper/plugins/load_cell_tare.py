@@ -116,18 +116,43 @@ class SerialTareBackend:
         self._tolerance = tolerance
         self._timeout = timeout
         self._last_weight = 0.0
+        self._handle = None
 
     def bind(self):
         pass
 
-    def _exchange(self, command):
-        import serial  # deferred: only this board has the port
+    def _link(self):
+        ## One port, opened on first use and kept: the weight sensor polls
+        ## every second or so, and re-running termios setup per exchange would
+        ## churn it tens of thousands of times a day for no benefit. Klippy is
+        ## single-threaded, so exchanges cannot interleave.
+        if self._handle is None:
+            import serial  # deferred: only this board has the port
 
-        with serial.Serial(self._port, self._baud, timeout=self._timeout) as port:
+            self._handle = serial.Serial(self._port, self._baud, timeout=self._timeout)
+        return self._handle
+
+    def _drop_link(self):
+        handle, self._handle = self._handle, None
+        if handle is None:
+            return
+        try:
+            handle.close()
+        except Exception:
+            logging.exception("LOAD_CELL_TARE: closing a failed serial link.")
+
+    def _exchange(self, command):
+        port = self._link()
+        try:
             port.reset_input_buffer()
             port.write(command)
             port.flush()
             return port.readline()
+        except Exception:
+            ## The next exchange reopens the port. A tare still raises, since
+            ## its caller must not trust a cell it could not read.
+            self._drop_link()
+            raise
 
     def read_weight(self):
         weight = parse_weight(self._exchange(b"H7\n"))
@@ -145,6 +170,58 @@ class SerialTareBackend:
     def reset_confirmation(self):
         ## Nothing latches on this board, so there is nothing to clear.
         pass
+
+
+class SerialWeightSensor:
+    """The value half of this board's collision watchdog.
+
+    Forge-X hangs bed-collision protection off a [temperature_sensor
+    weightValue] whose exceed_gcode fires past a trigger value; the patched
+    temperature_sensor polls whatever object its sensor_type built. On the
+    AD5M that object is an ADC reading the cell under the bed. Here the cell
+    is in the toolhead, behind the conditioning MCU's UART, so this sensor
+    polls H7 through the shared tare backend - one owner for the port, one
+    implementation of the wire format - and hands grams to the same callback.
+    Grams stand in for degrees exactly as on the AD5M.
+
+    report_time trades detection latency for reactor load: each poll is a
+    blocking exchange on a 9600-baud link (~30 ms) with klippy idle
+    throughout.
+    """
+
+    def __init__(self, config):
+        self.printer = config.get_printer()
+        self.reactor = self.printer.get_reactor()
+        self._report_time = config.getfloat("report_time", 1.0, above=0.)
+        self._tare = None
+        self._callback = None
+        self.printer.register_event_handler("klippy:ready", self._ready)
+
+    def setup_minmax(self, min_temp, max_temp):
+        ## Range is the exceed_gcode's decision to make, not this one's.
+        pass
+
+    def setup_callback(self, temperature_sensor_callback):
+        self._callback = temperature_sensor_callback
+
+    def _ready(self):
+        self._tare = self.printer.lookup_object("load_cell_tare", None)
+        if self._tare is None:
+            logging.warning(
+                "load_cell_serial: no [load_cell_tare] section; "
+                "weight will not be published.")
+            return
+        self.reactor.register_timer(self._poll, self.reactor.NOW)
+
+    def _poll(self, eventtime):
+        try:
+            self._callback(eventtime, self._tare.read_weight())
+        except Exception:
+            ## A watchdog must outlive the link it watches. A failed poll
+            ## publishes nothing this round; the backend has already dropped
+            ## the port, so the next poll retries on a fresh one.
+            logging.exception("load_cell_serial: weight poll failed.")
+        return eventtime + self._report_time
 
 
 class LoadCellTareGcode:
@@ -185,6 +262,11 @@ class LoadCellTareGcode:
 
     def _tare_confirmed(self):
         return self.backend.confirmed()
+
+    def read_weight(self):
+        ## Current grams from the active backend. The serial weight sensor
+        ## publishes these into klippy's temperature_sensor machinery.
+        return self.backend.read_weight()
 
     def cmd_LOAD_CELL_TARE(self, gcmd):
         t = time.time()
@@ -301,4 +383,11 @@ class LoadCellTareGcode:
 
 
 def load_config(config):
+    ## Registering the sensor type here makes [load_cell_tare] the only
+    ## section a board needs: instantiating it loads the plugin, which
+    ## registers "load_cell_serial" for any [temperature_sensor] section
+    ## further down the file to use. Klippy instantiates sections in file
+    ## order, so that ordering is load-bearing.
+    pheaters = config.get_printer().load_object(config, "heaters")
+    pheaters.add_sensor_factory("load_cell_serial", SerialWeightSensor)
     return LoadCellTareGcode(config)

@@ -82,8 +82,8 @@ provision_printer_data() {
 # macros/<name>.cfg and are copied over it here, before Klipper reads them. The
 # AD5M ships no .ad5m overrides, so this is a no-op there and the committed
 # defaults stay in force; the AD5X copies its .ad5x variants (e.g.
-# hw_base.ad5x.cfg, which omits the AD5M-only [temperature_sensor weightValue]
-# that would otherwise halt klippy on hardware that has no load-cell sensor).
+# hw_base.ad5x.cfg, which rewrites the AD5M-frame motion geometry for this
+# corner-origin machine).
 apply_platform_macros() {
     local override base
     for override in "$MOD_ROOT"/macros/*."$PLATFORM".cfg; do

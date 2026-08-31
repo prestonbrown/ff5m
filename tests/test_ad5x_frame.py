@@ -26,7 +26,9 @@ import pathlib
 import re
 import unittest
 
-from tests.gcode_macro_harness import load_macro, render_macro
+import jinja2
+
+from tests.gcode_macro_harness import _read_sections, load_macro, render_macro
 
 ROOT = pathlib.Path(__file__).parents[1]
 BASE = ROOT / "macros" / "base.cfg"
@@ -587,6 +589,96 @@ class LoadCellTareTest(unittest.TestCase):
         ## follows.
         self.assertLess(body.index("clear_cooldown_temp"),
                         body.index("LOAD_CELL_TARE"))
+
+
+##
+## The collision watchdog. Forge-X's [temperature_sensor weightValue] with
+## exceed_gcode fires M112 when the load cell reads past the limit - the
+## thing that would have saved a PEI sheet. The machinery lives in the
+## patched temperature_sensor.py both boards run; only the value source
+## differs, so the AD5X publishes grams from the conditioning MCU's UART and
+## the contract must stay command-for-command identical to the AD5M's.
+##
+
+HW_BASE = ROOT / "macros" / "hw_base.cfg"
+
+
+def exceed_commands(path, *, value, weight_check,
+                    weight_check_max=1200, state="Printing"):
+    """Render one board's exceed_gcode and return its command lines."""
+    matches = [options for name, options in _read_sections(path)
+               if name == "temperature_sensor weightValue"]
+    if len(matches) != 1:
+        raise AssertionError(
+            "expected one [temperature_sensor weightValue] in %s, found %d"
+            % (path, len(matches)))
+    environment = jinja2.Environment("{%", "%}", "{", "}")
+    text = environment.from_string(matches[0]["exceed_gcode"]).render({
+        "value": value,
+        "printer": {
+            "mod_params": {"variables": {
+                "weight_check": weight_check,
+                "weight_check_max": weight_check_max}},
+            "idle_timeout": {"state": state},
+        },
+    })
+    return tuple(line.strip() for line in text.splitlines() if line.strip())
+
+
+class WeightValueSectionTest(unittest.TestCase):
+    def test_declares_the_serial_sensor_with_the_shared_contract(self):
+        matches = [options for name, options in _read_sections(HW_AD5X)
+                   if name == "temperature_sensor weightValue"]
+        self.assertEqual(len(matches), 1)
+        options = matches[0]
+        self.assertEqual(options["sensor_type"], "load_cell_serial")
+        self.assertEqual(options["trigger_value"], "1000")
+        self.assertEqual(options["throttle"], "10")
+        self.assertEqual(options["reschedule"], "False")
+        self.assertIn("report_time", options)
+        self.assertIn("exceed_gcode", options)
+
+    def test_the_sensor_section_follows_the_tare_section(self):
+        """Klipper instantiates sections in file order, and the sensor type
+        only exists once [load_cell_tare]'s plugin has registered it."""
+        names = [name for name, _ in _read_sections(HW_AD5X)]
+        self.assertLess(names.index("load_cell_tare"),
+                        names.index("temperature_sensor weightValue"))
+
+
+class CollisionWatchdogParityTest(unittest.TestCase):
+    CASES = tuple(
+        (weight_check, value, state)
+        for weight_check in (0, 1)
+        for value in (999.0, 1200.0)
+        for state in ("Printing", "Idle"))
+
+    def test_the_ad5x_contract_matches_the_ad5m_command_for_command(self):
+        for weight_check, value, state in self.CASES:
+            with self.subTest(weight_check=weight_check, value=value,
+                              state=state):
+                self.assertEqual(
+                    exceed_commands(HW_AD5X, value=value,
+                                    weight_check=weight_check, state=state),
+                    exceed_commands(HW_BASE, value=value,
+                                    weight_check=weight_check, state=state))
+
+    def test_m112_only_when_checking_over_the_limit_while_printing(self):
+        cases = (
+            (dict(value=1200.0, weight_check=1, state="Printing"), True),
+            (dict(value=1199.0, weight_check=1, state="Printing"), False),
+            (dict(value=1200.0, weight_check=1, state="Idle"), False),
+            (dict(value=1200.0, weight_check=0, state="Printing"), False),
+        )
+        for kwargs, expect in cases:
+            with self.subTest(**kwargs):
+                commands = exceed_commands(HW_AD5X, **kwargs)
+                self.assertEqual("M112" in commands, expect)
+
+    def test_pressure_is_reported_when_the_watchdog_is_on(self):
+        commands = exceed_commands(
+            HW_AD5X, value=999.0, weight_check=1, state="Printing")
+        self.assertTrue(any(c.startswith("RESPOND") for c in commands))
 
 
 if __name__ == "__main__":
