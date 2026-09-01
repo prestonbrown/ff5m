@@ -667,6 +667,19 @@ class WeightValueSectionTest(unittest.TestCase):
                         names.index("temperature_sensor weightValue"))
 
 
+class PurgeParkTest(unittest.TestCase):
+    def test_purging_parks_at_the_bins_mouth_not_the_wiper(self):
+        """zmod's comment is categorical: the bin is entered at Y=220 only.
+        Parking at the station entry (229, the wiper) dumps purge short of
+        the bin and onto the bed - observed on the rig as misses at the
+        bin's front edge."""
+        commands = render_macro(IFS, "_IFS_PARK_FOR_PURGE",
+                                printer=printer_state()).commands
+        station = index_of(commands, r"_IFS_GOTO_STATION")
+        mouth = index_of(commands, r"G1 Y220(\.0)?")
+        self.assertLess(station, mouth, commands)
+
+
 class CollisionWatchdogParityTest(unittest.TestCase):
     CASES = tuple(
         (weight_check, value, state)

@@ -77,11 +77,11 @@ class WorkflowMacroTest(unittest.TestCase):
         assert_order(self, result.commands, (
             "_CONTEXT_BEGIN TYPE=print",
             "_START_PRINT_PREPARE",
+            "_WAIT_TEMPERATURE CMD=M140 VALUE=80.0 BELOW=2 ABOVE=5",
             "_HOME_IF_NEEDED",
             "_CONTEXT_STATE NAME=LEVELING",
             '_CONTEXT_STATE NAME="SKIPPING LEVELING"',
             "_CONTEXT_STATE NAME=PARKING",
-            "_WAIT_TEMPERATURE CMD=M140 VALUE=80.0 BELOW=2 ABOVE=5",
             "_WAIT_TEMPERATURE CMD=M104 VALUE=245.0",
             "_CONTEXT_STATE NAME=PRIMING",
             "_CONTEXT_STATE NAME=PRINTING",
@@ -580,7 +580,19 @@ class StartPrintCellFrameTest(unittest.TestCase):
 
     def test_homing_derives_z0_after_the_tare_when_checking(self):
         commands = self.start_print()
-        self.assertLess(index := commands.index("LOAD_CELL_TARE"),
+        self.assertLess(commands.index("LOAD_CELL_TARE"),
+                        commands.index("_HOME_IF_NEEDED"))
+
+    def test_the_bed_is_at_print_temperature_before_the_tare(self):
+        ## The load cell lives in the heated bed; its zero is a temperature-
+        ## dependent property. Taring on a cold-climbing bed calibrates one
+        ## sensor and prints with another - zmod heats and waits first, and
+        ## 2026-08-31 cost a PEI sheet to learn it here.
+        commands = self.start_print()
+        bed_wait = next(i for i, c in enumerate(commands)
+                        if c.startswith("_WAIT_TEMPERATURE CMD=M140"))
+        self.assertLess(bed_wait, commands.index("LOAD_CELL_TARE"))
+        self.assertLess(commands.index("LOAD_CELL_TARE"),
                         commands.index("_HOME_IF_NEEDED"))
 
     def test_the_frame_tare_runs_even_with_weight_check_off(self):
