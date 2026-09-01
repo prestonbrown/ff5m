@@ -166,39 +166,43 @@ class WorkflowMacroTest(unittest.TestCase):
                 self.assertEqual("_CONTEXT_END" in result.commands, completes)
 
 
-class StartPrintToolchangeHintTest(unittest.TestCase):
-    """The slicer states in the start line whether the job opens on a swap.
+class StartPrintPurgeLineTest(unittest.TestCase):
+    """The purge line is the start's prime, whenever priming is enabled.
 
-    A job that begins by changing tools cuts the loaded filament as its
-    first act, so the start clean's flush is spent for nothing. Knowing
-    that is the slicer's to say - the profile's start gcode carries
-    TOOLCHANGE=1 - and the wrapper parks it where the board's clean can
-    read it, next to every other start parameter.
+    With the nozzle clean's flush retired, the line after the reheat is
+    what puts pressure behind the first layer - for every job, swapped or
+    not. Under KAMP it is the adaptive LINE_PURGE; otherwise the
+    configured clear macro.
     """
 
-    HEADLESS = ROOT / "macros" / "headless.cfg"
+    def start_print(self, *, disable_priming, use_kamp):
+        start = macro_status(BASE, "_START_PRINT")
+        return render_macro(BASE, "_START_PRINT", printer={
+            "gcode_macro _START_PRINT": start,
+            "gcode_macro START_PRINT": {"preparation_done": True},
+            "gcode_macro _LINE_PURGE": {"print_area_min": None,
+                                        "print_area_max": None},
+            "mod_params": {"variables": {
+                "safe_z": 10, "chamber_light_mode": "MANUAL", "display": 1,
+                "check_md5": 0, "print_leveling": False, "use_kamp": use_kamp,
+                "bed_mesh_validation": False, "midi_start": "",
+                "weight_check": False,
+                "disable_priming": disable_priming, "zclear": "_CLEAR1",
+            }},
+            "extruder": {"temperature": 25, "can_extrude": False},
+            "bed_mesh": {"profile_name": "default",
+                         "profiles": {"default": {}}},
+        }).commands
 
-    def start_print(self, extra):
-        printer = {
-            "configfile": {"settings": {}},
-            "bed_mesh": {"profiles": {}},
-        }
-        params = {"EXTRUDER_TEMP": 220, "BED_TEMP": 55}
-        params.update(extra)
-        return render_macro(self.HEADLESS, "START_PRINT",
-                            printer=printer, params=params).commands
+    def test_the_line_purges_when_priming_is_enabled(self):
+        commands = self.start_print(disable_priming=0, use_kamp=1)
+        assert_order(self, commands, (
+            "_CONTEXT_STATE NAME=PRIMING", "LINE_PURGE",
+            "_CONTEXT_STATE NAME=PRINTING"))
 
-    def test_the_hint_is_stored_from_the_start_line(self):
-        commands = self.start_print({"TOOLCHANGE": 1})
-        self.assertIn(
-            "SET_GCODE_VARIABLE MACRO=_START_PRINT VARIABLE=ztoolchange"
-            " VALUE=1", commands)
-
-    def test_a_start_line_without_the_hint_stores_zero(self):
-        commands = self.start_print({})
-        self.assertIn(
-            "SET_GCODE_VARIABLE MACRO=_START_PRINT VARIABLE=ztoolchange"
-            " VALUE=0", commands)
+    def test_no_line_when_priming_is_disabled(self):
+        commands = self.start_print(disable_priming=1, use_kamp=1)
+        self.assertNotIn("LINE_PURGE", commands)
 
 
 class TemperatureMacroTest(unittest.TestCase):

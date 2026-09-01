@@ -358,10 +358,10 @@ class NozzleCleanTest(unittest.TestCase):
             self.assertFalse(command.startswith("_CLEAR_NOZZLE_PROBE"),
                              command)
 
-    def test_parks_at_the_chute_before_flushing(self):
+    def test_parks_at_the_chute_before_cleaning(self):
         commands = self.clean()
         self.assertLess(index_of(commands, r"_IFS_PARK_FOR_PURGE"),
-                        index_of(commands, r"_IFS_PURGE\b"))
+                        index_of(commands, r"_IFS_SHAKE\b"))
 
     def test_both_heaters_start_before_either_wait(self):
         ## The bed is the slow heater; a serial sequence that only sets the
@@ -583,41 +583,38 @@ class StartPrintZmodPortTest(unittest.TestCase):
 
 
 class ToolchangeFlushTest(unittest.TestCase):
-    """The clean skips its flush when the start line announced a swap.
+    """The clean never flushes; the purge line owns priming.
 
-    The slicer's profile says TOOLCHANGE=1 when the job opens on a tool
-    other than the loaded lane, and the swap that follows cuts the loaded
-    filament as its first act - so a flush here is pushed out only to be
-    severed with the rest. The shake still snaps off whatever hangs on the
-    tip, and the swap's own purge establishes the new colour. The latch is
-    consumed on read: a manual clean afterwards must flush like normal.
+    Jobs on this machine are assumed to open multicolour: a swap follows
+    the start and cuts the loaded filament, so a flush in the clean is
+    pushed out only to be severed with the rest - and a single-colour job
+    gets its prime from the start's purge line instead, which runs after
+    the reheat where a prime actually belongs. What the mesh needs from
+    the clean is a clean tip, and the shake, the wiper, and the
+    post-cooldown wipe are what provide it.
     """
 
-    def clean_commands(self, toolchange):
+    def clean_commands(self, loaded):
         return render_macro(HW_AD5X, "CLEAR_NOZZLE", printer=printer_state(**{
             "filament_switch_sensor toolhead":
-                {"filament_detected": True},
+                {"filament_detected": loaded},
             "mod_params": {"variables": {
                 "safe_z": 10.0, "clear_cooldown_temp": 150}},
             "bed_mesh": {"profile_name": ""},
-            "gcode_macro _START_PRINT": {"ztoolchange": toolchange},
         })).commands
 
-    def test_no_flush_when_the_start_line_announced_a_swap(self):
-        commands = self.clean_commands(toolchange=True)
+    def test_no_flush_with_a_lane_loaded(self):
+        commands = self.clean_commands(loaded=True)
         self.assertFalse([c for c in commands if c.startswith("_IFS_PURGE")],
                          commands)
         index_of(commands, r"_IFS_SHAKE")
 
-    def test_the_hint_is_consumed_on_read(self):
-        commands = self.clean_commands(toolchange=True)
-        index_of(commands,
-                 r"SET_GCODE_VARIABLE MACRO=_START_PRINT"
-                 r" VARIABLE=ztoolchange VALUE=0")
-
-    def test_flush_when_no_swap_was_announced(self):
-        commands = self.clean_commands(toolchange=False)
-        index_of(commands, r"_IFS_PURGE FIRST_MM=10 SECOND_MM=0")
+    def test_no_flush_with_nothing_loaded_either(self):
+        ## There is no third case worth a flush: nothing at the toolhead
+        ## means nothing to push.
+        commands = self.clean_commands(loaded=False)
+        self.assertFalse([c for c in commands if c.startswith("_IFS_PURGE")],
+                         commands)
 
 
 class CooldownOnPadTest(unittest.TestCase):
@@ -647,7 +644,10 @@ class CooldownOnPadTest(unittest.TestCase):
     def test_a_wipe_follows_the_cooldown_before_the_tare(self):
         commands = self.clean_body_commands()
         fan_off = index_of(commands, r"_IFS_PART_FAN S=0")
-        wipe = index_of(commands, r"_IFS_WIPE")
+        ## The LAST wipe: an earlier one runs before the cooldown, tidying
+        ## the tip on the way in.
+        wipe = max(i for i, c in enumerate(commands)
+                   if c.startswith("_IFS_WIPE"))
         tare = index_of(commands, r"LOAD_CELL_TARE")
         self.assertLess(fan_off, wipe, commands)
         self.assertLess(wipe, tare, commands)
