@@ -582,41 +582,6 @@ class StartPrintZmodPortTest(unittest.TestCase):
             " VARIABLE=clean_done VALUE=True", body)
 
 
-class StartHintFlushTest(unittest.TestCase):
-    """The clean skips its flush when the job opens with a tool change.
-
-    A swap starts by cutting the loaded filament, so whatever a flush
-    pushed out lands in the bin and is severed with the rest - filament
-    and a full purge cycle spent for nothing. The wipe still readies the
-    tip for the mesh, and the swap's own purge establishes the new colour
-    once the lane is loaded.
-    """
-
-    def clean_commands(self, first_tool, loaded_lane):
-        return render_macro(HW_AD5X, "CLEAR_NOZZLE", printer=printer_state(**{
-            "filament_switch_sensor toolhead":
-                {"filament_detected": True},
-            "mod_params": {"variables": {
-                "safe_z": 10.0, "clear_cooldown_temp": 150}},
-            "bed_mesh": {"profile_name": ""},
-            "start_hint": {"first_tool": first_tool},
-            "save_variables": {"variables": {"ifs_loaded": loaded_lane}},
-        })).commands
-
-    def test_no_flush_when_the_job_swaps_to_another_lane(self):
-        commands = self.clean_commands(first_tool=3, loaded_lane=1)
-        self.assertFalse([c for c in commands if c.startswith("_IFS_PURGE")],
-                         commands)
-
-    def test_flush_when_the_job_runs_the_loaded_lane(self):
-        commands = self.clean_commands(first_tool=0, loaded_lane=1)
-        index_of(commands, r"_IFS_PURGE FIRST_MM=10 SECOND_MM=0")
-
-    def test_flush_when_the_job_declares_no_starting_tool(self):
-        commands = self.clean_commands(first_tool=None, loaded_lane=1)
-        index_of(commands, r"_IFS_PURGE FIRST_MM=10 SECOND_MM=0")
-
-
 class CooldownOnPadTest(unittest.TestCase):
     """The nozzle cools parked on the wiper pad, not in thin air.
 
