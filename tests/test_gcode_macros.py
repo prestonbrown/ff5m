@@ -583,9 +583,15 @@ class StartPrintCellFrameTest(unittest.TestCase):
         self.assertLess(index := commands.index("LOAD_CELL_TARE"),
                         commands.index("_HOME_IF_NEEDED"))
 
-    def test_no_tare_without_weight_check(self):
+    def test_the_frame_tare_runs_even_with_weight_check_off(self):
+        ## The pre-homing tare is calibration, not protection: it refreshes
+        ## the cell's frame regardless of the watchdog switch. Gating it on
+        ## weight_check once let disarming the watchdog silently home in a
+        ## stale frame, and the print that followed destroyed a sheet.
         commands = self.start_print(weight_check=False)
-        self.assertNotIn("LOAD_CELL_TARE", commands)
+        self.assertEqual(commands.count("LOAD_CELL_TARE"), 1)
+        self.assertLess(commands.index("LOAD_CELL_TARE"),
+                        commands.index("_HOME_IF_NEEDED"))
 
     def test_z_is_rehomed_after_leveling_in_the_frame_it_left(self):
         for skip in (True, False):
