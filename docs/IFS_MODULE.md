@@ -141,6 +141,28 @@ Handling temperatures per material are `[ifs_materials]` options
 (`temp_PETG: 240`), and the load/purge/unload distances come from the
 printer's own `Multicolour` settings block when one exists.
 
+### Feed speed
+
+The tube transit runs in two phases. `ifs_fast_speed` (3600 mm/min) covers the
+bulk, then the last `approach_mm` (150) is taken at `ifs_speed` (1200). A 1000
+mm load goes from about 50 s to about 22 s.
+
+3600 is measured, not guessed: 200 mm retracts on a loaded lane at 1200, 2400
+and 3600, each one watched by eye. The ladder stopped at 3600 because the motor
+is audibly unhappy well before anything skips - the limit that arrived first was
+the operator's ears, not the firmware, which clamps `S` nowhere at all.
+
+The last stretch stays slow for two reasons. A load *ends* by driving into the
+extruder gear - the IFS cannot push past a gear that is not turning - and
+arriving there at 60 mm/s rather than 20 is three times the impact. And the
+toolhead sensor cannot catch it: the pin is declared to klipper as a thermistor,
+and klipper reports those every 0.300 s, so the trigger can be up to 18 mm late
+at 3600 no matter how fast this module polls it.
+
+Set `ifs_fast_speed` equal to `ifs_speed` to get the old single-speed
+behaviour back. If your machine sounds unhappy, lower it - it is one printer's
+measurement, and a rebuilt feeder can move it.
+
 The wire protocol the board speaks, for anyone debugging at that level:
 [AD5X_IFS_PROTOCOL.md](AD5X_IFS_PROTOCOL.md).
 

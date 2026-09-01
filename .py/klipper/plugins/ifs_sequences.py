@@ -228,6 +228,20 @@ class Parameters(object):
         ## FFS not ready." was a clamp that had not settled yet, and a working
         ## load feeds a full 1000.
         "load_empty_mm": 600.0, "load_full_mm": 550.0,
+        ## The tube transit is split in two. The feeder holds 3600 mm/min -
+        ## measured on hardware at 1200, 2400 and 3600 with a lane watched by
+        ## eye, and stopped there because the motor is audibly unhappy long
+        ## before anything skips. But the load ENDS by driving into the
+        ## extruder gear, and arriving at 60 mm/s rather than 20 is three times
+        ## the impact, so only the bulk runs fast: `approach_mm` is the last
+        ## stretch, taken at `ifs_speed`. Setting ifs_fast_speed to ifs_speed
+        ## restores the single-speed behaviour.
+        ##
+        ## The toolhead sensor cannot police this either. It is declared to
+        ## klipper as a thermistor, and klipper reports those every 0.300 s
+        ## (adc_temperature.REPORT_TIME), so the trigger can be up to 18 mm
+        ## late at 3600 however fast this module polls it.
+        "ifs_fast_speed": 3600.0, "approach_mm": 150.0,
         ## How far a freshly threaded lane backs off once its tip reaches the
         ## toolhead sensor, so it rests below the extruder gear rather than in
         ## it.

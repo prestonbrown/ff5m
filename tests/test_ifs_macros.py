@@ -127,6 +127,7 @@ class AutoinsertTest(unittest.TestCase):
     """
 
     PARAMS = {"tube_mm": 1000.0, "ifs_speed": 1200.0,
+              "ifs_fast_speed": 3600.0, "approach_mm": 150.0,
               "load_empty_mm": 600.0, "load_full_mm": 550.0,
               "autoinsert_ret_mm": 90.0, "hub_clear_mm": 300.0}
 
@@ -278,6 +279,8 @@ class LoadTest(unittest.TestCase):
                 "connected": connected, "error": None,
                 "loaded_channels": [1, 2, 4],
                 "params": {"tube_mm": 1000.0, "ifs_speed": 1200.0,
+              "ifs_fast_speed": 3600.0, "approach_mm": 150.0,
+                           "ifs_fast_speed": 3600.0, "approach_mm": 150.0,
                            "first_purge_mm": 100.0, "first_purge_speed": 300.0,
                            "first_fan": 0.0, "second_purge_mm": 30.0,
                            "second_purge_speed": 300.0, "second_fan": 255.0},
@@ -291,20 +294,53 @@ class LoadTest(unittest.TestCase):
         return render_macro(IFS, "IFS_LOAD", printer=self.printer(**kwargs),
                             params={"SLOT": 1, "TEMP": 220}).commands
 
-    def test_it_feeds_the_tube_length_at_ifs_speed(self):
-        ## zmod's _INSERT_PRUTOK_IFS: LEN=filament_tube_length (1000, "the
-        ## teflon tube from IFS to head") at filament_ifs_speed (1200). The
-        ## bug this guards rendered "LENGTH=" with nothing after it.
-        feed = [c for c in self.render() if c.startswith("IFS_FEED")]
-        self.assertEqual(len(feed), 1, feed)
-        self.assertIn("LENGTH=1000", feed[0])
-        self.assertIn("SPEED=1200", feed[0])
+    def feeds(self, **kwargs):
+        return [c for c in self.render(**kwargs) if c.startswith("IFS_FEED")]
+
+    def test_the_tube_feed_is_two_phase(self):
+        ## Measured on hardware: the feeder holds 3600 mm/min, three times
+        ## zmod's 1200. But this feed ENDS by driving into the extruder gear,
+        ## and arriving there at 60 mm/s instead of 20 is three times the
+        ## impact - so the bulk runs fast and the last stretch does not.
+        self.assertEqual(len(self.feeds()), 2, self.feeds())
+
+    def test_the_bulk_runs_fast_and_covers_all_but_the_approach(self):
+        bulk = self.feeds()[0]
+        self.assertIn("LENGTH=850", bulk)
+        self.assertIn("SPEED=3600", bulk)
+
+    def test_the_final_approach_is_slow(self):
+        approach = self.feeds()[1]
+        self.assertIn("LENGTH=150", approach)
+        self.assertIn("SPEED=1200", approach)
+
+    def test_the_two_phases_still_sum_to_the_tube_length(self):
+        ## Splitting the feed must not change how far a load can push.
+        lengths = [int(re.search(r"LENGTH=(\d+)", c).group(1))
+                   for c in self.feeds()]
+        self.assertEqual(sum(lengths), 1000)
 
     def test_the_feed_ends_on_the_toolhead_sensor(self):
         ## The length is a bound, not a target - without this a full tube of
-        ## filament is pushed regardless of it arriving early.
-        feed = [c for c in self.render() if c.startswith("IFS_FEED")]
-        self.assertIn("UNTIL=toolhead", feed[0])
+        ## filament is pushed regardless of it arriving early. BOTH phases
+        ## need it: a lane parked closer than the bulk length would otherwise
+        ## be driven into the gear at the fast speed.
+        for feed in self.feeds():
+            self.assertIn("UNTIL=toolhead", feed)
+
+    def test_both_phases_are_soft(self):
+        ## Stopping short IS how this feed finishes - the IFS cannot push past
+        ## a gear that is not turning. A hard phase would abort the load
+        ## before the co-push that completes it.
+        for feed in self.feeds():
+            self.assertIn("SOFT=1", feed)
+
+    def test_only_the_final_phase_judges_the_outcome(self):
+        ## CHECK turns on the silk and stall judgements. Running them on the
+        ## bulk phase would fail a load that is simply still travelling.
+        bulk, approach = self.feeds()
+        self.assertNotIn("CHECK=1", bulk)
+        self.assertIn("CHECK=1", approach)
 
     def test_it_heats_before_parking(self):
         commands = self.render()
@@ -344,6 +380,7 @@ class LoadedLaneTest(unittest.TestCase):
     """
 
     PARAMS = {"tube_mm": 1000.0, "ifs_speed": 1200.0,
+              "ifs_fast_speed": 3600.0, "approach_mm": 150.0,
               "unload_extruder_mm": 60.0, "unload_ifs_mm": 70.0,
               "unload_speed": 600.0, "first_purge_mm": 100.0,
               "first_purge_speed": 300.0, "first_fan": 0.0,
@@ -455,8 +492,12 @@ class LoadedLaneTest(unittest.TestCase):
         """
         commands = self.render("IFS_LOAD", {"SLOT": 2, "TEMP": 220})
         feed = [c for c in commands if c.startswith("IFS_FEED")]
-        self.assertEqual(len(feed), 1, commands)
-        self.assertIn("SOFT=1", feed[0])
+        ## Two phases since the tube feed was split for speed; every one of
+        ## them has to be soft, because any of them can be the one that
+        ## arrives at the gear.
+        self.assertTrue(feed, commands)
+        for phase in feed:
+            self.assertIn("SOFT=1", phase)
 
     def test_the_load_asks_the_toolhead_only_AFTER_the_purge(self):
         ## A soft feed cannot say whether the load worked - arriving at the gear
@@ -1019,7 +1060,8 @@ class MaterialTest(unittest.TestCase):
     [ifs_materials] and are only read here.
     """
 
-    PARAMS = {"tube_mm": 1000.0, "ifs_speed": 1200.0, "purge_extra_mm": 90.0,
+    PARAMS = {"tube_mm": 1000.0, "ifs_speed": 1200.0,
+              "ifs_fast_speed": 3600.0, "approach_mm": 150.0, "purge_extra_mm": 90.0,
               "first_purge_mm": 100.0, "first_purge_speed": 300.0,
               "first_fan": 0.0, "second_purge_mm": 30.0,
               "second_purge_speed": 300.0, "second_fan": 255.0,
@@ -1393,7 +1435,8 @@ class ChangeLiftTest(unittest.TestCase):
     PAUSE/CANCEL parking (_TOOLHEAD_PARK_PAUSE_CANCEL), not to tool changes.
     """
 
-    PARAMS = {"tube_mm": 1000.0, "ifs_speed": 1200.0, "purge_extra_mm": 90.0,
+    PARAMS = {"tube_mm": 1000.0, "ifs_speed": 1200.0,
+              "ifs_fast_speed": 3600.0, "approach_mm": 150.0, "purge_extra_mm": 90.0,
               "first_purge_mm": 100.0, "first_purge_speed": 300.0,
               "first_fan": 0.0, "second_purge_mm": 30.0,
               "second_purge_speed": 300.0, "second_fan": 255.0,
@@ -1507,7 +1550,8 @@ class ToolChangeTest(unittest.TestCase):
     safe_y.
     """
 
-    PARAMS = {"tube_mm": 1000.0, "ifs_speed": 1200.0, "purge_extra_mm": 90.0,
+    PARAMS = {"tube_mm": 1000.0, "ifs_speed": 1200.0,
+              "ifs_fast_speed": 3600.0, "approach_mm": 150.0, "purge_extra_mm": 90.0,
               "first_purge_mm": 100.0, "first_purge_speed": 300.0,
               "first_fan": 0.0, "second_purge_mm": 30.0,
               "second_purge_speed": 300.0, "second_fan": 255.0,
@@ -1708,7 +1752,8 @@ class SensorHealTest(unittest.TestCase):
     heal.
     """
 
-    PARAMS = {"tube_mm": 1000.0, "ifs_speed": 1200.0, "purge_extra_mm": 90.0,
+    PARAMS = {"tube_mm": 1000.0, "ifs_speed": 1200.0,
+              "ifs_fast_speed": 3600.0, "approach_mm": 150.0, "purge_extra_mm": 90.0,
               "first_purge_mm": 100.0, "first_purge_speed": 300.0,
               "first_fan": 0.0, "second_purge_mm": 30.0,
               "second_purge_speed": 300.0, "second_fan": 255.0,
