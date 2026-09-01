@@ -166,6 +166,41 @@ class WorkflowMacroTest(unittest.TestCase):
                 self.assertEqual("_CONTEXT_END" in result.commands, completes)
 
 
+class StartPrintToolchangeHintTest(unittest.TestCase):
+    """The slicer states in the start line whether the job opens on a swap.
+
+    A job that begins by changing tools cuts the loaded filament as its
+    first act, so the start clean's flush is spent for nothing. Knowing
+    that is the slicer's to say - the profile's start gcode carries
+    TOOLCHANGE=1 - and the wrapper parks it where the board's clean can
+    read it, next to every other start parameter.
+    """
+
+    HEADLESS = ROOT / "macros" / "headless.cfg"
+
+    def start_print(self, extra):
+        printer = {
+            "configfile": {"settings": {}},
+            "bed_mesh": {"profiles": {}},
+        }
+        params = {"EXTRUDER_TEMP": 220, "BED_TEMP": 55}
+        params.update(extra)
+        return render_macro(self.HEADLESS, "START_PRINT",
+                            printer=printer, params=params).commands
+
+    def test_the_hint_is_stored_from_the_start_line(self):
+        commands = self.start_print({"TOOLCHANGE": 1})
+        self.assertIn(
+            "SET_GCODE_VARIABLE MACRO=_START_PRINT VARIABLE=ztoolchange"
+            " VALUE=1", commands)
+
+    def test_a_start_line_without_the_hint_stores_zero(self):
+        commands = self.start_print({})
+        self.assertIn(
+            "SET_GCODE_VARIABLE MACRO=_START_PRINT VARIABLE=ztoolchange"
+            " VALUE=0", commands)
+
+
 class TemperatureMacroTest(unittest.TestCase):
     @staticmethod
     def _wait_printer(temperature, current_state=""):

@@ -582,6 +582,44 @@ class StartPrintZmodPortTest(unittest.TestCase):
             " VARIABLE=clean_done VALUE=True", body)
 
 
+class ToolchangeFlushTest(unittest.TestCase):
+    """The clean skips its flush when the start line announced a swap.
+
+    The slicer's profile says TOOLCHANGE=1 when the job opens on a tool
+    other than the loaded lane, and the swap that follows cuts the loaded
+    filament as its first act - so a flush here is pushed out only to be
+    severed with the rest. The shake still snaps off whatever hangs on the
+    tip, and the swap's own purge establishes the new colour. The latch is
+    consumed on read: a manual clean afterwards must flush like normal.
+    """
+
+    def clean_commands(self, toolchange):
+        return render_macro(HW_AD5X, "CLEAR_NOZZLE", printer=printer_state(**{
+            "filament_switch_sensor toolhead":
+                {"filament_detected": True},
+            "mod_params": {"variables": {
+                "safe_z": 10.0, "clear_cooldown_temp": 150}},
+            "bed_mesh": {"profile_name": ""},
+            "gcode_macro _START_PRINT": {"ztoolchange": toolchange},
+        })).commands
+
+    def test_no_flush_when_the_start_line_announced_a_swap(self):
+        commands = self.clean_commands(toolchange=True)
+        self.assertFalse([c for c in commands if c.startswith("_IFS_PURGE")],
+                         commands)
+        index_of(commands, r"_IFS_SHAKE")
+
+    def test_the_hint_is_consumed_on_read(self):
+        commands = self.clean_commands(toolchange=True)
+        index_of(commands,
+                 r"SET_GCODE_VARIABLE MACRO=_START_PRINT"
+                 r" VARIABLE=ztoolchange VALUE=0")
+
+    def test_flush_when_no_swap_was_announced(self):
+        commands = self.clean_commands(toolchange=False)
+        index_of(commands, r"_IFS_PURGE FIRST_MM=10 SECOND_MM=0")
+
+
 class CooldownOnPadTest(unittest.TestCase):
     """The nozzle cools parked on the wiper pad, not in thin air.
 
