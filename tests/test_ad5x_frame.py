@@ -768,7 +768,7 @@ class PurgeParkTest(unittest.TestCase):
         """
         commands = render_macro(IFS, "_IFS_PARK_FOR_PURGE",
                                 printer=printer_state()).commands
-        self.assertEqual(("_IFS_GOTO_STATION X=52.5",), commands)
+        self.assertEqual(("_IFS_GOTO_STATION X=55.0",), commands)
 
 
 class SoakParkTest(unittest.TestCase):

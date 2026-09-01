@@ -66,7 +66,7 @@ REQUIRED_PARAMS = {
     "IFS_SELECT": {"SLOT": 1},
     "IFS_LOAD": {"SLOT": 1},
     "IFS_AUTOINSERT": {"CHANNEL": 2},
-    "_IFS_GOTO_STATION": {"X": 52.5},
+    "_IFS_GOTO_STATION": {"X": 55.0},
     "_IFS_PURGE": {"SLOT": 1},
     "_IFS_CLEAR_EXTRUDER": {"TEMP": 220},
     "_IFS_PART_FAN": {"S": 255},
