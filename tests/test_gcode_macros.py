@@ -77,10 +77,10 @@ class WorkflowMacroTest(unittest.TestCase):
         assert_order(self, result.commands, (
             "_CONTEXT_BEGIN TYPE=print",
             "_START_PRINT_PREPARE",
-            "_WAIT_TEMPERATURE CMD=M140 VALUE=80.0 BELOW=2 ABOVE=5",
-            "_HOME_IF_NEEDED",
+            "_START_PRINT_HEAT_HOME BED_TEMP=80.0",
             "_CONTEXT_STATE NAME=LEVELING",
             '_CONTEXT_STATE NAME="SKIPPING LEVELING"',
+            "_START_PRINT_REHOME",
             "_CONTEXT_STATE NAME=PARKING",
             "_WAIT_TEMPERATURE CMD=M104 VALUE=245.0",
             "_CONTEXT_STATE NAME=PRIMING",
@@ -558,28 +558,21 @@ class StartPrintCellFrameTest(unittest.TestCase):
     thermally by grams (measured 2026-08-31: hundreds of grams across a
     heat-up, and two print starts whose purge tower dug into the plate by the
     frame mismatch - homing entered one frame, the mid-flow clean tared, and
-    the mesh probed in the new one while Z0 still carried the old). The start
-    flow must tare before deriving Z0 from the probe and re-derive Z0 after
-    leveling, so the whole run shares the cell state and drift cancels.
+    the mesh probed in the new one while Z0 still carried the old). The
+    shared seam tares before deriving Z0 from the probe, at bed temperature,
+    and re-derives Z0 after leveling, so the whole run shares the cell state
+    and drift cancels. A board that follows zmod's unit overrides both seams
+    (see StartPrintZmodPortTest) - these tests hold the shared default.
     """
 
-    def start_print(self, *, weight_check=True, skip_leveling=True):
-        start = macro_status(BASE, "_START_PRINT", zskip_leveling=skip_leveling)
-        return render_macro(BASE, "_START_PRINT", printer={
-            "gcode_macro _START_PRINT": start,
-            "gcode_macro START_PRINT": {"preparation_done": True},
-            "mod_params": {"variables": {
-                "safe_z": 10, "chamber_light_mode": "MANUAL", "display": 1,
-                "check_md5": 0, "print_leveling": False, "use_kamp": False,
-                "bed_mesh_validation": False, "midi_start": "",
-                "weight_check": weight_check, "disable_priming": True,
-            }},
-            "extruder": {"temperature": 25, "can_extrude": False},
-            "bed_mesh": {"profile_name": "default", "profiles": {"default": {}}},
-        }).commands
+    def heat_home(self):
+        return render_macro(BASE, "_START_PRINT_HEAT_HOME", printer={
+            "toolhead": {"homed_axes": ""},
+            "operation_context": {"context_path": []},
+        }, params={"BED_TEMP": 80}).commands
 
     def test_homing_derives_z0_after_the_tare_when_checking(self):
-        commands = self.start_print()
+        commands = self.heat_home()
         self.assertLess(commands.index("LOAD_CELL_TARE"),
                         commands.index("_HOME_IF_NEEDED"))
 
@@ -588,7 +581,7 @@ class StartPrintCellFrameTest(unittest.TestCase):
         ## dependent property. Taring on a cold-climbing bed calibrates one
         ## sensor and prints with another - zmod heats and waits first, and
         ## 2026-08-31 cost a PEI sheet to learn it here.
-        commands = self.start_print()
+        commands = self.heat_home()
         bed_wait = next(i for i, c in enumerate(commands)
                         if c.startswith("_WAIT_TEMPERATURE CMD=M140"))
         self.assertLess(bed_wait, commands.index("LOAD_CELL_TARE"))
@@ -600,21 +593,38 @@ class StartPrintCellFrameTest(unittest.TestCase):
         ## the cell's frame regardless of the watchdog switch. Gating it on
         ## weight_check once let disarming the watchdog silently home in a
         ## stale frame, and the print that followed destroyed a sheet.
-        commands = self.start_print(weight_check=False)
+        commands = self.heat_home()
         self.assertEqual(commands.count("LOAD_CELL_TARE"), 1)
         self.assertLess(commands.index("LOAD_CELL_TARE"),
                         commands.index("_HOME_IF_NEEDED"))
 
     def test_z_is_rehomed_after_leveling_in_the_frame_it_left(self):
+        rehome = render_macro(BASE, "_START_PRINT_REHOME", printer={})
+        self.assertEqual(rehome.commands, ("G28 Z", "M400"))
         for skip in (True, False):
             with self.subTest(skip_leveling=skip):
-                commands = self.start_print(skip_leveling=skip)
+                start = macro_status(BASE, "_START_PRINT",
+                                     zskip_leveling=skip)
+                commands = render_macro(BASE, "_START_PRINT", printer={
+                    "gcode_macro _START_PRINT": start,
+                    "gcode_macro START_PRINT": {"preparation_done": True},
+                    "mod_params": {"variables": {
+                        "safe_z": 10, "chamber_light_mode": "MANUAL",
+                        "display": 1, "check_md5": 0,
+                        "print_leveling": False, "use_kamp": False,
+                        "bed_mesh_validation": False, "midi_start": "",
+                        "weight_check": False, "disable_priming": True,
+                    }},
+                    "extruder": {"temperature": 25, "can_extrude": False},
+                    "bed_mesh": {"profile_name": "default",
+                                 "profiles": {"default": {}}},
+                }).commands
                 leveling = next(i for i, c in enumerate(commands)
                                 if "LEVELING" in c)
                 priming = next(i for i, c in enumerate(commands)
                                if "PRIMING" in c)
-                rehome = commands.index("G28 Z")
-                self.assertTrue(leveling < rehome < priming, commands)
+                rehome_call = commands.index("_START_PRINT_REHOME")
+                self.assertTrue(leveling < rehome_call < priming, commands)
 
 
 if __name__ == "__main__":

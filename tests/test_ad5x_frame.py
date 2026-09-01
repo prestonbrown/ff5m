@@ -496,6 +496,92 @@ class StartPrintCleanTest(unittest.TestCase):
                         body.index("NAME=PRIMING"))
 
 
+class StartPrintZmodPortTest(unittest.TestCase):
+    """The start flow is zmod's sequence, translated to this machine's macros.
+
+    zmod is the source of truth for this board. Its start tares and homes
+    before anything waits on the bed, parks at the bin to heat, applies the
+    user's Z offset only after the mesh is built, and homes Z exactly once
+    per start. Each test below pins one of those laws against the AD5X
+    override of the shared start seams.
+    """
+
+    def heat_home(self):
+        return render_macro(HW_AD5X, "_START_PRINT_HEAT_HOME",
+                            printer=printer_state(
+                                toolhead={"homed_axes": ""},
+                                operation_context={"context_path": []}),
+                            params={"BED_TEMP": 80}).commands
+
+    def test_heating_homes_before_any_bed_wait(self):
+        ## zmod tares, homes, and parks at the bin to heat: nothing waits on
+        ## the bed before homing. Waiting here parks the head over the sheet
+        ## for the whole climb - the seam that dripped onto a PEI sheet on
+        ## 2026-08-31 - and the one at-temperature tare belongs inside the
+        ## clean, parked at the chute, in the frame the mesh can use.
+        commands = self.heat_home()
+        index_of(commands, r"M140 S80")
+        self.assertLess(commands.index("LOAD_CELL_TARE"),
+                        commands.index("_HOME_IF_NEEDED"))
+        self.assertFalse(
+            [c for c in commands if c.startswith("_WAIT_TEMPERATURE")],
+            commands)
+
+    def test_the_latch_is_cleared_at_the_top_of_every_start(self):
+        ## A cancelled start must not leak its clean-done latch into the next
+        ## one: that would skip the flush of a start that never cleaned.
+        commands = self.heat_home()
+        index_of(commands,
+                 r"SET_GCODE_VARIABLE MACRO=_START_PRINT_CLEAN"
+                 r" VARIABLE=clean_done VALUE=False")
+
+    def test_z_is_homed_once(self):
+        ## zmod homes Z once, before the clean; the mesh probes in the
+        ## clean's frame and the user offset lands after it. Re-deriving Z0
+        ## after leveling is a seam the unit port drops.
+        self.assertEqual(
+            (), render_macro(HW_AD5X, "_START_PRINT_REHOME",
+                             printer=printer_state()).commands)
+
+    def clean(self, clean_done):
+        return render_macro(HW_AD5X, "_START_PRINT_CLEAN",
+                            printer=printer_state(**{
+                                "filament_switch_sensor toolhead":
+                                    {"filament_detected": True},
+                                "gcode_macro _START_PRINT_CLEAN":
+                                    {"clean_done": clean_done},
+                            })).commands
+
+    def test_the_user_offset_lands_after_everything(self):
+        ## zmod applies the stored offset after heating and meshing,
+        ## immediately before the first extrusion, so no travel, probe, or
+        ## wipe of the start flow runs with it composed in. The multi-
+        ## millimetre stacking that drove this machine into the plate was an
+        ## offset applied before moves it should never touch.
+        index_of(self.clean(clean_done=True), r"LOAD_GCODE_OFFSET")
+
+    def test_no_second_flush_when_leveling_already_cleaned(self):
+        ## The leveling path flushes at the chute inside CLEAR_NOZZLE;
+        ## flushing again before the purge line is the doubled purge.
+        commands = self.clean(clean_done=True)
+        index_of(commands, r"LOAD_GCODE_OFFSET")
+        self.assertFalse([c for c in commands if c.startswith("_IFS_PURGE")],
+                         commands)
+
+    def test_flushes_when_no_clean_ran(self):
+        ## A print that loads a stored mesh never levels, so nothing flushed:
+        ## that start still gets its flush.
+        index_of(self.clean(clean_done=False), r"_IFS_PURGE\b")
+
+    def test_the_clean_marks_itself_done(self):
+        ## The latch is the contract between CLEAR_NOZZLE and print start;
+        ## without this line every start flushes twice.
+        body = load_macro(HW_AD5X, "CLEAR_NOZZLE").gcode
+        self.assertIn(
+            "SET_GCODE_VARIABLE MACRO=_START_PRINT_CLEAN"
+            " VARIABLE=clean_done VALUE=True", body)
+
+
 class WipeDelegationTest(unittest.TestCase):
     """_CLEAR_NOZZLE's drag becomes the wiper pass.
 
