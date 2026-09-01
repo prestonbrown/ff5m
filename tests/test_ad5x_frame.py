@@ -676,7 +676,7 @@ class PurgeParkTest(unittest.TestCase):
         commands = render_macro(IFS, "_IFS_PARK_FOR_PURGE",
                                 printer=printer_state()).commands
         station = index_of(commands, r"_IFS_GOTO_STATION")
-        mouth = index_of(commands, r"G1 Y220(\.0)?")
+        mouth = index_of(commands, r"G1 Y225(\.0)?")
         self.assertLess(station, mouth, commands)
 
 
