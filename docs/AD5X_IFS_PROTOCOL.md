@@ -354,12 +354,20 @@ filament in 1, 2 and 4).
   so it likely aliases the F50 bank. Overtemperature, open-load and short
   detection all live in `DRV_STATUS` and reach no UI today.
 
-  **`CHOPCONF` and `PWMCONF` reading `00000000` is a broken read, not a real
-  value.** The board writes both at boot, to `0x150082C3` and `0xC80D174B` - a
-  register that has been written cannot read back as zero on a driver that is
-  answering `GCONF` correctly on the same UART. Treat an all-zero answer from
-  `F52`/`F54`/`F62`/`F64` as "no answer", not as data. The written `CHOPCONF`
-  also settles the microstepping: `MRES` (bits 27-24) is 5, which is **1/8
+  **`CHOPCONF` and `PWMCONF` reading `00000000` was a broken read, not a real
+  value - since confirmed.** The firmware writes both at boot, to `0x150082C3`
+  and `0xC80D174B`, and a re-probe of the same board on 2026-09-01 read back
+  exactly those values on **both** banks:
+
+  | register | firmware writes | `F52`/`F62` read back |
+  |---|---|---|
+  | `CHOPCONF` | `150082c3` | `150082c3` |
+  | `PWMCONF` | `c80d174b` | `c80d174b` |
+
+  So treat an all-zero answer from `F52`/`F54`/`F62`/`F64` as "no answer", not
+  as data - the earlier capture caught the read path failing, most likely a
+  diagnostics batch interleaving with the status poll. The `CHOPCONF` value
+  settles the microstepping: `MRES` (bits 27-24) is 5, which is **1/8
   microstepping**, with `intpol` set so the driver interpolates to 256 inside.
 
   **Which bank is which, settled by experiment.** Both read identically at idle,
@@ -510,6 +518,9 @@ runs at **1 MHz whatever the core clock is**, the ISR fires at
 record the core clock is 54 MHz: `HSE_VALUE` is 12 MHz (`0x00B71B00`, in
 `RCC_GetClocksFreq`) and the PLL runs `HSE/2 x 9`.
 
+**Measured on hardware: 3190 steps/s**, 0.5% off the derivation. See "What the
+measurement said" below.
+
 At 1/8 microstepping that is ~400 full steps/s, and 16384 steps per turret
 revolution against a 200-step motor puts about 10:1 of reduction in between. The
 motor is turning at roughly 120 rpm. Nothing about that is near a limit.
@@ -549,46 +560,59 @@ because avoiding the re-home is worth several seconds per tool change and costs
 no firmware change. It is also the riskiest thing in the opcode set, for the
 reasons listed above.
 
-### The measurement that would settle it
+### What the measurement said
 
-The 3205 steps/s figure is derived, not timed, and it rests on `SystemCoreClock`
-holding HCLK (its initialiser is not a plain constant anywhere in the image).
-`F30` makes it directly measurable, and `tools/ifs/ifs_selector_timing.py`
-does it:
+Measured on a live board (firmware 3.0.6, all four lanes loaded) on 2026-09-01,
+with `IFS_JOG_SELECTOR` driving `F30` and the selector driver's standstill bit
+reporting arrival. Ten timed moves at three distances, least-squares fitted:
 
-```bash
-scp tools/ifs/ifs_selector_timing.py root@<printer>:/tmp/
-# on the printer, klipper stopped and no filament loaded:
-python3 /tmp/ifs_selector_timing.py --i-know-it-moves
+| distance | measured |
+|---|---|
+| 2048 steps | 2.46, 2.40, 2.30, 2.55 s |
+| 8192 steps | 4.41 s |
+| 16384 steps | 6.93, 7.03, 6.83, 6.81, 7.02 s |
+
+Arrival detection costs a fixed ~1.8 s (three `F63` confirmations at ~0.6 s
+each), so the absolute times overstate the move. That offset is constant, which
+is exactly why several distances were timed rather than one: the fit separates
+it out. Every residual falls within +/-0.13 s of a straight line, which is
+itself the evidence that the rate is constant - there is no ramp.
+
+```
+detection lag  : 1.79 s
+MEASURED       : 3190 steps/s
+derived        : 3205 steps/s      ratio 0.995
 ```
 
-It is a separate file from `ifs_probe.py` because that one's whole identity is a
-read-only allowlist that forbids `F30`; this one exists to send it, so it
-refuses to run without the flag. The sequence is:
+**Within 0.5%.** The whole chain holds - TIM6 at `ARR` 155, the APB1 prescaler
+of 4, `SystemCoreClock` carrying HCLK, one STEP edge per interrupt.
+
+The geometry is confirmed too, and visually rather than by inference: a
+16384-step jog takes the cam **all the way around through every lane**, once.
+So the eight-stop ladder is the real mechanism, not a reading of step numbers
+that happened to fit.
+
+What that makes true, in pure motion time:
+
+| move | steps | time |
+|---|---|---|
+| clamp to release, one lane | 2048 | 0.64 s |
+| slot to slot | 4096 | 1.28 s |
+| one full revolution | 16384 | 5.14 s |
+| worst-case `F24`, re-home included | 32768 | 10.3 s |
+
+And measured end to end through klipper, `IFS_CLAMP CHANNEL=3` took **7.38 s** -
+for a move the turret could have made in 1.28 s had it known where it was.
+
+To re-run it, `tools/ifs/ifs_selector_timing.py` does the same thing standalone
+on the printer (klipper stopped), or from klipper:
 
 ```
-F15 C          # force FFS_state = 5, so the board is in a known state
-F30 D0         # drive the position counter to zero, wherever it started
-               # wait for the motor to stop
-F30 D16384     # exactly 16384 steps - one turret revolution
-               # time from the command to the motor stopping
-F15 C          # leave state 129, which F30 never does on its own
+IFS_JOG_SELECTOR POSITION=0        # a known start
+IFS_JOG_SELECTOR POSITION=2048     # short leg
+IFS_JOG_SELECTOR POSITION=0
+IFS_JOG_SELECTOR POSITION=16384    # long leg; subtract to cancel the lag
 ```
-
-Arrival is the selector driver's standstill bit via `F63`, not `F13` -
-`stall_state` is the feeder's motion bit and stays clear throughout a selector
-move. From klipper, `IFS_JOG_SELECTOR POSITION=<n>` sends the same jog with the
-same cleanup.
-
-Two `F30`s rather than a home, because homing does not leave the counter at
-zero: state 4 dispatches straight on to whichever channel was last pending, so
-after an `F18` the selector is parked at a slot and the distance is unknown.
-`F30 D0` makes the start point exact without needing to read it.
-
-5.11 s means 3205 steps/s and everything above stands. Half or double that and
-the timer chain needs re-reading. The existing hardware capture already agrees:
-`clamped` measured at 3.8 s on channel 4, and channel 4's move is 12288 steps,
-which is 3.83 s at this rate.
 
 ## A companion on the wire: the IFS Jacker
 
@@ -724,14 +748,20 @@ that are inserted" gets it backwards. This repo's status object publishes it as
   the 428 and 467 followed 600 mm feeds that barely moved, the 69 followed the
   one feed that worked, and the 488 followed a 1000 mm eject of which only about
   676 mm had filament left to pull. Consistent with, not established.
-- **The selector step rate is derived, not timed.** 3205 steps/s follows from
-  TIM6's `ARR`, the APB1 prescaler and `SystemCoreClock` holding HCLK; the last
-  of those is the weak link, because `SystemCoreClock`'s initialiser is not a
-  plain constant in the image. "The measurement that would settle it" above is
-  a five-line check on hardware.
-- **`F30` has not been sent to a board.** Its decode is unambiguous but it
-  actuates, it bypasses every interlock, and it parks the state machine at 129.
-  First send it on a machine with no filament loaded.
+- ~~The selector step rate is derived, not timed.~~ **Settled**: measured at
+  3190 steps/s, 0.5% off the derivation. See "What the measurement said".
+- ~~`F30` has not been sent to a board.~~ **Settled**: sent on hardware
+  2026-09-01. It moves the selector, it does not disturb loaded filament, and
+  `F15 C` does clear the state-129 park - the board came straight back to
+  `ready` and took a normal `F24` afterwards.
+- **What `F30` does to a lane it stops between.** Every position used here was
+  one of the eight stops. A target part-way between two of them is accepted by
+  the firmware and has not been tried; whether the cam rests somewhere harmless
+  is unknown.
+- **Whether the position counter survives anything but a warm board.** It lives
+  in RAM at `0x200001E0` and nothing reads it back, so a host that tracked
+  position would be trusting a number it cannot verify. That is the open risk
+  in any `F30` fast path.
 - Whether the trailing space and the `0xFF` byte matter to any **other** IFS
   firmware revision. 3.0.1 and 3.0.5 also ignore the `0xFF` (externally
   confirmed by GhostTypes). On 3.0.6 neither is needed: the stock FlashForge host
