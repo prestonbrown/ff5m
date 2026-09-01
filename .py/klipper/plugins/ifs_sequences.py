@@ -241,18 +241,12 @@ class Parameters(object):
         ## klipper as a thermistor, and klipper reports those every 0.300 s
         ## (adc_temperature.REPORT_TIME), so the trigger can be up to 18 mm
         ## late at 3600 however fast this module polls it.
-        ##
-        ## approach_mm is sized by WHERE LANES PARK, not by how close the gear
-        ## is. A lane sits 90 mm back after an autoinsert (autoinsert_ret_mm)
-        ## and 300 mm back after being moved out of the shared path
-        ## (hub_clear_mm), and those are the ordinary tool-change cases. If the
-        ## fast phase were longer than that it would be the phase that arrives
-        ## at the gear on every normal change - three times harder than before,
-        ## with the slow approach never running at all. At 400 the fast phase
-        ## only covers tube a parked lane cannot already be sitting in, so it
-        ## helps the fully-ejected load and leaves every short one exactly as
-        ## it was.
-        "ifs_fast_speed": 3600.0, "approach_mm": 400.0,
+        ## Retracts only. A load feed ends at the toolhead sensor, which sits
+        ## upstream of the extruder gears, and klipper reports that sensor
+        ## every 0.300s - about 6mm of overshoot at 1200 and 18mm at 3600,
+        ## against a transition zone only 5-10mm wide. A retract stops on
+        ## distance with nothing ahead of it, so it has no such limit.
+        "ifs_fast_speed": 3600.0,
         ## How far a freshly threaded lane backs off once its tip reaches the
         ## toolhead sensor, so it rests below the extruder gear rather than in
         ## it.

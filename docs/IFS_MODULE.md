@@ -143,50 +143,43 @@ printer's own `Multicolour` settings block when one exists.
 
 ### Feed speed
 
-The tube transit runs in two phases. `ifs_fast_speed` (3600 mm/min) covers the
-bulk, then the last `approach_mm` (400) is taken at `ifs_speed` (1200). A full
-1000 mm load goes from about 50 s to about 30 s.
-
-`approach_mm` is sized by **where lanes park**, not by how close the gear is. A
-lane rests 90 mm back after an autoinsert and 300 mm back after being moved out
-of the shared path, and both are ordinary tool-change states. Shorten the
-approach past those and the fast phase becomes the one that arrives at the
-gear on every normal change - which is the opposite of the point. So the
-speed-up lands on the fully-ejected load, and a short one behaves exactly as it
-did before.
-
-3600 is measured, not guessed: 200 mm retracts on a loaded lane at 1200, 2400
-and 3600, each one watched by eye. The ladder stopped at 3600 because the motor
-is audibly unhappy well before anything skips - the limit that arrived first was
-the operator's ears, not the firmware, which clamps `S` nowhere at all.
-
-The last stretch stays slow for two reasons. A load *ends* by driving into the
-extruder gear - the IFS cannot push past a gear that is not turning - and
-arriving there at 60 mm/s rather than 20 is three times the impact. And the
-toolhead sensor cannot catch it: the pin is declared to klipper as a thermistor,
-and klipper reports those every 0.300 s, so the trigger can be up to 18 mm late
-at 3600 no matter how fast this module polls it.
-
-All four are `[ifs]` options, with no ceiling beyond "positive" - sane defaults,
-and the rest is yours:
+Retracts run at `ifs_fast_speed` (3600 mm/min). The full-tube eject goes from
+about 50 s to about 17 s, and the hub clear from 15 s to 5 s. Loads stay at
+`ifs_speed` (1200) - see below.
 
     [ifs]
     tube_length: 1000        # how far a lane is from the toolhead
-    ifs_speed: 1200          # the careful speed, used for the approach
-    ifs_fast_speed: 3600     # the bulk of every transit, and all retracts
-    approach_mm: 400         # how much of the load stays slow
+    ifs_speed: 1200          # loads, and the extruder-coupled retract
+    ifs_fast_speed: 3600     # every retract that stops on distance
 
-Both extremes are legitimate and render correctly. `approach_mm: 0` is a single
-fast feed the whole way. `approach_mm` at or above `tube_length` crawls the
-whole way. `ifs_fast_speed: 1200` turns the split off entirely. If your machine
-sounds unhappy, lower it - 3600 is one printer's measurement, and a rebuilt
-feeder can move it in either direction.
+Both are `[ifs]` options with no ceiling beyond "positive". 3600 is measured,
+not guessed: 200 mm retracts on a loaded lane at 1200, 2400 and 3600, each
+watched by eye. The ladder stopped at 3600 because the motor is audibly unhappy
+well before anything skips - the limit that arrived first was the operator's
+ears, not the firmware, which clamps `S` nowhere at all. If your machine sounds
+unhappy, lower it; a rebuilt feeder can move it either way.
 
-Retracts always use `ifs_fast_speed`: pulling back has no gear to arrive at, so
-there is no ramming case. The one exception is the retract inside
-`_IFS_CLEAR_EXTRUDER`, which mirrors the extruder's own `G1 E-` at
-`unload_speed` - those two drive the same strand, and speeding one alone makes
-them fight.
+One retract deliberately stays slow: the one inside `_IFS_CLEAR_EXTRUDER`
+mirrors the extruder's own `G1 E-` at `unload_speed`, and those two drive the
+same strand. Speeding one alone makes them fight.
+
+**Why loads are not sped up.** Measured on hardware, and confirmed against a
+teardown video: the toolhead sensor sits **upstream of the extruder gears**. The
+IFS alone, extruder cold and stationary, pushes filament until that sensor reads
+present - so a load feed ends *at the sensor*, not by ramming the gears.
+
+The limit is how coarsely the sensor can be watched. Its ADC transition is only
+about 5-10 mm of filament travel wide, and the pin is declared to klipper as a
+thermistor, which klipper reports every 0.300 s
+(`adc_temperature.REPORT_TIME`) - this module already polls at 20 Hz, so that
+latency is klipper's, not ours. The feed therefore runs about 6 mm past the
+trigger at 1200 and about 18 mm at 3600: from comparable to the transition zone
+to two or three times it, eating into a sensor-to-gear gap nobody has measured.
+
+Two ways to unlock it, neither done: measure that gap, or re-declare the pin as
+an `[adc_button]`, which klipper reports every 0.015 s (`buttons.py`) - 20x
+faster, at the cost of the raw ADC value the three-band classifier and
+`IFS_SENSOR_VALUE` rely on.
 
 The wire protocol the board speaks, for anyone debugging at that level:
 [AD5X_IFS_PROTOCOL.md](AD5X_IFS_PROTOCOL.md).

@@ -165,17 +165,16 @@ class IFS(object):
         ## threading it: a printer that moves filament on its own the moment
         ## someone touches it is worth being able to turn off.
         self.autoinsert = config.getboolean("autoinsert", True)
-        ## Both speeds and the approach length are tunable, with sane defaults
-        ## and no ceiling beyond "positive". 3600 is what this feeder was
-        ## measured to hold; a rebuilt one may take more or less, and the only
-        ## honest limit is what the machine sounds like. Setting ifs_fast_speed
-        ## to ifs_speed turns the split off; approach_mm at 0 or at tube_length
-        ## collapses it to a single fast or single slow feed.
+        ## Both speeds are tunable, with sane defaults and no ceiling beyond
+        ## "positive". 3600 is what this feeder was measured to hold; a rebuilt
+        ## one may take more or less, and the only honest limit is what the
+        ## machine sounds like. ifs_fast_speed drives retracts only - see
+        ## Parameters for why a load cannot use it.
         self.params = ifs_sequences.Parameters(
             tube_mm=config.getfloat("tube_length", 1000.0, above=0.),
             ifs_speed=config.getfloat("ifs_speed", 1200.0, above=0.),
-            ifs_fast_speed=config.getfloat("ifs_fast_speed", 3600.0, above=0.),
-            approach_mm=config.getfloat("approach_mm", 400.0, minval=0.))
+            ifs_fast_speed=config.getfloat("ifs_fast_speed", 3600.0,
+                                           above=0.))
 
         ## Which lane each slicer tool loads: tool n aims at _tool_map[n].
         ## The identity (tool n -> lane n+1) is the numbering the T macros

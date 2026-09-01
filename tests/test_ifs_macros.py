@@ -127,7 +127,7 @@ class AutoinsertTest(unittest.TestCase):
     """
 
     PARAMS = {"tube_mm": 1000.0, "ifs_speed": 1200.0,
-              "ifs_fast_speed": 3600.0, "approach_mm": 400.0,
+              "ifs_fast_speed": 3600.0,
               "load_empty_mm": 600.0, "load_full_mm": 550.0,
               "autoinsert_ret_mm": 90.0, "hub_clear_mm": 300.0}
 
@@ -274,7 +274,7 @@ class LoadTest(unittest.TestCase):
     """
 
     PARAMS = {"tube_mm": 1000.0, "ifs_speed": 1200.0,
-              "ifs_fast_speed": 3600.0, "approach_mm": 400.0,
+              "ifs_fast_speed": 3600.0,
               "first_purge_mm": 100.0, "first_purge_speed": 300.0,
               "first_fan": 0.0, "second_purge_mm": 30.0,
               "second_purge_speed": 300.0, "second_fan": 255.0}
@@ -301,50 +301,6 @@ class LoadTest(unittest.TestCase):
     def feeds(self, **kwargs):
         return [c for c in self.render(**kwargs) if c.startswith("IFS_FEED")]
 
-    def test_the_tube_feed_is_two_phase(self):
-        ## Measured on hardware: the feeder holds 3600 mm/min, three times
-        ## zmod's 1200. But this feed ENDS by driving into the extruder gear,
-        ## and arriving there at 60 mm/s instead of 20 is three times the
-        ## impact - so the bulk runs fast and the last stretch does not.
-        self.assertEqual(len(self.feeds()), 2, self.feeds())
-
-    def test_the_bulk_runs_fast_and_covers_all_but_the_approach(self):
-        bulk = self.feeds()[0]
-        self.assertIn("LENGTH=600", bulk)
-        self.assertIn("SPEED=3600", bulk)
-
-    def test_the_final_approach_is_slow(self):
-        approach = self.feeds()[1]
-        self.assertIn("LENGTH=400", approach)
-        self.assertIn("SPEED=1200", approach)
-
-    def test_the_two_phases_still_sum_to_the_tube_length(self):
-        ## Splitting the feed must not change how far a load can push.
-        lengths = [int(re.search(r"LENGTH=(\d+)", c).group(1))
-                   for c in self.feeds()]
-        self.assertEqual(sum(lengths), 1000)
-
-    def test_no_approach_means_a_single_fast_feed(self):
-        ## approach_mm=0 is a legitimate setting - somebody who has decided the
-        ## gear can take it. One feed, not a zero-length second.
-        feeds = self.feeds(approach_mm=0.0)
-        self.assertEqual(len(feeds), 1, feeds)
-        self.assertIn("LENGTH=1000", feeds[0])
-        self.assertIn("SPEED=3600", feeds[0])
-
-    def test_an_approach_longer_than_the_tube_means_a_single_slow_feed(self):
-        ## The other extreme: crawl the whole way. Also legitimate, and it must
-        ## not render a negative bulk length.
-        feeds = self.feeds(approach_mm=1000.0)
-        self.assertEqual(len(feeds), 1, feeds)
-        self.assertIn("LENGTH=1000", feeds[0])
-        self.assertIn("SPEED=1200", feeds[0])
-
-    def test_equal_speeds_are_harmless(self):
-        ## ifs_fast_speed = ifs_speed is how you turn the split off.
-        for feed in self.feeds(ifs_fast_speed=1200.0):
-            self.assertIn("SPEED=1200", feed)
-
     def test_the_feed_ends_on_the_toolhead_sensor(self):
         ## The length is a bound, not a target - without this a full tube of
         ## filament is pushed regardless of it arriving early. BOTH phases
@@ -359,13 +315,6 @@ class LoadTest(unittest.TestCase):
         ## before the co-push that completes it.
         for feed in self.feeds():
             self.assertIn("SOFT=1", feed)
-
-    def test_only_the_final_phase_judges_the_outcome(self):
-        ## CHECK turns on the silk and stall judgements. Running them on the
-        ## bulk phase would fail a load that is simply still travelling.
-        bulk, approach = self.feeds()
-        self.assertNotIn("CHECK=1", bulk)
-        self.assertIn("CHECK=1", approach)
 
     def test_it_heats_before_parking(self):
         commands = self.render()
@@ -405,7 +354,7 @@ class LoadedLaneTest(unittest.TestCase):
     """
 
     PARAMS = {"tube_mm": 1000.0, "ifs_speed": 1200.0,
-              "ifs_fast_speed": 3600.0, "approach_mm": 400.0,
+              "ifs_fast_speed": 3600.0,
               "unload_extruder_mm": 60.0, "unload_ifs_mm": 70.0,
               "unload_speed": 600.0, "first_purge_mm": 100.0,
               "first_purge_speed": 300.0, "first_fan": 0.0,
@@ -1114,7 +1063,7 @@ class MaterialTest(unittest.TestCase):
     """
 
     PARAMS = {"tube_mm": 1000.0, "ifs_speed": 1200.0,
-              "ifs_fast_speed": 3600.0, "approach_mm": 400.0, "purge_extra_mm": 90.0,
+              "ifs_fast_speed": 3600.0, "purge_extra_mm": 90.0,
               "first_purge_mm": 100.0, "first_purge_speed": 300.0,
               "first_fan": 0.0, "second_purge_mm": 30.0,
               "second_purge_speed": 300.0, "second_fan": 255.0,
@@ -1489,7 +1438,7 @@ class ChangeLiftTest(unittest.TestCase):
     """
 
     PARAMS = {"tube_mm": 1000.0, "ifs_speed": 1200.0,
-              "ifs_fast_speed": 3600.0, "approach_mm": 400.0, "purge_extra_mm": 90.0,
+              "ifs_fast_speed": 3600.0, "purge_extra_mm": 90.0,
               "first_purge_mm": 100.0, "first_purge_speed": 300.0,
               "first_fan": 0.0, "second_purge_mm": 30.0,
               "second_purge_speed": 300.0, "second_fan": 255.0,
@@ -1604,7 +1553,7 @@ class ToolChangeTest(unittest.TestCase):
     """
 
     PARAMS = {"tube_mm": 1000.0, "ifs_speed": 1200.0,
-              "ifs_fast_speed": 3600.0, "approach_mm": 400.0, "purge_extra_mm": 90.0,
+              "ifs_fast_speed": 3600.0, "purge_extra_mm": 90.0,
               "first_purge_mm": 100.0, "first_purge_speed": 300.0,
               "first_fan": 0.0, "second_purge_mm": 30.0,
               "second_purge_speed": 300.0, "second_fan": 255.0,
@@ -1806,7 +1755,7 @@ class SensorHealTest(unittest.TestCase):
     """
 
     PARAMS = {"tube_mm": 1000.0, "ifs_speed": 1200.0,
-              "ifs_fast_speed": 3600.0, "approach_mm": 400.0, "purge_extra_mm": 90.0,
+              "ifs_fast_speed": 3600.0, "purge_extra_mm": 90.0,
               "first_purge_mm": 100.0, "first_purge_speed": 300.0,
               "first_fan": 0.0, "second_purge_mm": 30.0,
               "second_purge_speed": 300.0, "second_fan": 255.0,

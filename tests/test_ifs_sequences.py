@@ -298,37 +298,6 @@ class TestParameters(unittest.TestCase):
             SEQ.Parameters(nonsense=1)
 
 
-class TestApproachCoversWhereLanesPark(unittest.TestCase):
-    """The fast phase must never be the one that arrives at the extruder gear.
-
-    The tube feed is split: `tube_mm - approach_mm` at `ifs_fast_speed`, then
-    `approach_mm` at `ifs_speed`. That is only safe while the fast phase covers
-    tube a parked lane cannot already be sitting in.
-
-    A lane rests `autoinsert_ret_mm` (90) back after an insert, and
-    `hub_clear_mm` (300) back after being moved out of the shared path - both
-    ordinary tool-change states. Let `approach_mm` fall below either and the
-    ordinary change arrives at the gear at the FAST speed, three times harder
-    than before, with the slow approach never running at all. The first cut of
-    this split had approach_mm at 150 and did exactly that.
-    """
-
-    def test_the_approach_covers_a_lane_parked_out_of_the_shared_path(self):
-        p = SEQ.Parameters()
-        self.assertGreaterEqual(p.approach_mm, p.hub_clear_mm)
-
-    def test_the_approach_covers_a_freshly_inserted_lane(self):
-        p = SEQ.Parameters()
-        self.assertGreaterEqual(p.approach_mm, p.autoinsert_ret_mm)
-
-    def test_the_approach_still_leaves_a_bulk_phase_to_be_worth_it(self):
-        ## If approach_mm grew past tube_mm the split would collapse to one
-        ## slow feed - correct, but then the fast speed buys nothing and the
-        ## setting is a lie. This is the guard that says so out loud.
-        p = SEQ.Parameters()
-        self.assertLess(p.approach_mm, p.tube_mm)
-
-
 class TestParametersExport(unittest.TestCase):
     def test_as_dict_carries_everything_a_macro_needs(self):
         values = SEQ.Parameters.from_multicolour(MULTICOLOUR).as_dict()
