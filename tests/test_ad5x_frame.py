@@ -582,6 +582,39 @@ class StartPrintZmodPortTest(unittest.TestCase):
             " VARIABLE=clean_done VALUE=True", body)
 
 
+class CooldownOnPadTest(unittest.TestCase):
+    """The nozzle cools parked on the wiper pad, not in thin air.
+
+    Cooling wherever the wipe left the head - forward of the back edge -
+    lets the softening ooze dribble into the gap between the wall and the
+    plate, and leaves a hanging bead for the mesh probes to find. zmod
+    cools on its wiper: the ooze lands on rubber, and a wipe pass after
+    the cooldown scrapes the frozen bead off before anything probes.
+    """
+
+    def clean_body_commands(self):
+        return render_macro(HW_AD5X, "CLEAR_NOZZLE", printer=printer_state(**{
+            "filament_switch_sensor toolhead": {"filament_detected": True},
+            "mod_params": {"variables": {
+                "safe_z": 10.0, "clear_cooldown_temp": 150}},
+            "bed_mesh": {"profile_name": ""},
+        })).commands
+
+    def test_the_cooldown_is_parked_on_the_pad_centre(self):
+        commands = self.clean_body_commands()
+        pad = index_of(commands, r"_IFS_GOTO_STATION X=75\.0")
+        fan_on = index_of(commands, r"_IFS_PART_FAN S=255")
+        self.assertLess(pad, fan_on, commands)
+
+    def test_a_wipe_follows_the_cooldown_before_the_tare(self):
+        commands = self.clean_body_commands()
+        fan_off = index_of(commands, r"_IFS_PART_FAN S=0")
+        wipe = index_of(commands, r"_IFS_WIPE")
+        tare = index_of(commands, r"LOAD_CELL_TARE")
+        self.assertLess(fan_off, wipe, commands)
+        self.assertLess(wipe, tare, commands)
+
+
 class WipeDelegationTest(unittest.TestCase):
     """_CLEAR_NOZZLE's drag becomes the wiper pass.
 
