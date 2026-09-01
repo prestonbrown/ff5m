@@ -754,16 +754,42 @@ class WeightValueSectionTest(unittest.TestCase):
 
 
 class PurgeParkTest(unittest.TestCase):
-    def test_purging_parks_at_the_bins_mouth_not_the_wiper(self):
-        """zmod's comment is categorical: the bin is entered at Y=220 only.
-        Parking at the station entry (229, the wiper) dumps purge short of
-        the bin and onto the bed - observed on the rig as misses at the
-        bin's front edge."""
+    def test_purging_happens_at_the_flap_actuated_station_depth(self):
+        """The purge position is the station entry itself, nothing forward.
+
+        zmod purges at its trash position with the flap actuated (GOTO_TRASH
+        ends deep, _PRINT_CLEAR_NOZZLE extrudes right there). Pulling the
+        nozzle forward of the entry "to the bin's mouth" parks it in front
+        of the opening instead: the head enters over the bin - actuating the
+        flap, which was the clue - then steps forward and extrudes into the
+        gap between the bin and the plate, onto the bed's back edge.
+        Observed on the rig 2026-08-31; the Y225 "mouth" was a guess, and
+        the opening is behind the entry, not in front of it.
+        """
         commands = render_macro(IFS, "_IFS_PARK_FOR_PURGE",
                                 printer=printer_state()).commands
-        station = index_of(commands, r"_IFS_GOTO_STATION")
-        mouth = index_of(commands, r"G1 Y225(\.0)?")
-        self.assertLess(station, mouth, commands)
+        self.assertEqual(("_IFS_GOTO_STATION X=52.5",), commands)
+
+
+class SoakParkTest(unittest.TestCase):
+    """The final reheat waits over the chute, not over the sheet.
+
+    The shared start parks KAMP prints beside the print area (SMART_PARK)
+    and then reheats the nozzle to print temperature right there. zmod
+    survives that because a purge line follows and catches the ooze; this
+    rig runs priming disabled, so nothing catches it and the soak drips
+    onto the middle of the sheet the print is about to start on. Observed
+    twice on the rig. The AD5X override parks the soak at the chute, where
+    a softening nozzle belongs.
+    """
+
+    def test_smart_park_parks_at_the_chute_on_this_board(self):
+        commands = render_macro(HW_AD5X, "SMART_PARK",
+                                printer=printer_state()).commands
+        index_of(commands, r"_START_PRINT_PARK")
+        self.assertFalse(
+            [c for c in commands if "print_area" in c or "gcode" in c],
+            commands)
 
 
 class CollisionWatchdogParityTest(unittest.TestCase):
