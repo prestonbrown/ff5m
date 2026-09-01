@@ -176,10 +176,25 @@ latency is klipper's, not ours. The feed therefore runs about 6 mm past the
 trigger at 1200 and about 18 mm at 3600: from comparable to the transition zone
 to two or three times it, eating into a sensor-to-gear gap nobody has measured.
 
-Two ways to unlock it, neither done: measure that gap, or re-declare the pin as
-an `[adc_button]`, which klipper reports every 0.015 s (`buttons.py`) - 20x
-faster, at the cost of the raw ADC value the three-band classifier and
-`IFS_SENSOR_VALUE` rely on.
+#### Sampling the sensor 20x faster
+
+`[ifs_toolhead_sensor]` can take the pin itself instead of reading it through a
+`temperature_sensor`, which samples it every **0.015 s** rather than 0.300 -
+under a millimetre of overshoot at any speed this feeder can reach, instead of
+6 mm at 1200 and 18 mm at 3600.
+
+    # remove [temperature_sensor filamentValue] from printer.base.cfg, then:
+    [ifs_toolhead_sensor toolhead]
+    sensor_pin: eboard:PA3
+
+It is opt-in because a pin can only be claimed once and a stock
+`printer.base.cfg` already declares that one. Leave `sensor_pin` unset and
+nothing changes. The raw value survives either way - the pin is registered back
+with `query_adc`, so `IFS_SENSOR_VALUE` and the three-band classifier work
+exactly as before. This is what an `[adc_button]` would have cost you.
+
+Doing this is what would make a faster load defensible: the reason loads stay
+slow is the 0.300 s blind spot, not the feeder.
 
 The wire protocol the board speaks, for anyone debugging at that level:
 [AD5X_IFS_PROTOCOL.md](AD5X_IFS_PROTOCOL.md).

@@ -990,14 +990,109 @@ class FakeAdcChannel:
 class FakeQueryAdc:
     def __init__(self, values):
         self.adc = {name: FakeAdcChannel(v) for name, v in values.items()}
+        self.registered = {}
+
+    def register_adc(self, name, channel):
+        self.registered[name] = channel
 
 
-def make_toolhead(values=None, adc=None):
+class FakeMcuAdc:
+    """klipper's MCU_adc, as far as claiming a pin uses it."""
+
+    def __init__(self):
+        self.sample = None
+        self.report_time = None
+        self.callback = None
+        self._last = (0.0, 0.0)
+
+    def setup_adc_sample(self, sample_time, sample_count, **kwargs):
+        self.sample = (sample_time, sample_count)
+
+    def setup_adc_callback(self, report_time, callback):
+        self.report_time = report_time
+        self.callback = callback
+
+    def get_last_value(self):
+        return self._last
+
+
+class FakePins:
+    def __init__(self):
+        self.claimed = []
+        self.adc = FakeMcuAdc()
+
+    def setup_pin(self, pin_type, pin_desc):
+        self.claimed.append((pin_type, pin_desc))
+        return self.adc
+
+
+def make_toolhead(values=None, adc=None, pins=None):
     printer = fakes.FakePrinter()
     if adc is not None:
         printer.add_object("query_adc", FakeQueryAdc(adc))
+    if pins is not None:
+        printer.add_object("pins", pins)
     config = fakes.FakeConfig("ifs_toolhead_sensor toolhead", values, printer)
     return TOOLHEAD.IfsToolheadSensor(config), printer
+
+
+class TestDirectPinSampling(unittest.TestCase):
+    """Claiming the ADC ourselves, for a sensor that can be watched in time.
+
+    Read through a `temperature_sensor`, this pin updates every 0.300 s -
+    klipper's REPORT_TIME for thermistors - because klipper reports temperature
+    slowly and nothing about the declaration says it is a filament sensor. At a
+    1200 mm/min feed that is 6 mm of travel between samples and at 3600 it is
+    18 mm, against a sensor transition only 5-10 mm wide. Claiming the pin
+    directly samples it at 0.015 s instead: under a millimetre at any speed the
+    feeder can reach.
+
+    It is opt-in because the pin can only be claimed once, and on a stock
+    machine `printer.base.cfg` already declares it as a temperature_sensor.
+    """
+
+    def test_without_sensor_pin_nothing_is_claimed(self):
+        ## The default has to keep working on an unmodified printer.
+        pins = FakePins()
+        obj, _ = make_toolhead(adc={"temperature_sensor filamentValue": 0.1},
+                               pins=pins)
+        self.assertEqual(pins.claimed, [])
+        self.assertTrue(obj.read_present())
+
+    def test_sensor_pin_claims_the_adc(self):
+        pins = FakePins()
+        make_toolhead({"sensor_pin": "eboard:PA3"}, pins=pins)
+        self.assertEqual(pins.claimed, [("adc", "eboard:PA3")])
+
+    def test_it_samples_twenty_times_faster_than_a_thermistor(self):
+        ## klipper's adc_temperature.REPORT_TIME is 0.300; this is the point of
+        ## the whole exercise, so it is pinned rather than left to a constant.
+        pins = FakePins()
+        make_toolhead({"sensor_pin": "eboard:PA3"}, pins=pins)
+        self.assertLessEqual(pins.adc.report_time, 0.015)
+        ## 0.015 * 20 is exactly klipper's 0.300, so at-least-20x is <=.
+        self.assertLessEqual(pins.adc.report_time * 20, 0.300)
+
+    def test_the_callback_is_what_the_classifier_reads(self):
+        pins = FakePins()
+        obj, _ = make_toolhead({"sensor_pin": "eboard:PA3"}, pins=pins)
+        pins.adc.callback(1234.5, 0.09)
+        self.assertTrue(obj.read_present())
+        pins.adc.callback(1235.0, 0.45)
+        self.assertFalse(obj.read_present())
+
+    def test_before_any_callback_there_is_no_reading(self):
+        ## Not "absent" - a sensor that has not reported yet knows nothing, and
+        ## fail_safe must not read that as a runout.
+        pins = FakePins()
+        obj, _ = make_toolhead({"sensor_pin": "eboard:PA3"}, pins=pins)
+        self.assertIsNone(obj.read_present())
+
+    def test_it_registers_with_query_adc_so_IFS_SENSOR_VALUE_still_works(self):
+        pins = FakePins()
+        obj, printer = make_toolhead({"sensor_pin": "eboard:PA3"},
+                                     adc={}, pins=pins)
+        self.assertTrue(printer.lookup_object("query_adc").registered)
 
 
 class TestToolheadSensor(unittest.TestCase):
