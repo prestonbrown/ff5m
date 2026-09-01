@@ -614,6 +614,58 @@ IFS_JOG_SELECTOR POSITION=0
 IFS_JOG_SELECTOR POSITION=16384    # long leg; subtract to cancel the lag
 ```
 
+## The feed motor is the opposite case
+
+The selector has no speed parameter and a compiled-in rate. The feeder has both
+a parameter and a real motion planner, and they are worth contrasting:
+
+| | selector | feeder |
+|---|---|---|
+| speed argument | none | **`S`, mm/min**, divided by 60 at `0x0801646C` |
+| step generation | bit-banged, one edge per TIM6 tick | **128-block ring queue** (`0x08016344` is `(head - tail) & 0x7f`) |
+| step timing | fixed 6410 Hz tick | TIM5 autoreload reprogrammed per event, 2 MHz resolution |
+| ceiling in firmware | `ARR` 155, needs a reflash | **none found** - nothing clamps `S` anywhere in the path |
+
+`0x08015274` computes the delay to the next step event and TIM5's autoreload is
+set to it (idle default `0x7d0` = 2000 ticks = 1 ms). That is a tickless step
+generator, so the feeder's limit is mechanical and electrical rather than a
+number in the image - and `F42 T1 I<n>` can raise the feeder's run current at
+runtime if torque is what binds.
+
+**Measured on hardware, 2026-09-01.** 200 mm retracts on a loaded lane, each one
+watched by eye:
+
+| `S` | mm/s | moved filament? |
+|---|---|---|
+| 1200 (stock, and zmod's) | 20 | yes |
+| 2400 | 40 | yes |
+| 3600 | 60 | **yes** |
+| above 3600 | | not tried - the motor is audibly unhappy well before anything skips |
+
+So the stock 1200 is about 3x conservative, and the operator-perceptible limit
+arrived before the electrical one. On the 1000 mm tube feed that is 50 s at
+stock against 17 s at 3600.
+
+### How not to measure this
+
+The first attempt at the table above produced confident numbers up to 9000
+mm/min and every one of them was wrong. Two mistakes, both worth naming because
+neither announces itself:
+
+- **The board completes a move on schedule whether or not filament moves.** It
+  runs the planner for the commanded distance at the commanded speed and reports
+  done. Timing a move therefore measures the step generator, never the filament.
+  Every bogus reading matched its prediction to within a second.
+- **Filament was still in the extruder.** The extruder's gears held it, the IFS
+  took up the slack and stalled, and the motor turned against a fixed load for
+  the whole run. `filament_switch_sensor toolhead` said so the entire time and
+  was not read until afterwards.
+
+Before timing any feed: confirm the toolhead sensor reads **false**, and have
+somebody watch the lane. The only signal that survived scrutiny is `F13`'s
+motion bit sampled at 0.3 s - continuous while filament genuinely moved,
+intermittently clear while stalled - and that is one run of each, not a rule.
+
 ## A companion on the wire: the IFS Jacker
 
 Everything above is the IFS board's own firmware. A machine with an IFS Jacker
@@ -739,7 +791,17 @@ that are inserted" gets it backwards. This repo's status object publishes it as
   but that was driven by hand. The stock UI's complete unload flow - opcode order,
   lengths, and how it coordinates with the extruder - has not been captured,
   because an unload needs filament actually loaded to the nozzle.
-- **What exactly `F40`'s stall counters count.** They are per-lane and they go
+- **What exactly `F40`'s stall counters count. Not skipped steps** - that much
+  is now ruled out. During a run of moves where the motor was stalled against a
+  held filament for ten seconds at a time and moved nothing, `F40` read 3 and 4:
+  lower than its idle baseline, not higher. In the same session the counters for
+  lanes 1, 2 and 4 changed (`55, 54, 58` to `68, 61, 65`) across moves that only
+  ever commanded lane 3. A counter that moves on lanes which were never
+  commanded, and stays low through a total stall, is not measuring shortfall on
+  the commanded lane. **Do not use `F40` to detect a stall.** The earlier reading
+  below is left for the record, but it did not survive.
+
+  They are per-lane and they go
   DOWN as well as up, so they are not a lifetime total. Three readings in one
   session - `[9, 58, 0, 119]`, then `[428, 467, 0, 69]`, then
   `[195, 161, 0, 488]` - each moved only for the lanes that had just been asked
