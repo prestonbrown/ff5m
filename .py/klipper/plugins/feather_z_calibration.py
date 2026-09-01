@@ -37,11 +37,16 @@ def calculate_z_offset(paper_contact_z, probe_trigger_z,
 
 
 def calculate_z_offset_from_reference(paper_contact_z, reference_z,
-                                      reference_base_z,
-                                      configured_probe_z_offset):
-    """Calculate a candidate from a displayed paper-test reference."""
+                                      reference_base_z):
+    """Calculate a candidate from a displayed paper-test reference.
+
+    The result is applied as the mod's gcode offset, on top of homing that
+    already carries klipper's [probe] z_offset - so the candidate must be
+    pure paper-versus-trigger. Folding the probe offset in here stacked one
+    physical delta into two live layers.
+    """
     return (float(paper_contact_z) - float(reference_z)
-            + float(reference_base_z) + float(configured_probe_z_offset))
+            + float(reference_base_z))
 
 
 def rounded_average(values):
@@ -185,19 +190,23 @@ class ZCalibrationSession:
         if contact is None:
             return None
         return calculate_z_offset_from_reference(
-            contact, self.reference_z, self.reference_base_z,
-            self.probe_z_offset)
+            contact, self.reference_z, self.reference_base_z)
 
     def adjust(self, delta):
         if self.local_z is None:
             raise ValueError("Probe the zone before adjusting Z")
         self.local_z += float(delta)
+        ## Paper contact sits above the trigger by the paper's thickness; a
+        ## step below the trigger is a step into the bed, and hunting paper
+        ## in a wrong reference frame walks it past the axis minimum.
+        if self.local_z < 0.0:
+            self.local_z = 0.0
         return self.reference_z + self.local_z
 
     def reset(self):
         if self.reference_z is None:
             raise ValueError("Probe the zone before resetting Z")
-        self.local_z = -(self.reference_base_z + self.probe_z_offset)
+        self.local_z = -(self.reference_base_z)
         return self.reference_z + self.local_z
 
     def accept(self):

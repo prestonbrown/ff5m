@@ -67,8 +67,8 @@ class ZCalibrationStateTest(unittest.TestCase):
 
         target = session.reset()
 
-        self.assertAlmostEqual(target, -0.25)
-        self.assertAlmostEqual(session.local_z, 0.25)
+        self.assertAlmostEqual(target, -0.5)
+        self.assertAlmostEqual(session.local_z, 0.0)
         self.assertAlmostEqual(session.candidate, 0.0)
 
     def test_manual_start_records_reference_and_reset_still_is_true_offset_zero(self):
@@ -83,8 +83,8 @@ class ZCalibrationStateTest(unittest.TestCase):
         self.assertAlmostEqual(session.reference_base_z, 1.5)
         self.assertAlmostEqual(session.local_z, 0.0)
         self.assertAlmostEqual(session.paper_contact_z, 1.5)
-        self.assertAlmostEqual(session.candidate, 1.25)
-        self.assertAlmostEqual(session.reset(), 0.25)
+        self.assertAlmostEqual(session.candidate, 1.5)
+        self.assertAlmostEqual(session.reset(), 0.0)
         self.assertAlmostEqual(session.candidate, 0.0)
 
     def test_average_is_rounded_and_remeasurement_replaces_zone(self):
@@ -97,7 +97,7 @@ class ZCalibrationStateTest(unittest.TestCase):
             session.local_z = local
             session.accept()
 
-        self.assertEqual(session.average, 0.002)
+        self.assertEqual(session.average, 0.252)
         self.assertEqual(session.selected, "average")
 
         session.choose_zone("front_left")
@@ -106,8 +106,8 @@ class ZCalibrationStateTest(unittest.TestCase):
         session.accept()
 
         self.assertEqual(len(session.results), 2)
-        self.assertEqual(session.results["front_left"], 0.010)
-        self.assertEqual(session.average, 0.007)
+        self.assertEqual(session.results["front_left"], 0.260)
+        self.assertEqual(session.average, 0.257)
 
     def test_single_zone_is_selected_automatically(self):
         session = ZCAL.ZCalibrationSession()
@@ -118,7 +118,7 @@ class ZCalibrationStateTest(unittest.TestCase):
         session.accept()
 
         self.assertEqual(session.selected, "rear_left")
-        self.assertEqual(session.selected_value, 0.025)
+        self.assertEqual(session.selected_value, 0.275)
 
     def test_pressure_warning_uses_800_600_hysteresis_and_probe_suppression(self):
         pressure = ZCAL.PressureHysteresis()
@@ -133,3 +133,58 @@ class ZCalibrationStateTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class PaperFloorTest(unittest.TestCase):
+    """The paper descent cannot command below the probe trigger.
+
+    Paper contact sits above bed contact by the paper's thickness. A step
+    that would put the nozzle below the trigger is a step into the bed, and
+    no paper exists there. Without the floor, hunting paper in a wrong
+    reference frame walks the commanded Z past the axis minimum and klippy
+    refuses the move - the 2026-08-31 calibration crash.
+    """
+
+    def session_at(self, trigger):
+        session = ZCAL.ZCalibrationSession()
+        session.begin(0.0, None, "", -0.25, False)
+        session.choose_zone("center")
+        session.set_trigger(trigger)
+        return session
+
+    def test_adjust_cannot_step_below_the_trigger(self):
+        session = self.session_at(-5.73)
+        self.assertAlmostEqual(session.adjust(-100.0), -5.73)
+
+    def test_normal_paper_steps_still_work(self):
+        session = self.session_at(-5.73)
+        # retract is 0.5 above the trigger; steps move toward it
+        self.assertAlmostEqual(session.adjust(-0.1), -5.33)
+        self.assertAlmostEqual(
+            session.adjust(-0.4), -5.73)  # clamped at the trigger
+
+
+class ModOffsetCompositionTest(unittest.TestCase):
+    """The saved offset must not carry klipper's probe offset.
+
+    The candidate lands in the mod's layer (a gcode offset, applied on top of
+    homing that already contains klipper's [probe] z_offset). Baking the
+    probe offset into it stacks one physical delta into two live layers -
+    the AD5X measured this as millimetres of error because its stored offset
+    is large.
+    """
+
+    def test_candidate_excludes_the_configured_probe_offset(self):
+        session = ZCAL.ZCalibrationSession()
+        session.begin(0.0, None, "", -0.25, False)
+        session.choose_zone("center")
+        session.set_trigger(-0.5)
+        session.adjust(-0.25)  # paper felt 0.25 above the trigger
+
+        # Pure paper-vs-trigger: no probe-offset term rides along.
+        self.assertAlmostEqual(session.candidate, 0.25)
+
+    def test_reference_formula_drops_the_probe_offset_term(self):
+        self.assertAlmostEqual(
+            ZCAL.calculate_z_offset_from_reference(0.1, -0.5, 0.0),
+            0.6)
