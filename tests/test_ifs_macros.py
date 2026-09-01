@@ -1683,9 +1683,16 @@ class ToolMacroTest(unittest.TestCase):
     """T0..T3 are how a sliced multi-material file asks for a change."""
 
     def test_each_tool_maps_to_its_lane(self):
-        ## The slicer counts extruders from 0; the IFS counts lanes from 1.
+        ## The slicer counts extruders from 0; the IFS counts lanes from 1,
+        ## and the identity table is what keeps that numbering: tool n aims
+        ## at lane n+1 until IFS_MAP_TOOL says otherwise. An empty printer
+        ## would render leniently here - `SLOT=` with nothing in it - so the
+        ## table is part of the fixture, not assumed.
+        identity = {"0": 1, "1": 2, "2": 3, "3": 4}
         for tool, slot in enumerate((1, 2, 3, 4)):
-            commands = render_macro(IFS, "T%d" % tool, printer={}).commands
+            commands = render_macro(
+                IFS, "T%d" % tool,
+                printer={"ifs": {"tool_map": identity}}).commands
             self.assertEqual(list(commands), ["IFS_SELECT SLOT=%d" % slot],
                              "T%d" % tool)
 

@@ -13,6 +13,9 @@ the host's conveniences only when they are present.
   a slicer writes them.
 - `IFS_STATUS`, `IFS_MATERIALS`, `IFS_DIAGNOSTICS` for asking the board and
   the slot registry what is true right now.
+- `IFS_MAP_TOOL TOOL=1 SLOT=4` to aim a slicer tool at a different lane for
+  the current print, `IFS_MAP_TOOL RESET=1` to put the identity back. See
+  [Tool remapping](#tool-remapping).
 - `IFS_SET_MATERIAL SLOT=2 TYPE=PLA COLOR=7EC8E3` to register what a slot
   holds. Colours drive a purge that scales with how far apart the outgoing
   and incoming colours are; types drive handling temperatures and the
@@ -90,6 +93,29 @@ without naming an IFS command. `SLOT=` passes through and otherwise the loaded
 lane is used; `SPEED=` is accepted and ignored, because lane speed is the
 board's own setting; `MATERIAL=` registers the slot's type first
 (`IFS_SET_MATERIAL`'s `TYPE=`).
+
+## Tool remapping
+
+A multi-material file says `T0`..`T3`; the tool map says which lane each of
+those loads. It is the identity - `T0`->1 .. `T3`->4, exactly the numbering
+above - until `IFS_MAP_TOOL TOOL=1 SLOT=4` rewrites one entry. A mapping is
+refused for a lane with nothing in it, so a tool cannot be aimed at a lane
+that cannot fulfill it. `IFS_MAP_TOOL RESET=1` restores the identity.
+
+The map is per-print state and nothing more: it is not persisted, it is
+cleared when the print ends, and a klippy restart loses it. A client that
+cares (a UI offering to match the file's colours to what is loaded) sends
+its `IFS_MAP_TOOL` lines before the print starts and re-sends them after a
+restart. `IFS_SELECT SLOT=n` from the console or a host verb does not go
+through the map - a hand that names a lane means that lane.
+
+The active map is echoed live in `printer.ifs.tool_map`, subscribable like
+every other status field. Its shape, after JSON serialization:
+
+    "tool_map": {"0": 1, "1": 2, "2": 3, "3": 4}
+
+Keys are tool numbers as strings (`"0"` is `T0`), values are the 1-based
+lane numbers `IFS_LOAD SLOT=` takes.
 
 ## Tuning
 

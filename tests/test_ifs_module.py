@@ -32,6 +32,7 @@ FORK_ONLY = ("MOVE_SAFE", "_CLIENT_VARIABLE", "LOAD_CELL_TARE")
 ## own, nothing else. No fan_generic, no MOVE_SAFE macro, no client variables.
 BARE_HOST = {
     "ifs": {"connected": True, "error": None, "loaded_channels": [1, 2, 4],
+            "tool_map": {"0": 1, "1": 2, "2": 3, "3": 4},
             "params": {"tube_mm": 1000.0, "ifs_speed": 1200.0,
                        "purge_extra_mm": 90.0, "first_purge_mm": 100.0,
                        "first_purge_speed": 300.0, "first_fan": 0.0,

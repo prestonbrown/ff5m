@@ -84,6 +84,17 @@ UNTIL_TOOLHEAD = "toolhead"
 UNTIL_CLEAR = "clear"
 UNTIL_DONE = "done"
 
+## Which print_stats states end a print. A pause is not among them: the job
+## resumes with whatever tool map it was printed with, and clearing there
+## would retarget every tool change after a RESUME.
+PRINT_END_STATES = frozenset(("complete", "cancelled", "error", "standby"))
+## How often the reactor reads print_stats.state to notice a print ending.
+## Stock klipper's print_stats sends no event at all (kalico's
+## print_stats:*_printing events are fork additions, and this module runs on
+## any host), so the tool map's lifetime is watched by polling it - one dict
+## read per second, nothing more.
+PRINT_WATCH_INTERVAL = 1.0
+
 
 class IfsBusy(Exception):
     """A queued command went unanswered, or there was nothing to answer it."""
@@ -148,6 +159,19 @@ class IFS(object):
             tube_mm=config.getfloat("tube_length", 1000.0, above=0.),
             ifs_speed=config.getfloat("ifs_speed", 1200.0, above=0.))
 
+        ## Which lane each slicer tool loads: tool n aims at _tool_map[n].
+        ## The identity (tool n -> lane n+1) is the numbering the T macros
+        ## have always had, so nothing changes until IFS_MAP_TOOL says so.
+        ## Covers the configured channels, and never persisted: the map
+        ## belongs to one print job and dies with it (see PRINT_END_STATES).
+        ## configured_channels directly, not the channel_count property: no
+        ## probe has run at construction, and the property's lock does not
+        ## exist yet.
+        self._tool_map = list(range(1, self.configured_channels + 1))
+        ## The last print_stats state the watcher saw; None until the first
+        ## read, so a first read of "printing" is not mistaken for an end.
+        self._print_state = None
+
         self._lock = threading.Lock()
         self._stopping = threading.Event()
         ## Wakes the poll thread the moment work arrives, so a queued command
@@ -179,6 +203,9 @@ class IFS(object):
             self.printer.register_event_handler(event, self._stop)
 
         gcode = self.printer.lookup_object("gcode")
+        gcode.register_command("IFS_MAP_TOOL", self.cmd_IFS_MAP_TOOL,
+                               desc="Aim a slicer tool (T<n>) at another IFS "
+                                    "lane, for this print only")
         gcode.register_command("IFS_REQUIRE_TOOLHEAD",
                                self.cmd_IFS_REQUIRE_TOOLHEAD,
                                desc="Fail unless the toolhead sensor sees "
@@ -214,6 +241,30 @@ class IFS(object):
         self._thread = threading.Thread(target=self._poll_loop, name="ifs-poll")
         self._thread.daemon = True
         self._thread.start()
+        self.reactor.register_timer(
+            self._watch_print_state,
+            self.reactor.monotonic() + PRINT_WATCH_INTERVAL)
+
+    def _watch_print_state(self, eventtime):
+        """Read print_stats once and reschedule.
+
+        Runs on the reactor, like everything that touches another klipper
+        object. A host without print_stats (no virtual_sdcard) simply never
+        ends a print, so there is nothing to watch.
+        """
+        print_stats = self.printer.lookup_object("print_stats", None)
+        if print_stats is not None:
+            self._note_print_state(print_stats.get_status(eventtime)
+                                   .get("state"))
+        return eventtime + PRINT_WATCH_INTERVAL
+
+    def _note_print_state(self, state):
+        """End the tool map's lifetime when the print it belonged to ends."""
+        ended = (self._print_state == "printing"
+                 and state in PRINT_END_STATES)
+        self._print_state = state
+        if ended:
+            self._reset_tool_map("the print ended")
 
     def _stop(self):
         self._stopping.set()
@@ -475,6 +526,14 @@ class IFS(object):
             ## Macros own the choreography, so they need the numbers. Sourced
             ## from the printer's own Multicolour block where available.
             "params": self.params.as_dict(),
+            ## The slicer-tool -> lane table the T macros route through.
+            ## String keys on purpose: this dict is what a status subscriber
+            ## receives, and a JSON object's keys are strings whatever Python
+            ## held, so what we publish and what a WebSocket client parses
+            ## are one and the same shape. The lanes are the 1-based numbers
+            ## SLOT= and loaded_channels speak, never tool indices.
+            "tool_map": {str(tool): lane
+                         for tool, lane in enumerate(self._tool_map)},
         }
         if status is not None:
             info.update({
@@ -791,6 +850,49 @@ class IFS(object):
         self._move(gcmd, "F11", ifs_status.UNLOADING, UNTIL_DONE, "retract")
 
     ## -- gcode --------------------------------------------------------------
+
+    def _reset_tool_map(self, why):
+        """Put the identity back, and say so when a mapping was dropped.
+
+        No error when the map already is the identity: RESET=1 and a print
+        ending both land here with nothing to do, and neither is a problem.
+        """
+        identity = list(range(1, len(self._tool_map) + 1))
+        if self._tool_map != identity:
+            logging.info("IFS: %s; tool map back to identity", why)
+        self._tool_map = identity
+
+    ## GCODE_SAFE: reads the cached snapshot and raises gcmd.error on a lane
+    ## that cannot fulfill the tool - the outcome this check exists for.
+    def cmd_IFS_MAP_TOOL(self, gcmd):
+        """Aim a slicer tool at a lane, for this print only.
+
+        The T macros read the table, so a file written `T2` loads whichever
+        lane tool 2 is aimed at instead of always lane 3. RESET=1 restores
+        the identity. Nothing here is persisted; the print ending clears the
+        table, and a klippy restart loses it.
+        """
+        if gcmd.get_int("RESET", 0):
+            self._reset_tool_map("IFS_MAP_TOOL RESET")
+            gcmd.respond_info("IFS: tool map reset; every tool back to its "
+                              "own lane")
+            return
+        tool = gcmd.get_int("TOOL", minval=0, maxval=len(self._tool_map) - 1)
+        slot = gcmd.get_int("SLOT", minval=1, maxval=len(self._tool_map))
+        status = self.latest_status()
+        if status is None:
+            raise gcmd.error("IFS_MAP_TOOL: no IFS reading yet, so lane %d "
+                             "cannot be checked for filament" % slot)
+        if slot not in status.loaded_channels:
+            ## Refused here rather than at the T that would load it: a print
+            ## file failing mid-run at a tool change is the expensive way to
+            ## learn the lane was empty, and IFS_LOAD's own guard never sees
+            ## a lane the map never named.
+            raise gcmd.error("IFS_MAP_TOOL: lane %d has no filament; a tool "
+                             "may only be aimed at a lane that can fulfill "
+                             "it" % slot)
+        self._tool_map[tool] = slot
+        gcmd.respond_info("IFS: tool T%d -> lane %d" % (tool, slot))
 
     ## GCODE_SAFE: reads one sensor and raises gcmd.error, which is the
     ## command failing - the outcome this whole gate exists to get. The read
