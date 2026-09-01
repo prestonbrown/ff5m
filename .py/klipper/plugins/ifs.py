@@ -60,6 +60,16 @@ DEFAULT_MOVE_TIMEOUT = 120.0
 ## A diagnostics read is fourteen queries and takes about five seconds on the
 ## board, so it needs longer than an ordinary command.
 DIAGNOSTICS_TIMEOUT = 30.0
+
+## How long a selector jog may take before it is given up on. One full turn of
+## the turret is 16384 steps at roughly 3200 steps/s - about five seconds - and
+## the wait polls the driver rather than trusting that figure.
+SELECTOR_JOG_TIMEOUT = 30.0
+
+## Consecutive standstill readings that end a jog. The standstill bit lags the
+## last step, and a single sample of a bit that toggles is noise; the same rule
+## the move watcher uses for the feeder's motion bit.
+SELECTOR_STANDSTILL_SAMPLES = 3
 ## How long to let the board finish acting on a command it already accepted.
 ## Clamping is mechanical and quick; this only has to outlast that.
 SETTLE_TIMEOUT = 15.0
@@ -232,7 +242,12 @@ class IFS(object):
                 ("IFS_MARK_INSERTED", self.cmd_IFS_MARK_INSERTED,
                  "Tell the board a channel now holds filament"),
                 ("IFS_RESET_DRIVER", self.cmd_IFS_RESET_DRIVER,
-                 "Reset the board's stepper driver after a fault")):
+                 "Reset the board's stepper driver after a fault"),
+                ("IFS_REINIT_DRIVERS", self.cmd_IFS_REINIT_DRIVERS,
+                 "Re-initialise both TMC drivers, including the selector's"),
+                ("IFS_JOG_SELECTOR", self.cmd_IFS_JOG_SELECTOR,
+                 "Diagnostic: drive the selector to an absolute step "
+                 "position without homing")):
             gcode.register_command(name, handler, desc=description)
 
     ## -- lifecycle ----------------------------------------------------------
@@ -728,6 +743,101 @@ class IFS(object):
         ## which matters most here, because this is the recovery path.
         self._run(gcmd, "F15 C", lambda ops: ops.reset_driver())
         gcmd.respond_info("driver reset")
+
+    def cmd_IFS_REINIT_DRIVERS(self, gcmd):
+        ## F43 rewrites GCONF, IHOLD_IRUN, TPOWERDOWN, CHOPCONF and PWMCONF on
+        ## BOTH drivers. F15 C, the other "reset", is not a driver operation at
+        ## all - it drops the feeder's enable line and forces the state machine
+        ## to READY - which is why a selector carrying GSTAT's reset flag never
+        ## cleared and had no recovery before this.
+        ##
+        ## Gated on READY because F43 does not stop the state machine first:
+        ## sent mid-move it reconfigures a driver that is being stepped.
+        self._require_ready(gcmd, "re-initialise the drivers")
+        self._run(gcmd, "F43", lambda ops: ops.reinit_drivers())
+        gcmd.respond_info("both TMC drivers re-initialised; run current is "
+                          "back to the board's stock IRUN 9")
+
+    def cmd_IFS_JOG_SELECTOR(self, gcmd):
+        """Drive the selector to an absolute position. Diagnostic only.
+
+        F30 is the only way to move the selector without the full re-home that
+        every F24 performs, which makes it the way to measure the selector's
+        step rate. It is also the sharpest opcode on the board: it bypasses the
+        clamp sequencing, leaves `chan` reporting whichever lane was selected
+        before, and parks the state machine at 129 for ever. The F15 C that
+        frees it runs on every path out of here, including the failing ones.
+        """
+        position = gcmd.get_int("POSITION", minval=0,
+                                maxval=ifs_operations.SELECTOR_STEPS_PER_TURN)
+        try:
+            ## Inside the try, not before it. A jog that fails on the wire is
+            ## the case where the board's state is least known - the firmware
+            ## has no refusal payload for F30, so an unexpected answer means a
+            ## desynced stream, not a command that was declined. Cleaning up
+            ## only after a clean send would skip exactly the case that needs
+            ## it.
+            self._run(gcmd, "F30 D%d" % position,
+                      lambda ops: ops.jog_selector(position))
+            arrived = self._await_selector()
+        finally:
+            ## Unconditional: an unfreed 129 answers every later feed with
+            ## "FFS not ready.", and the failure that stranded it would be
+            ## blamed on whatever ran next.
+            self._free_selector(gcmd)
+        if arrived is None:
+            gcmd.respond_info(
+                "selector jog to %d sent, but the driver never reported "
+                "standstill within %gs" % (position, SELECTOR_JOG_TIMEOUT))
+            return
+        gcmd.respond_info("selector jogged to %d in %.2fs"
+                          % (position, arrived))
+
+    def _await_selector(self):
+        """Seconds the jog took, or None if standstill never confirmed.
+
+        Watches the selector driver's standstill bit, which is the only place
+        this motor reports: F13's stall_state is the feeder's motion bit and
+        stays clear throughout a selector move.
+        """
+        started = self.reactor.monotonic()
+        deadline = started + SELECTOR_JOG_TIMEOUT
+        still = 0
+        while self.reactor.monotonic() < deadline:
+            self.reactor.pause(self.reactor.monotonic() + MOVE_POLL_INTERVAL)
+            try:
+                moving = self.run_operation(
+                    "F63",
+                    lambda ops: ifs_diagnostics.read_driver_motion(
+                        ops.link, ifs_diagnostics.SELECTOR))
+            except Exception:
+                ## One bad read mid-move is not a reason to abandon a move that
+                ## is still running. Unknown, keep watching, and let the
+                ## deadline be what ends this - a link that is really gone
+                ## reaches it soon enough, and the cleanup runs either way.
+                moving = None
+            ## None is "the driver did not answer", not "it has arrived".
+            still = still + 1 if moving is False else 0
+            if still >= SELECTOR_STANDSTILL_SAMPLES:
+                return self.reactor.monotonic() - started
+        return None
+
+    def _free_selector(self, gcmd):
+        """F15 C, the only way out of state 129. Never raises."""
+        try:
+            self.run_operation("F15 C", lambda ops: ops.reset_driver())
+        except Exception as exc:
+            gcmd.respond_info("IFS: the selector may still be parked in state "
+                              "129 - F15 C failed: %s" % exc)
+
+    def _require_ready(self, gcmd, what):
+        status = self.latest_status()
+        if status is None:
+            raise gcmd.error("IFS: cannot %s - the board has not reported its "
+                             "state yet" % what)
+        if not status.is_ready:
+            raise gcmd.error("IFS: cannot %s while the board is %s"
+                             % (what, status.activity_name))
 
     def _settle(self, gcmd, channel, what, timeout=SETTLE_TIMEOUT):
         """Wait for the board to come back to READY after a command.

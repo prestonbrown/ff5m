@@ -13,6 +13,18 @@ the host's conveniences only when they are present.
   a slicer writes them.
 - `IFS_STATUS`, `IFS_MATERIALS`, `IFS_DIAGNOSTICS` for asking the board and
   the slot registry what is true right now.
+- `IFS_REINIT_DRIVERS` to re-initialise both TMC drivers. This is the only
+  recovery for a **selector** driver carrying GSTAT's reset flag -
+  `IFS_RESET_DRIVER` (F15 C) is not a driver operation at all; it drops the
+  feeder's enable line and writes no TMC register. Refused unless the board is
+  idle, and it puts the run current back to the board's stock IRUN 9.
+- `IFS_JOG_SELECTOR POSITION=<steps>` - **diagnostic**, and the sharpest thing
+  here. It drives the selector to an absolute position without the re-home
+  every clamp performs, which is how the selector's step rate gets measured,
+  but it bypasses the board's sequencing, leaves `chan` reporting the previous
+  lane, and would strand the board in state 129 if the command did not free it
+  on the way out. Not part of any sequence. See
+  [the protocol doc](AD5X_IFS_PROTOCOL.md) before using it.
 - `IFS_MAP_TOOL TOOL=1 SLOT=4` to aim a slicer tool at a different lane for
   the current print, `IFS_MAP_TOOL RESET=1` to put the identity back. See
   [Tool remapping](#tool-remapping).

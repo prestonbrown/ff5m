@@ -88,6 +88,10 @@ say "loaded: none" whatever was in the extruder.
 | F112 | stop | `stop()` | done |
 | F23 | mark inserted | `mark_inserted()` | in ops, **no gcode command** |
 | F15 | driver reset | `IFS_RESET_DRIVER` | done, and wired to the retry |
+| F43 | re-init both TMC drivers | `IFS_REINIT_DRIVERS` | done; the selector reset we lacked |
+| F42 | set a motor's run current | `parse_stepper` reads it | read-only; the reply is a host-set shadow, not the driver |
+| F30 | absolute selector jog | `IFS_JOG_SELECTOR` | done, **diagnostic only** - it bypasses every interlock |
+| F20 | no-op ping | - | not wired; nothing needs it yet |
 
 ## zmod's python commands
 
@@ -395,8 +399,14 @@ the only thing that distinguishes them, and it is worth reading BEFORE
 concluding anything about filament.
 
 `F15 C` clears the **feeder** flag, observed directly. It did not clear the
-**selector** flag, and there is no selector reset in the opcode set - zmod has
-none either.
+**selector** flag, and zmod has no selector reset either - but the opcode set
+does. **`F43` re-runs the full TMC initialisation on both drivers**, rewriting
+`GCONF`, `IHOLD_IRUN`, `TPOWERDOWN`, `CHOPCONF` and `PWMCONF` with the values the
+board writes at boot. `F15 C` is not a driver operation at all: it drops the
+feeder's enable line and forces `FFS_state = 5`, and writes no TMC register.
+See "The five opcodes nobody had pinned down" in `AD5X_IFS_PROTOCOL.md` -
+including the two ways `F43` can bite (it discards any `F42` current, and it does
+not stop the state machine first).
 
 **The `reset` flag is noise, not a fault.** Measured across a power cycle: both
 drivers read clear on a fresh boot, and both read `reset` again after a run of

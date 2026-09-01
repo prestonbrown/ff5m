@@ -104,10 +104,70 @@ class TestCommandSyntax(unittest.TestCase):
         op.reset_driver()
         self.assertEqual(link.sent, ["F15 C"])
 
+    def test_reinit_drivers(self):
+        op, link = ops({"F43": ""})
+        op.reinit_drivers()
+        self.assertEqual(link.sent, ["F43"])
+
+    def test_jog_selector(self):
+        ## D is an absolute position in the same step coordinates the board's
+        ## own moves use, so D4096 lands where F24 C2 puts the turret.
+        op, link = ops({"F30 D4096": ""})
+        op.jog_selector(4096)
+        self.assertEqual(link.sent, ["F30 D4096"])
+
     def test_lengths_are_sent_as_integers(self):
         op, link = ops({"F10 C1 L70 S600": "FFS channel 1 feeding."})
         op.feed(1, 70.4, 600.0)
         self.assertEqual(link.sent, ["F10 C1 L70 S600"])
+
+
+class TestSelectorJogValidation(unittest.TestCase):
+    """F30 takes a raw step count and the board does not sanity-check it.
+
+    The firmware compares the position counter to the target for equality and
+    steps toward it, so a target it cannot reach is a motor that runs until
+    something stops it. Every bound is checked here rather than there.
+    """
+
+    def test_the_slot_ladder_is_accepted(self):
+        for position in (0, 2048, 4096, 6144, 8192, 10240, 12288, 14336):
+            op, link = ops({"F30 D%d" % position: ""})
+            op.jog_selector(position)
+            self.assertEqual(link.sent, ["F30 D%d" % position])
+
+    def test_a_full_revolution_is_accepted(self):
+        ## 16384 is one turn from zero, which is what the timing probe sends.
+        op, link = ops({"F30 D16384": ""})
+        op.jog_selector(16384)
+        self.assertEqual(link.sent, ["F30 D16384"])
+
+    def test_out_of_range_positions_are_refused_locally(self):
+        for position in (-1, -2048, 16385, 100000):
+            op, link = ops()
+            with self.assertRaises(OPS.IfsOperationError):
+                op.jog_selector(position)
+            self.assertEqual(link.sent, [])
+
+    def test_a_non_integer_position_is_refused(self):
+        for position in (None, "4096", 4096.5, True):
+            op, link = ops()
+            with self.assertRaises(OPS.IfsOperationError):
+                op.jog_selector(position)
+            self.assertEqual(link.sent, [])
+
+
+class TestSelectorGeometry(unittest.TestCase):
+    """The turret constants, which the ladder above is derived from."""
+
+    def test_eight_stops_make_one_revolution(self):
+        self.assertEqual(OPS.SELECTOR_STEPS_PER_TURN,
+                         8 * OPS.SELECTOR_SLOT_PITCH)
+
+    def test_clamp_positions_are_two_slots_apart(self):
+        ## Each lane has a clamp stop and a release stop one pitch further on,
+        ## so consecutive lanes' clamp positions are two pitches apart.
+        self.assertEqual(OPS.SELECTOR_SLOT_PITCH * 2, 4096)
 
 
 class TestChannelValidation(unittest.TestCase):
@@ -180,6 +240,16 @@ class TestReplyHandling(unittest.TestCase):
         op, _ = ops({"F18": "something new"})
         with self.assertRaises(OPS.IfsOperationError):
             op.release_all()
+
+    def test_a_refused_reinit_is_not_silently_accepted(self):
+        op, _ = ops({"F43": "FFS not ready."})
+        with self.assertRaises(OPS.IfsOperationError):
+            op.reinit_drivers()
+
+    def test_a_refused_jog_is_not_silently_accepted(self):
+        op, _ = ops({"F30 D4096": "FFS not ready."})
+        with self.assertRaises(OPS.IfsOperationError):
+            op.jog_selector(4096)
 
     def test_success_returns_the_response(self):
         op, _ = ops({"F24 C2": "chan 2."})

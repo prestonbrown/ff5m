@@ -809,6 +809,173 @@ class TestGcode(unittest.TestCase):
         self.assertIn("IFS_STATUS", gcode.commands)
         self.assertIn("IFS_DIAGNOSTICS", gcode.commands)
 
+    def test_the_new_maintenance_commands_are_registered(self):
+        _, printer, _ = make_ifs()
+        gcode = printer.lookup_object("gcode")
+        self.assertIn("IFS_REINIT_DRIVERS", gcode.commands)
+        self.assertIn("IFS_JOG_SELECTOR", gcode.commands)
+
+
+class TestReinitDrivers(unittest.TestCase):
+    """F43 rewrites both TMC drivers with the values the board uses at boot.
+
+    It is the only selector-side driver reset in the opcode set - F15 C drops
+    the feeder's enable line and writes no TMC register at all.
+    """
+
+    def setUp(self):
+        self.obj, self.printer, self.link = make_ifs(replies=[f13()])
+        self.obj._connect()
+        self.obj._thread = AliveThread()
+        self.reactor = self.printer.reactor
+
+        def tick():
+            if not self.obj._run_queued():
+                self.obj._poll_once()
+        self.reactor.on_pause = tick
+        self.gcode = self.printer.lookup_object("gcode")
+
+    def run_command(self, params=None):
+        gcmd = fakes.FakeGcmd(params or {}, self.gcode)
+        self.obj.cmd_IFS_REINIT_DRIVERS(gcmd)
+        return gcmd
+
+    def test_it_sends_f43(self):
+        self.obj._poll_once()
+        self.link.replies = [""] + [f13()] * 4
+        self.run_command()
+        self.assertIn("F43", self.link.asked)
+
+    def test_it_refuses_unless_the_board_is_ready(self):
+        ## F43 reconfigures both drivers and does not stop the state machine
+        ## first, so sending it mid-move reconfigures a driver that is being
+        ## stepped underneath it.
+        self.link.replies = [f13(state=STATUS.LOADING)]
+        self.obj._poll_once()
+        with self.assertRaises(fakes.FakeGcmd.error):
+            self.run_command()
+        self.assertNotIn("F43", self.link.asked)
+
+    def test_it_refuses_when_the_board_has_never_answered(self):
+        ## No snapshot means no evidence the board is idle, which is not the
+        ## same as evidence that it is.
+        obj, printer, _ = make_ifs()
+        gcode = printer.lookup_object("gcode")
+        with self.assertRaises(fakes.FakeGcmd.error):
+            obj.cmd_IFS_REINIT_DRIVERS(fakes.FakeGcmd({}, gcode))
+
+    def test_it_says_the_run_current_went_back_to_stock(self):
+        ## F43 rewrites IHOLD_IRUN, so any F42 current set beforehand is gone.
+        ## Silence about that would strand someone who had just raised it.
+        self.obj._poll_once()
+        self.link.replies = [""] + [f13()] * 4
+        self.run_command()
+        self.assertIn("current", " ".join(self.gcode.responses).lower())
+
+    def test_a_refusal_fails_the_command_rather_than_the_printer(self):
+        self.obj._poll_once()
+        self.link.replies = ["FFS not ready."] + [f13()] * 4
+        with self.assertRaises(fakes.FakeGcmd.error):
+            self.run_command()
+
+
+class TestJogSelector(unittest.TestCase):
+    """F30 is the only opcode that moves the selector without homing first.
+
+    It also parks the state machine at 129 and never leaves, so every path
+    through this command has to issue the F15 C that frees it.
+    """
+
+    def setUp(self):
+        self.obj, self.printer, self.link = make_ifs(replies=[f13()])
+        self.obj._connect()
+        self.obj._thread = AliveThread()
+        self.reactor = self.printer.reactor
+
+        def tick():
+            if not self.obj._run_queued():
+                self.obj._poll_once()
+        self.reactor.on_pause = tick
+        self.gcode = self.printer.lookup_object("gcode")
+        self.obj._poll_once()
+
+    def run_command(self, position=4096):
+        gcmd = fakes.FakeGcmd({"POSITION": str(position)}, self.gcode)
+        self.obj.cmd_IFS_JOG_SELECTOR(gcmd)
+        return gcmd
+
+    def arrived(self, moving_reads=1):
+        """Replies for a jog: the F30 ack, some motion, then standstill."""
+        return ([""]
+                + ["DRV_STATUS: 00090000"] * moving_reads
+                + ["DRV_STATUS: 80000000"] * 8
+                + [""] + [f13()] * 20)
+
+    def test_it_sends_the_jog_then_frees_the_state_machine(self):
+        self.link.replies = self.arrived()
+        self.run_command(4096)
+        self.assertIn("F30 D4096", self.link.asked)
+        self.assertIn("F15 C", self.link.asked)
+        self.assertLess(self.link.asked.index("F30 D4096"),
+                        self.link.asked.index("F15 C"))
+
+    def test_it_waits_for_the_selector_to_stop(self):
+        ## The selector's standstill bit is the only thing that reports this
+        ## motor. F13's stall_state is the feeder's.
+        self.link.replies = self.arrived(moving_reads=4)
+        self.run_command()
+        self.assertGreaterEqual(self.link.asked.count("F63"), 4)
+
+    def test_the_state_machine_is_freed_even_when_the_jog_is_refused(self):
+        ## The safety property. A refused F30 leaves the board wherever it was,
+        ## but a jog that started and then failed would strand it at 129.
+        self.link.replies = ["FFS not ready."] + [""] + [f13()] * 20
+        with self.assertRaises(fakes.FakeGcmd.error):
+            self.run_command()
+        self.assertIn("F15 C", self.link.asked)
+
+    def test_the_state_machine_is_freed_even_when_arrival_never_confirms(self):
+        ## The driver answering nothing must not leave the board parked at 129.
+        self.link.replies = [""] + ["DRV_STATUS: 00090000"] * 400
+        self.run_command()
+        self.assertIn("F15 C", self.link.asked)
+
+    def test_a_transient_read_failure_does_not_abandon_the_move(self):
+        ## One failed F63 in the middle of a five-second move is not a reason
+        ## to give up on it - and giving up early would report the jog as
+        ## finished when the turret was still turning.
+        self.link.replies = ([""]
+                             + ["DRV_STATUS: 00090000"]
+                             + [None]
+                             + ["DRV_STATUS: 80000000"] * 8
+                             + [""] + [f13()] * 20)
+        original = self.link.request
+
+        def flaky(command):
+            if self.link.replies and self.link.replies[0] is None:
+                self.link.replies.pop(0)
+                self.link.asked.append(command)
+                raise RuntimeError("board went quiet")
+            return original(command)
+
+        self.link.request = flaky
+        self.run_command()
+        self.assertIn("F15 C", self.link.asked)
+        self.assertIn("jogged", " ".join(self.gcode.responses))
+
+    def test_an_out_of_range_position_never_reaches_the_board(self):
+        self.link.replies = [f13()] * 4
+        for position in (-1, 16385):
+            with self.assertRaises(fakes.FakeGcmd.error):
+                self.run_command(position)
+        self.assertNotIn("F15 C", self.link.asked)
+        self.assertFalse([c for c in self.link.asked if c.startswith("F30")])
+
+    def test_position_is_required(self):
+        gcmd = fakes.FakeGcmd({}, self.gcode)
+        with self.assertRaises(Exception):
+            self.obj.cmd_IFS_JOG_SELECTOR(gcmd)
+
 
 class FakeAdcChannel:
     def __init__(self, value):

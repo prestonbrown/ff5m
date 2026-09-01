@@ -313,6 +313,23 @@ DRIVER_BANKS = (
 )
 
 
+def read_driver_motion(link, label):
+    """Is that motor turning right now? None when the driver did not answer.
+
+    One register rather than read_diagnostics' fourteen, because this is polled
+    in a loop while something moves. The selector reports nowhere else: F13's
+    stall_state is the feeder's motion bit, so watching a selector move means
+    watching its standstill bit here.
+
+    None and False are different answers. A driver that did not answer has not
+    said it arrived, and a caller waiting for a move to end must not treat
+    silence as arrival.
+    """
+    opcode = dict(DRIVER_BANKS)[label]["drv_status"]
+    payload = link.request(opcode).payload
+    return DriverSnapshot(label, drv_status=parse_register(payload)).is_moving
+
+
 def read_diagnostics(link, capabilities=None):
     """Read everything diagnostic. Every opcode used here is a query.
 

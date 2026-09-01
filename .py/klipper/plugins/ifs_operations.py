@@ -1,9 +1,10 @@
 ## Operations on the AD5X IFS (4-channel filament system) board.
 ##
-## The nine opcodes that do something: feed, retract, clamp, release, mark
-## inserted, stop, reset the driver, release everything, and poll. Each one
-## validates its arguments, builds the command, and checks the board's reply
-## against what the firmware says success looks like.
+## The opcodes that do something: feed, retract, clamp, release, mark
+## inserted, stop, reset the driver, re-initialise both drivers, jog the
+## selector, release everything, and poll. Each one validates its arguments,
+## builds the command, and checks the board's reply against what the firmware
+## says success looks like.
 ##
 ## Sits on IfsLink for the wire and IfsStatus for the F13 line. Knows nothing
 ## about klippy, so it is exercised off-rig against a scripted board.
@@ -19,6 +20,15 @@
 ## This file may be distributed under the terms of the GNU GPLv3 license
 
 from . import ifs_status
+
+
+## The selector is a rotating turret with eight stops 2048 steps apart: each
+## lane has a clamp stop and a release stop one pitch further round, and eight
+## of them close the circle. Every selector move the firmware makes itself uses
+## these coordinates - "clamp channel 2" IS "drive the turret to 4096" - and F30
+## shares the counter, so a jog and a clamp speak the same units.
+SELECTOR_SLOT_PITCH = 2048
+SELECTOR_STEPS_PER_TURN = 8 * SELECTOR_SLOT_PITCH
 
 
 class IfsOperationError(Exception):
@@ -124,6 +134,33 @@ class IfsOperations(object):
         """
         return self._expect("F15 C", ("",))
 
+    def reinit_drivers(self):
+        """Re-run the board's TMC initialisation on both drivers.
+
+        Rewrites GCONF, IHOLD_IRUN, TPOWERDOWN, CHOPCONF and PWMCONF with the
+        values the board writes at boot. This is the only opcode that touches
+        the selector's driver - reset_driver (F15) drops the feeder's enable
+        line and writes no TMC register - so it is the recovery for a selector
+        stuck with GSTAT's reset flag set.
+
+        It rewrites IHOLD_IRUN too, so any run current set with F42 is gone
+        afterwards, and it does not stop the state machine first.
+        """
+        return self._expect("F43", ("",))
+
+    def jog_selector(self, position):
+        """Drive the selector to an absolute step position, without homing.
+
+        The one opcode that moves the selector without the full re-home every
+        F24 does. It bypasses the board's own sequencing entirely: nothing
+        checks that a lane is free, `chan` is not updated, and the state machine
+        parks at 129 and stays there until something writes a state - F15 C is
+        the way out. A caller that does not clean up leaves the board refusing
+        every feed with "FFS not ready.".
+        """
+        position = self._step_position(position)
+        return self._expect("F30 D%d" % position, ("",))
+
     def poll_status(self):
         """One F13 reading as an IfsStatus."""
         response = self._link.request("F13")
@@ -147,6 +184,25 @@ class IfsOperations(object):
             raise IfsOperationError(
                 "channel %d is out of range; this board has %d"
                 % (channel, count))
+
+    @staticmethod
+    def _step_position(position):
+        """An absolute selector position, checked here because nothing else does.
+
+        The firmware stops the jog on an exact equality against its position
+        counter and otherwise just keeps stepping, so a target outside the
+        turret's travel is a motor that runs until something stops it. One full
+        turn is accepted - that is the timing probe's move.
+        """
+        if not isinstance(position, int) or isinstance(position, bool):
+            raise IfsOperationError(
+                "selector position must be an integer number of steps, got %r"
+                % (position,))
+        if position < 0 or position > SELECTOR_STEPS_PER_TURN:
+            raise IfsOperationError(
+                "selector position %d is outside the turret's travel (0-%d)"
+                % (position, SELECTOR_STEPS_PER_TURN))
+        return position
 
     @staticmethod
     def _positive(name, value):

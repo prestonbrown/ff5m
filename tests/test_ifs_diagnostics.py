@@ -231,6 +231,46 @@ if __name__ == "__main__":
     unittest.main()
 
 
+class TestReadDriverMotion(unittest.TestCase):
+    """One register, for polling while something moves.
+
+    read_diagnostics is fourteen queries and about two seconds of wire time;
+    watching a selector jog needs the standstill bit and nothing else.
+    """
+
+    def test_it_reads_only_that_bank_s_drv_status(self):
+        link = FakeLink()
+        D.read_driver_motion(link, D.SELECTOR)
+        self.assertEqual(link.asked, ["F63"])
+
+    def test_the_feeder_bank_is_f53(self):
+        link = FakeLink()
+        D.read_driver_motion(link, D.FEEDER)
+        self.assertEqual(link.asked, ["F53"])
+
+    def test_standstill_reads_as_not_moving(self):
+        ## 80000000 is bit 31, stst. The board reported exactly this at idle.
+        link = FakeLink({"F63": "DRV_STATUS: 80000000"})
+        self.assertIs(D.read_driver_motion(link, D.SELECTOR), False)
+
+    def test_a_clear_standstill_bit_reads_as_moving(self):
+        ## 00090000 is what the selector read while it was turning: stst gone,
+        ## CS_ACTUAL 9 in bits 16-20.
+        link = FakeLink({"F63": "DRV_STATUS: 00090000"})
+        self.assertIs(D.read_driver_motion(link, D.SELECTOR), True)
+
+    def test_an_unparsable_answer_is_unknown_not_moving(self):
+        ## None and False must stay distinguishable: a driver that did not
+        ## answer has not told us it arrived, and treating silence as arrival
+        ## would end a jog wait early.
+        link = FakeLink({"F63": ""})
+        self.assertIsNone(D.read_driver_motion(link, D.SELECTOR))
+
+    def test_an_unknown_bank_is_refused(self):
+        with self.assertRaises(KeyError):
+            D.read_driver_motion(FakeLink(), "flux capacitor")
+
+
 class TestStreamIsLeftClean(unittest.TestCase):
     """A diagnostics read must not poison the next command.
 

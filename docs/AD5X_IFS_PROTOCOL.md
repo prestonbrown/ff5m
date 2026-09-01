@@ -123,7 +123,11 @@ generally.
 
 ## Commands
 
-`C` selects a channel (1-4), `L` a length in mm, `S` a speed in mm/min.
+`C` selects a channel (1-4), `L` a length in mm, `S` a speed in mm/min. Three
+further argument letters exist that no driver sends: `D` is an absolute selector
+position in steps (`F30`), and `T`/`I` are a motor number and a current scale
+(`F42`). Every argument is parsed with `strchr` then `strtod`, so order does not
+matter and an absent letter is simply skipped.
 
 | Command | Arguments | Meaning |
 |---------|-----------|---------|
@@ -131,11 +135,17 @@ generally.
 | `F11 C<n> L<mm> S<speed>` | channel, length, speed | retract filament |
 | `F13` | none | status poll |
 | `F15 C` | literal `C` | reset driver |
-| `F18` | none | unclamp all channels |
+| `F18` | none | unclamp all channels - by re-homing the selector |
+| `F20` | none | nothing at all; a pure ping |
 | `F23 C<n>` | channel | mark filament inserted |
 | `F24 C<n>` | channel | clamp channel |
+| `F30 D<steps>` | selector position | jog the selector, absolute, no homing |
 | `F39 C<n>` | channel | release/unclamp channel |
+| `F42 T<1\|2> I<0-31>` | motor, current scale | set that motor's run current |
+| `F43` | none | re-initialise both TMC drivers |
 | `F112` | none | halt movement |
+
+The last five are decoded in "The five opcodes nobody had pinned down" below.
 
 ## The status line
 
@@ -200,26 +210,50 @@ assuming four. See below.
 
 ### State values
 
-A base plus a per-channel stride of 11 (`FFS_STATUS_DELTA`), which produces the
-per-channel values "18, 29, 40" / "22, 33, 44" / "26, 37, 48" / "23, 34, 45":
+`FFS_state` is not a status word - it is the program counter of a state machine
+the board runs at a fixed tick, and every opcode that actuates anything works by
+writing a number into it. The dispatch is a jump table of 132 entries at
+`0x08018FF4`, indexed by the state byte at `0x200001B0`; anything at or above
+132 falls to a do-nothing default. Decoded from it:
 
-| Base | Meaning |
-|-----:|---------|
-| 3 | polling channels |
-| 5 | ready |
-| 7 | channel clamped |
-| 11 | loading |
-| 12 | unclamping |
-| 15 | unloading |
+| State | Meaning |
+|------:|---------|
+| 1 | begin homing the selector - read the home switch, pick a direction |
+| 2 | homing, phase 1: walk 4096 steps to get clear of the switch |
+| 3 | homing, phase 2: seek the switch, giving up after 16384 steps |
+| 4 | homed; dispatch to whichever channel is pending |
+| 5 | **ready** - the only state in which `F10`/`F11` are accepted |
+| 126 | homing failed - the switch never appeared |
 | 127 | driver error |
+| 128 | `F30` jog: energise the selector |
+| 129 | `F30` jog: step toward the target, then stop and **stay here** |
 
-A value of **2** also appears, for under a second at the start of a clamp. It is
-unnamed; treat it as "busy, not ready".
+and then a per-channel block, base plus a stride of 11 (`FFS_STATUS_DELTA`) for
+channels 1-4:
+
+| Base | ch 1-4 | Meaning |
+|-----:|--------|---------|
+| 7 | 7, 18, 29, 40 | driving the selector to that channel's clamp position |
+| 10 | 10, 21, 32, 43 | feed started (`F10`) |
+| 11 | 11, 22, 33, 44 | **loading** - waiting on the feeder |
+| 12 | 12, 23, 34, 45 | driving the selector to that channel's release position |
+| 14 | 14, 25, 36, 47 | retract started (`F11`) |
+| 15 | 15, 26, 37, 48 | **unloading** - waiting on the feeder |
+| 16 | 16, 27, 38, 49 | post-retract cleanup, then back to `ready` |
+
+Two corrections to what was inferred from observation alone. **3 is not
+"polling channels"** - it is the second half of a selector homing walk, which is
+why it appears where a poll would. And **2 is not a brief unnamed busy state** -
+it is the first half of that same walk, and it is brief only because it is a
+fixed 4096 steps.
 
 `clamped` (7) is real but its duration is not predictable - measured at 3.8 s on
 one channel and 0.2 s on another in one sequence of clamps. Anything that waits
 for it to *arrive* will sometimes miss it entirely. Wait for the return to
-`ready` instead.
+`ready` instead. Those two numbers are not noise: the state is an absolute move
+to a position 0, 4096, 8192 or 12288 steps from home, and 12288 steps at the
+rate derived in "The selector motor" below is 3.83 s. The 3.8 s reading was
+channel 4 and the 0.2 s reading was channel 1, which is already there.
 
 ### Sequencing rules the board enforces
 
@@ -320,6 +354,14 @@ filament in 1, 2 and 4).
   so it likely aliases the F50 bank. Overtemperature, open-load and short
   detection all live in `DRV_STATUS` and reach no UI today.
 
+  **`CHOPCONF` and `PWMCONF` reading `00000000` is a broken read, not a real
+  value.** The board writes both at boot, to `0x150082C3` and `0xC80D174B` - a
+  register that has been written cannot read back as zero on a driver that is
+  answering `GCONF` correctly on the same UART. Treat an all-zero answer from
+  `F52`/`F54`/`F62`/`F64` as "no answer", not as data. The written `CHOPCONF`
+  also settles the microstepping: `MRES` (bits 27-24) is 5, which is **1/8
+  microstepping**, with `intpol` set so the driver interpolates to 256 inside.
+
   **Which bank is which, settled by experiment.** Both read identically at idle,
   so they were separated by making each motor move and watching the standstill
   bit drop:
@@ -342,9 +384,8 @@ filament in 1, 2 and 4).
   fault-bit decoding names the family it assumed and an unknown family still
   reports that *some* fault bit is set rather than staying silent.
 
-- `F20`, `F30`, `F43` acknowledge but reveal nothing about their effect. Do not
-  send them blind; they may actuate. They were deliberately excluded from the
-  sweep.
+- **`F20`, `F30` and `F43` are decoded now** - see the next section. Two of the
+  three are safe; `F30` actuates.
 - `F12` answers with four numbers: per-channel filament presence, the decimal
   form of `F13`'s `silk_state`.
 - `F37` is reported by an external capture (a Telegram-circulated IFS table) to
@@ -353,6 +394,201 @@ filament in 1, 2 and 4).
   reflashes the board (close the port, run
   `/usr/prog/PROGRAM/control/IFSCommand /usr/prog/PROGRAM/control/ifs.hex
   /dev/ttyS4`, re-probe with `F19`), and the board comes back.
+
+## The five opcodes nobody had pinned down
+
+`F18`, `F20`, `F30`, `F42` and `F43` all answer with a bare `ok` that says
+nothing about what they did, so they sat in "acknowledges, effect unknown" for a
+long time. GhostTypes' firmware analysis, posted to Discord, named all five;
+the decodes below were then read out of the same `ifs.hex` this document is
+built from, which both confirms them and adds the parts a response-string sweep
+cannot see. Handler addresses are given so any of it can be checked:
+
+```bash
+arm-none-eabi-objdump -D -b binary -m arm -M force-thumb \
+    --adjust-vma=0x08010000 ifs.bin | less    # ifs.bin from --bin above
+```
+
+**`F18` (`0x080134FE`) writes `FFS_state = 1` and nothing else.** State 1 is the
+head of the selector homing walk, so the observable effect - every channel ends
+up unclamped - is a *consequence* of driving the selector off all four slots, not
+a clamp-release operation. It takes as long as a home takes.
+
+**`F20` (`0x08013528`) is three instructions: format the reply, send it, return.**
+It touches no state, no GPIO and no driver. It is a genuine no-op and therefore
+the correct liveness ping - unlike `F13`, whose reply has to be parsed, and
+unlike `F19`, which is a capability read some other firmware may answer slowly.
+
+**`F30 D<n>` (`0x08013738`) is a raw selector jog, and it is the only opcode that
+moves the selector without homing first.** It stores `n` at `0x200000DC` and
+writes `FFS_state = 128`. States 128 and 129 then energise the selector and step
+it until its position counter equals `n`. That counter, at `0x200001E0`, is the
+same one every other selector move uses, so **`D` is in the slot ladder's own
+coordinates** - `F30 D4096` lands exactly where `F24 C2` would.
+
+Three things make it sharp:
+
+- With no `D`, the `strchr` misses, the state write is skipped, and it is as
+  inert as `F20`. Bare `F30` is safe. `F30 D<n>` actuates immediately.
+- It bypasses the whole clamp/release sequence. Nothing checks that a lane is
+  free, nothing updates `chan`, nothing arbitrates against a feed in flight.
+- **It never returns to `ready`.** State 129 stops the motor when it arrives and
+  stays at 129 for ever, so `F10`/`F11` answer `FFS not ready.` from then on.
+  `F15 C` is the escape hatch - its handler forces `FFS_state = 5`.
+
+**`F42 T<motor> I<value>` (`0x08013B3A`) sets a run current, and the reply is not
+a read.** `T` (1 = feeder, 2 = selector) and `I` are each parsed independently
+and stored in a pair of shadow bytes at `0x200000F1`/`0x200000F2`; only if `I`
+was present does the board write TMC register `0x10` (`IHOLD_IRUN`) as
+`0x000A0000 | (I << 8)` - that is `IRUN = I`, `IHOLDDELAY = 10`, and
+**`IHOLD = 0`**, no holding current at standstill. Which UART each `T` goes to
+matches the bank split established above: `T1` is the feeder's, `T2` the
+selector's.
+
+| behaviour | consequence |
+|---|---|
+| the reply echoes the **shadow bytes**, never the driver | a bare `F42` on a fresh board answers `irun: 0` while the driver is really at 9 |
+| `T` is sticky across commands | `F42 I20` with no `T` writes to whichever motor was named last |
+| `I` is stored through a **byte** store, then clamped | `I-1` becomes 255, which clamps to **31 - full current**, not to 0 |
+| an unrecognised `T` writes no register | but still replies `ok`, so a typo is silent |
+
+The stock host never sends `F42`, so the default has to come from the boot
+initialisation, and it does: **`IRUN = 9`** of 31. That is independently
+confirmed on hardware - `DRV_STATUS` read `00090000` while moving, and bits
+16-20 are `CS_ACTUAL`, the scale the driver is actually applying.
+
+**`F43` (`0x08013C26`) re-runs the full TMC initialisation on both drivers.**
+Not a UART reset - it rewrites five registers, the same values the board writes
+at boot:
+
+| register | value | meaning |
+|---|---|---|
+| `GCONF` `0x00` | `0x000001DC` | spreadCycle, `shaft` inverted, `pdn_disable`, `mstep_reg_select` |
+| `IHOLD_IRUN` `0x10` | `0x000A0900` | `IHOLD` 0, **`IRUN` 9**, `IHOLDDELAY` 10 |
+| `TPOWERDOWN` `0x11` | `0x80` | ~2.8 s standstill before current drops |
+| `CHOPCONF` `0x6C` | `0x150082C3` | `TOFF` 3, `TBL` 1, **`MRES` 5 = 1/8**, `intpol` on |
+| `PWMCONF` `0x70` | `0xC80D174B` | stealthChop PWM parameters |
+
+Two things follow. It is the **selector driver reset this repo has been missing**
+- `F15 C` only drops the feeder's enable line and forces `FFS_state = 5`; it
+writes no TMC register and touches the selector not at all. And it **discards
+any `F42` current** you set, since it rewrites `IHOLD_IRUN` to the stock 9. It
+also does not touch `FFS_state`, so sending it mid-move leaves the state machine
+stepping a driver that is being reconfigured underneath it.
+
+## The selector motor: how fast it goes, and why
+
+The recurring complaint about the IFS is that the channel selector is slow. It
+is, and the reason is not the step rate.
+
+**The mechanism is an eight-stop turret.** Every selector position in the
+firmware is a multiple of 2048 steps, and the homing seek gives up after 16384 -
+one full revolution, eight stops:
+
+| position | 0 | 2048 | 4096 | 6144 | 8192 | 10240 | 12288 | 14336 |
+|---|---|---|---|---|---|---|---|---|
+| stop | ch1 clamp | ch1 release | ch2 clamp | ch2 release | ch3 clamp | ch3 release | ch4 clamp | ch4 release |
+
+**The steps are bit-banged out of a timer interrupt.** There is no hardware PWM,
+no DMA pulse train and no ramp. TIM6's ISR (`0x08018FDC`) runs the state machine,
+and every state that moves the selector does exactly one thing per tick: toggle
+`PA7`. Two ticks make one step; `PA6` is direction, `PB1` enable, `PB9` the home
+switch. The rate is therefore the timer's update rate divided by two, and it is
+the same for homing, for slot moves and for `F30`.
+
+**That rate is a compile-time constant.** From the timer setup at `0x08015798`:
+
+- `ARR = 155`, so one update every 156 counts.
+- `PSC = SystemCoreClock / 2000000 - 1`.
+- `RCC_CFGR.PPRE1` is set to `/4` at `0x08012070`, so TIM6's input is
+  `2 x PCLK1 = HCLK/2`.
+
+Those cancel: if `SystemCoreClock` is HCLK - which it has to be for the SysTick
+setup at `0x08015826` (`SystemCoreClock / 50`) to mean anything - the counter
+runs at **1 MHz whatever the core clock is**, the ISR fires at
+`1000000 / 156 = 6410 Hz`, and the selector steps at **3205 steps/s**. For the
+record the core clock is 54 MHz: `HSE_VALUE` is 12 MHz (`0x00B71B00`, in
+`RCC_GetClocksFreq`) and the PLL runs `HSE/2 x 9`.
+
+At 1/8 microstepping that is ~400 full steps/s, and 16384 steps per turret
+revolution against a 200-step motor puts about 10:1 of reduction in between. The
+motor is turning at roughly 120 rpm. Nothing about that is near a limit.
+
+**The cost is distance, not speed.** `F24 C<n>` does not move to the adjacent
+slot. Every channel select writes `FFS_state = 1` - all four of them, `C1`
+included - which is a full re-home before the move:
+
+| phase | steps | at 3205 steps/s |
+|---|---|---|
+| walk clear of the home switch (only if it is already made) | 4096 | 1.28 s |
+| seek the switch | 0 - 16384 | up to 5.11 s |
+| absolute move to the slot | 0, 4096, 8192 or 12288 | up to 3.83 s |
+| **worst case** | **32768** | **~10.2 s** |
+
+A slot-to-slot move is 4096 steps, 1.28 s. The board spends the rest of a tool
+change re-discovering where it already was.
+
+### Room to change it
+
+| lever | effect | needs |
+|---|---|---|
+| `F42 T2 I<n>` | selector **torque**, not speed | nothing - it is on the wire today |
+| skip the re-home with `F30` | up to 10.2 s becomes 1.28 s | host-side position tracking, and accepting that `F30` bypasses every interlock |
+| TIM6 `ARR` | the step rate itself | reflashing `ifs.hex` |
+
+There is no speed argument for the selector anywhere in the protocol. `F24` and
+`F30` take no `S`, the state machine holds no rate variable, and the TMC drivers
+are stepped over STEP/DIR - the UART side sets current and microstepping, never
+velocity. `F42` is the only writable driver register the firmware exposes, and it
+writes `IHOLD_IRUN` alone; there is no path to `CHOPCONF`, so microstepping
+cannot be dropped from the host either.
+
+So the honest answer to "can we speed it up" is: **not from the host, and the
+step rate is not where the time goes anyway.** The interesting lever is `F30`,
+because avoiding the re-home is worth several seconds per tool change and costs
+no firmware change. It is also the riskiest thing in the opcode set, for the
+reasons listed above.
+
+### The measurement that would settle it
+
+The 3205 steps/s figure is derived, not timed, and it rests on `SystemCoreClock`
+holding HCLK (its initialiser is not a plain constant anywhere in the image).
+`F30` makes it directly measurable, and `tools/ifs/ifs_selector_timing.py`
+does it:
+
+```bash
+scp tools/ifs/ifs_selector_timing.py root@<printer>:/tmp/
+# on the printer, klipper stopped and no filament loaded:
+python3 /tmp/ifs_selector_timing.py --i-know-it-moves
+```
+
+It is a separate file from `ifs_probe.py` because that one's whole identity is a
+read-only allowlist that forbids `F30`; this one exists to send it, so it
+refuses to run without the flag. The sequence is:
+
+```
+F15 C          # force FFS_state = 5, so the board is in a known state
+F30 D0         # drive the position counter to zero, wherever it started
+               # wait for the motor to stop
+F30 D16384     # exactly 16384 steps - one turret revolution
+               # time from the command to the motor stopping
+F15 C          # leave state 129, which F30 never does on its own
+```
+
+Arrival is the selector driver's standstill bit via `F63`, not `F13` -
+`stall_state` is the feeder's motion bit and stays clear throughout a selector
+move. From klipper, `IFS_JOG_SELECTOR POSITION=<n>` sends the same jog with the
+same cleanup.
+
+Two `F30`s rather than a home, because homing does not leave the counter at
+zero: state 4 dispatches straight on to whichever channel was last pending, so
+after an `F18` the selector is parked at a slot and the distance is unknown.
+`F30 D0` makes the start point exact without needing to read it.
+
+5.11 s means 3205 steps/s and everything above stands. Half or double that and
+the timer chain needs re-reading. The existing hardware capture already agrees:
+`clamped` measured at 3.8 s on channel 4, and channel 4's move is 12288 steps,
+which is 3.83 s at this rate.
 
 ## A companion on the wire: the IFS Jacker
 
@@ -488,10 +724,17 @@ that are inserted" gets it backwards. This repo's status object publishes it as
   the 428 and 467 followed 600 mm feeds that barely moved, the 69 followed the
   one feed that worked, and the 488 followed a 1000 mm eject of which only about
   676 mm had filament left to pull. Consistent with, not established.
-- The effect of `F20`, `F30`, `F43` is unknown. They acknowledge and reveal
-  nothing; do not send them blind on a loaded machine.
+- **The selector step rate is derived, not timed.** 3205 steps/s follows from
+  TIM6's `ARR`, the APB1 prescaler and `SystemCoreClock` holding HCLK; the last
+  of those is the weak link, because `SystemCoreClock`'s initialiser is not a
+  plain constant in the image. "The measurement that would settle it" above is
+  a five-line check on hardware.
+- **`F30` has not been sent to a board.** Its decode is unambiguous but it
+  actuates, it bypasses every interlock, and it parks the state machine at 129.
+  First send it on a machine with no filament loaded.
 - Whether the trailing space and the `0xFF` byte matter to any **other** IFS
-  firmware revision. On 3.0.6 neither is needed: the stock FlashForge host
+  firmware revision. 3.0.1 and 3.0.5 also ignore the `0xFF` (externally
+  confirmed by GhostTypes). On 3.0.6 neither is needed: the stock FlashForge host
   sends the byte ~200 ms after every command, the board accepts commands with
   and without it, and the byte costs a hard 200 ms of delay per command when a
   driver sends it. On 3.0.7 it does not matter either (externally confirmed).
