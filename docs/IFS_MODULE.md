@@ -53,6 +53,10 @@ the host's conveniences only when they are present.
        sensor_type: Generic 3950
        sensor_pin: eboard:PA3
 
+   Or hand the pin straight to the sensor section and skip the thermistor,
+   which samples it 20x more often - see [Sampling the sensor 20x
+   faster](#sampling-the-sensor-20x-faster). That is what forge-x AD5X does.
+
 4. **`[save_variables]`**, which the module declares itself - check that the
    path it names is a writable, persistent location on your image.
 5. **`[pause_resume]`** if you want jam detection to be able to pause a
@@ -198,16 +202,32 @@ If the pin turns out to be taken anyway - a firmware update restoring
 falls back to the slower reading rather than raising. A raise there would be
 klipper refusing to boot over a config the owner did not know had changed.
 
-**On an AD5X this could be provisioned rather than hand-edited.**
-`.cfg.ad5x/init.base.cfg` already strips stock sections with `-[section]`
-(it removes `[heater_bed]` and `[led chamber_led]`), and `macros/ifs.cfg`
-declares `[ifs_toolhead_sensor toolhead]` itself. Adding
-`-[temperature_sensor filamentValue]` there plus `sensor_pin` here would make
-it the default. Not done - it changes provisioning for every install, and the
-fallback above is what makes it safe to consider.
+**On forge-x AD5X this is the default, not a hand-edit.** It is two halves, in
+the two files that make up AD5X provisioning:
 
-Doing this is what would make a faster load defensible: the reason loads stay
-slow is the 0.300 s blind spot, not the feeder.
+    .cfg.ad5x/init.base.cfg     -[temperature_sensor filamentValue]
+
+    macros/hw_base.ad5x.cfg     [ifs_toolhead_sensor toolhead]
+                                sensor_pin: eboard:PA3
+
+The strip frees the pin, the host file claims it, and neither is any use
+without the other - a strip alone leaves nothing sampling PA3 at all, which
+costs runout detection and load confirmation, and fails silently because
+nothing errors when an ADC is merely absent. The coupling is held by tests
+rather than by this paragraph: `tests/test_cfg_backup_ad5x.py` runs the real
+overlay tool against a stock-shaped `printer.base.cfg` and asserts the pin
+freed there is the pin claimed here, that the claim sits after
+`[include ifs.cfg]` so the section merge favours it, and that the adjacent
+`[temperature_sensor cutValue]` - one word and one digit different - survives.
+
+The claim deliberately does **not** live in `macros/ifs.cfg`. That file is the
+portable module, and it drops onto zmod and bare-klipper hosts where the stock
+section is present and nothing will remove it; there it keeps the `adc_name`
+default and the 0.300 s reading. Only on AD5X do we own the file the pin has
+to be freed from.
+
+This is what makes a faster load defensible: the reason loads stay slow is the
+0.300 s blind spot, not the feeder.
 
 The wire protocol the board speaks, for anyone debugging at that level:
 [AD5X_IFS_PROTOCOL.md](AD5X_IFS_PROTOCOL.md).
