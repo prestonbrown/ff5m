@@ -144,8 +144,16 @@ printer's own `Multicolour` settings block when one exists.
 ### Feed speed
 
 The tube transit runs in two phases. `ifs_fast_speed` (3600 mm/min) covers the
-bulk, then the last `approach_mm` (150) is taken at `ifs_speed` (1200). A 1000
-mm load goes from about 50 s to about 22 s.
+bulk, then the last `approach_mm` (400) is taken at `ifs_speed` (1200). A full
+1000 mm load goes from about 50 s to about 30 s.
+
+`approach_mm` is sized by **where lanes park**, not by how close the gear is. A
+lane rests 90 mm back after an autoinsert and 300 mm back after being moved out
+of the shared path, and both are ordinary tool-change states. Shorten the
+approach past those and the fast phase becomes the one that arrives at the
+gear on every normal change - which is the opposite of the point. So the
+speed-up lands on the fully-ejected load, and a short one behaves exactly as it
+did before.
 
 3600 is measured, not guessed: 200 mm retracts on a loaded lane at 1200, 2400
 and 3600, each one watched by eye. The ladder stopped at 3600 because the motor
@@ -166,7 +174,7 @@ and the rest is yours:
     tube_length: 1000        # how far a lane is from the toolhead
     ifs_speed: 1200          # the careful speed, used for the approach
     ifs_fast_speed: 3600     # the bulk of every transit, and all retracts
-    approach_mm: 150         # how much of the load stays slow
+    approach_mm: 400         # how much of the load stays slow
 
 Both extremes are legitimate and render correctly. `approach_mm: 0` is a single
 fast feed the whole way. `approach_mm` at or above `tube_length` crawls the

@@ -175,7 +175,7 @@ class IFS(object):
             tube_mm=config.getfloat("tube_length", 1000.0, above=0.),
             ifs_speed=config.getfloat("ifs_speed", 1200.0, above=0.),
             ifs_fast_speed=config.getfloat("ifs_fast_speed", 3600.0, above=0.),
-            approach_mm=config.getfloat("approach_mm", 150.0, minval=0.))
+            approach_mm=config.getfloat("approach_mm", 400.0, minval=0.))
 
         ## Which lane each slicer tool loads: tool n aims at _tool_map[n].
         ## The identity (tool n -> lane n+1) is the numbering the T macros
