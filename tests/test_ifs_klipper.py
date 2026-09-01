@@ -1088,6 +1088,22 @@ class TestDirectPinSampling(unittest.TestCase):
         obj, _ = make_toolhead({"sensor_pin": "eboard:PA3"}, pins=pins)
         self.assertIsNone(obj.read_present())
 
+    def test_a_pin_already_claimed_falls_back_instead_of_killing_klippy(self):
+        ## The failure that would otherwise be a bricked boot. The pin can only
+        ## be claimed once, and a stock printer.base.cfg declares it as a
+        ## temperature_sensor - so if the strip that frees it ever does not
+        ## happen (a firmware update restoring the file, an init that did not
+        ## run), setup_pin raises and klipper refuses to start. Degrading to
+        ## the slower reading is always better than not booting.
+        class Hostile:
+            def setup_pin(self, pin_type, pin_desc):
+                raise Exception("pin eboard:PA3 is already used")
+        obj, _ = make_toolhead({"sensor_pin": "eboard:PA3"},
+                               adc={"temperature_sensor filamentValue": 0.1},
+                               pins=Hostile())
+        self.assertIsNone(obj.sensor_pin)
+        self.assertTrue(obj.read_present())
+
     def test_it_registers_with_query_adc_so_IFS_SENSOR_VALUE_still_works(self):
         pins = FakePins()
         obj, printer = make_toolhead({"sensor_pin": "eboard:PA3"},

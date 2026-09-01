@@ -57,16 +57,6 @@ class IfsToolheadSensor(ifs_sensor_base.IfsSensorBase):
         ## the sensor is sampled 20x more often. Left unset, nothing changes.
         self.sensor_pin = config.get("sensor_pin", None)
         self._direct_value = None
-        if self.sensor_pin is not None:
-            ppins = self.printer.lookup_object("pins")
-            self._mcu_adc = ppins.setup_pin("adc", self.sensor_pin)
-            self._mcu_adc.setup_adc_sample(SAMPLE_TIME, SAMPLE_COUNT)
-            self._mcu_adc.setup_adc_callback(REPORT_TIME, self._adc_callback)
-            ## So IFS_SENSOR_VALUE and anything else reading through query_adc
-            ## keeps working against the pin we took.
-            query_adc = self.printer.lookup_object("query_adc", None)
-            if query_adc is not None:
-                query_adc.register_adc(self.name, self._mcu_adc)
 
         ## Defaults are the measured AD5X values (see ifs_sensor_logic). They
         ## are config options because they describe one printer's hardware, and
@@ -88,6 +78,39 @@ class IfsToolheadSensor(ifs_sensor_base.IfsSensorBase):
             "IFS_SENSOR_VALUE", "SENSOR", self.name,
             self.cmd_IFS_SENSOR_VALUE,
             desc="Report the raw ADC reading behind a toolhead filament sensor")
+
+        ## Last, so a fallback has the whole object behind it.
+        if self.sensor_pin is not None:
+            self._claim_pin()
+
+    def _claim_pin(self):
+        """Take the ADC ourselves, or fall back to reading it the slow way.
+
+        A pin can only be claimed once, and a stock `printer.base.cfg` declares
+        this one as `[temperature_sensor filamentValue]`. Setting `sensor_pin`
+        assumes that section has been stripped - but a firmware update can
+        restore the file, and an init that did not run leaves it in place. A
+        raise here would be klipper refusing to start, on a printer whose only
+        symptom is a config it did not know it had. Degrading to the 0.300s
+        reading loses precision; failing to boot loses the machine.
+        """
+        try:
+            ppins = self.printer.lookup_object("pins")
+            self._mcu_adc = ppins.setup_pin("adc", self.sensor_pin)
+            self._mcu_adc.setup_adc_sample(SAMPLE_TIME, SAMPLE_COUNT)
+            self._mcu_adc.setup_adc_callback(REPORT_TIME, self._adc_callback)
+        except Exception as exc:
+            logging.warning(
+                "IFS sensor %s: cannot claim %s (%s); falling back to %r, "
+                "which klipper reports every 0.300s",
+                self.name, self.sensor_pin, exc, self.adc_name)
+            self.sensor_pin = None
+            return
+        ## So IFS_SENSOR_VALUE and anything else reading through query_adc
+        ## keeps working against the pin we took.
+        query_adc = self.printer.lookup_object("query_adc", None)
+        if query_adc is not None:
+            query_adc.register_adc(self.name, self._mcu_adc)
 
     def _adc_callback(self, read_time, read_value):
         """klipper hands us every sample once we own the pin."""

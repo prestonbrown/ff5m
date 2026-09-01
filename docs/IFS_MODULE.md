@@ -193,6 +193,19 @@ nothing changes. The raw value survives either way - the pin is registered back
 with `query_adc`, so `IFS_SENSOR_VALUE` and the three-band classifier work
 exactly as before. This is what an `[adc_button]` would have cost you.
 
+If the pin turns out to be taken anyway - a firmware update restoring
+`printer.base.cfg`, an init that did not run - the sensor logs a warning and
+falls back to the slower reading rather than raising. A raise there would be
+klipper refusing to boot over a config the owner did not know had changed.
+
+**On an AD5X this could be provisioned rather than hand-edited.**
+`.cfg.ad5x/init.base.cfg` already strips stock sections with `-[section]`
+(it removes `[heater_bed]` and `[led chamber_led]`), and `macros/ifs.cfg`
+declares `[ifs_toolhead_sensor toolhead]` itself. Adding
+`-[temperature_sensor filamentValue]` there plus `sensor_pin` here would make
+it the default. Not done - it changes provisioning for every install, and the
+fallback above is what makes it safe to consider.
+
 Doing this is what would make a faster load defensible: the reason loads stay
 slow is the 0.300 s blind spot, not the feeder.
 
