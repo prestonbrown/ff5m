@@ -159,9 +159,26 @@ toolhead sensor cannot catch it: the pin is declared to klipper as a thermistor,
 and klipper reports those every 0.300 s, so the trigger can be up to 18 mm late
 at 3600 no matter how fast this module polls it.
 
-Set `ifs_fast_speed` equal to `ifs_speed` to get the old single-speed
-behaviour back. If your machine sounds unhappy, lower it - it is one printer's
-measurement, and a rebuilt feeder can move it.
+All four are `[ifs]` options, with no ceiling beyond "positive" - sane defaults,
+and the rest is yours:
+
+    [ifs]
+    tube_length: 1000        # how far a lane is from the toolhead
+    ifs_speed: 1200          # the careful speed, used for the approach
+    ifs_fast_speed: 3600     # the bulk of every transit, and all retracts
+    approach_mm: 150         # how much of the load stays slow
+
+Both extremes are legitimate and render correctly. `approach_mm: 0` is a single
+fast feed the whole way. `approach_mm` at or above `tube_length` crawls the
+whole way. `ifs_fast_speed: 1200` turns the split off entirely. If your machine
+sounds unhappy, lower it - 3600 is one printer's measurement, and a rebuilt
+feeder can move it in either direction.
+
+Retracts always use `ifs_fast_speed`: pulling back has no gear to arrive at, so
+there is no ramming case. The one exception is the retract inside
+`_IFS_CLEAR_EXTRUDER`, which mirrors the extruder's own `G1 E-` at
+`unload_speed` - those two drive the same strand, and speeding one alone makes
+them fight.
 
 The wire protocol the board speaks, for anyone debugging at that level:
 [AD5X_IFS_PROTOCOL.md](AD5X_IFS_PROTOCOL.md).

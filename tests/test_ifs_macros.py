@@ -273,17 +273,21 @@ class LoadTest(unittest.TestCase):
     empty string - so asserting the rendered *value* is what catches it.
     """
 
-    def printer(self, loaded=False, connected=True, target=0.0, recorded=0):
+    PARAMS = {"tube_mm": 1000.0, "ifs_speed": 1200.0,
+              "ifs_fast_speed": 3600.0, "approach_mm": 150.0,
+              "first_purge_mm": 100.0, "first_purge_speed": 300.0,
+              "first_fan": 0.0, "second_purge_mm": 30.0,
+              "second_purge_speed": 300.0, "second_fan": 255.0}
+
+    def printer(self, loaded=False, connected=True, target=0.0, recorded=0,
+                **params):
+        settings = dict(self.PARAMS)
+        settings.update(params)
         return {
             "ifs": {
                 "connected": connected, "error": None,
                 "loaded_channels": [1, 2, 4],
-                "params": {"tube_mm": 1000.0, "ifs_speed": 1200.0,
-              "ifs_fast_speed": 3600.0, "approach_mm": 150.0,
-                           "ifs_fast_speed": 3600.0, "approach_mm": 150.0,
-                           "first_purge_mm": 100.0, "first_purge_speed": 300.0,
-                           "first_fan": 0.0, "second_purge_mm": 30.0,
-                           "second_purge_speed": 300.0, "second_fan": 255.0},
+                "params": settings,
             },
             "extruder": {"target": target},
             "filament_switch_sensor toolhead": {"filament_detected": loaded},
@@ -319,6 +323,27 @@ class LoadTest(unittest.TestCase):
         lengths = [int(re.search(r"LENGTH=(\d+)", c).group(1))
                    for c in self.feeds()]
         self.assertEqual(sum(lengths), 1000)
+
+    def test_no_approach_means_a_single_fast_feed(self):
+        ## approach_mm=0 is a legitimate setting - somebody who has decided the
+        ## gear can take it. One feed, not a zero-length second.
+        feeds = self.feeds(approach_mm=0.0)
+        self.assertEqual(len(feeds), 1, feeds)
+        self.assertIn("LENGTH=1000", feeds[0])
+        self.assertIn("SPEED=3600", feeds[0])
+
+    def test_an_approach_longer_than_the_tube_means_a_single_slow_feed(self):
+        ## The other extreme: crawl the whole way. Also legitimate, and it must
+        ## not render a negative bulk length.
+        feeds = self.feeds(approach_mm=1000.0)
+        self.assertEqual(len(feeds), 1, feeds)
+        self.assertIn("LENGTH=1000", feeds[0])
+        self.assertIn("SPEED=1200", feeds[0])
+
+    def test_equal_speeds_are_harmless(self):
+        ## ifs_fast_speed = ifs_speed is how you turn the split off.
+        for feed in self.feeds(ifs_fast_speed=1200.0):
+            self.assertIn("SPEED=1200", feed)
 
     def test_the_feed_ends_on_the_toolhead_sensor(self):
         ## The length is a bound, not a target - without this a full tube of
@@ -553,6 +578,34 @@ class LoadedLaneTest(unittest.TestCase):
         self.assertEqual(len(back), 1, commands)
         self.assertIn("CHANNEL=1", back[0])
         self.assertIn("LENGTH=300", back[0])
+
+    def test_the_hub_clear_retract_runs_fast(self):
+        ## Pulling a lane back out of the shared path cannot ram anything -
+        ## there is no gear at that end - so it has no reason to crawl.
+        commands = self.render("IFS_LOAD", {"SLOT": 2, "TEMP": 220},
+                               recorded=4, at_hub=1, occupied=True)
+        back = [c for c in commands if c.startswith("IFS_RETRACT")]
+        self.assertIn("SPEED=3600", back[0])
+
+    def test_the_ifs_side_unload_retract_runs_fast(self):
+        commands = self.render("IFS_UNLOAD", {"SLOT": 2, "TEMP": 220},
+                               recorded=2)
+        back = [c for c in commands if c.startswith("IFS_RETRACT")
+                and "LENGTH=70" in c]
+        self.assertTrue(back, commands)
+        self.assertIn("SPEED=3600", back[0])
+
+    def test_the_extruder_coupled_retract_does_NOT_run_fast(self):
+        ## This one mirrors `G1 E-{unload_extruder_mm} F{unload_speed}` on the
+        ## extruder, and the two sides drive the same strand. Speeding one
+        ## without the other makes them fight, so it stays on unload_speed.
+        commands = self.render("IFS_UNLOAD", {"SLOT": 2, "TEMP": 220},
+                               recorded=2)
+        coupled = [c for c in commands if c.startswith("IFS_RETRACT")
+                   and "LENGTH=60" in c]
+        for c in coupled:
+            self.assertIn("SPEED=600", c)
+            self.assertNotIn("SPEED=3600", c)
 
     def test_an_unload_hands_its_lane_to_the_extruder_withdraw(self):
         ## Without this the withdraw drags the strand back through a lane that
