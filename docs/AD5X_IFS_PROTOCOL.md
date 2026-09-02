@@ -172,11 +172,12 @@ both their `GCONF` registers.
 ### `stall_state` reports MOTION, not a stall
 
 The bit is **set while that channel's filament is moving** and clear when it is
-not. Measured with an empty channel as the control:
+not. The control is an empty lane fed with the same opcode - the motor turns
+either way, so whatever the bit does is about filament and not about the motor:
 
-| | `F10` reply | motion bit during the feed |
+| | `F10` | motion bit during the feed |
 |---|---|---|
-| channel 3, **empty** | `F10 ok. FFS not ready.` (refused) | clear |
+| channel 1, **empty** | accepted; board enters `loading`, state 11 | clear throughout |
 | channel 1, **loaded** | `F10 ok. FFS channel 1 feeding.` | **set**, then clear when done |
 
 The same bit sets for the duration of an `F11` retract. A stall, then, is the
@@ -187,12 +188,23 @@ So a jam is the *absence* of this bit while something was told to move. Reading
 it as "stalled" inverts every motion check - healthy moves look jammed and jams
 look healthy.
 
-Note also that on **3.0.6** the board **refuses to feed an empty channel**: `F10`
-on a lane with no filament answers `FFS not ready.` That refusal is a firmware
-behavior, not a protocol invariant - on **3.0.7 it is gone** (externally
-confirmed: `F10` and `F11` run with no channel clamped at all). A driver must
-gate feeds on its own presence data; this module's `loaded_channels` check is
-that gate, and the refusal was only ever a redundant backstop for it.
+### `FFS not ready.` is about state, never filament
+
+The board does **not** gate `F10` on filament presence: a feed commanded on an
+empty lane behind a settled clamp is accepted and runs to completion (measured
+on two 3.0.6 boards, one of them ninjamida's). A refusal is therefore never
+evidence that a lane is empty. Every documented cause is a state the board is
+in:
+
+- **A clamp that has not settled.** `F24` is acknowledged before it finishes;
+  an opcode sent into that window is refused. Check the ack, then wait for
+  `ready` - see the Wire rules.
+- **A selector parked at 129 by `F30`**, which refuses every later `F10`/`F11`
+  until `F15 C` forces the state back.
+- **Any other activity still in progress.**
+
+A driver must therefore gate feeds on its own presence data. This module's
+`loaded_channels` check is that gate, and nothing on the board backs it up.
 
 ### Where `channel_count` comes from: nowhere, on this firmware
 
@@ -686,10 +698,10 @@ thing. Probe `F19` and branch on the version rather than assuming this table
 holds for every board.
 
 **3.0.7, externally checked:** the Wire section and response prefix rules carry
-over unchanged (independent tester, zmod source + hardware); the `0xFF` commit
-byte is not needed there either; and the empty-channel refusal documented above
-is gone - feed/unload opcodes run with nothing clamped. The `F19` probe remains
-the right place to branch when behavior differs.
+over unchanged (independent tester, zmod source + hardware), and the `0xFF`
+commit byte is not needed there either. That tester also ran `F10`/`F11` with no
+channel clamped; whether 3.0.6 accepts an unclamped feed is untested. The `F19`
+probe remains the right place to branch when behavior differs.
 
 ## Ground truth
 

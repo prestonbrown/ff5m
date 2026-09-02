@@ -210,11 +210,10 @@ class Parameters(object):
     how far a lane is from the toolhead, and how fast the IFS pushes. The speed
     follows stock's observed insert of 1200 mm/min.
 
-    A load does NOT feed `tube_mm`: the board refuses an over-long feed outright
-    ("F10 C1 L1000 S1200 refused: FFS not ready."), so `load_empty_mm` and
-    `load_full_mm` carry the autoinsert distances instead. The feed
-    still ends early when the toolhead sensor sees filament, so a part-fed lane
-    cannot overshoot; the distance is the board's limit, not the target.
+    A load does NOT feed `tube_mm`: `load_empty_mm` and `load_full_mm` carry
+    the autoinsert distances instead. The feed still ends early when the
+    toolhead sensor sees filament, so a part-fed lane cannot overshoot; the
+    distance is a bound, not a target.
     """
 
     DEFAULTS = {
