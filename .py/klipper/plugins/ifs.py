@@ -1,0 +1,1142 @@
+## Klipper object for the AD5X IFS (4-channel filament system).
+##
+##     [ifs]
+##     port: /dev/ttyS4
+##     poll_interval: 1.0
+##
+## Owns the serial link and publishes what it sees. The framing, the parsing and
+## the operations live in ifs_link / ifs_status / ifs_operations, which have no
+## klipper in them and are tested without a printer.
+##
+## Threading, both directions:
+##
+##   * Klipper's reactor is single-threaded and one F13 exchange takes ~165 ms on
+##     real hardware. Polling from a reactor timer would stall klipper for that
+##     long every second, so the serial work happens on a daemon thread. The only
+##     shared state is one snapshot behind a lock, and anything that touches
+##     klipper is marshalled back with reactor.register_async_callback.
+##
+##   * Commands from klipper go the other way, through a queue. IfsLink is not
+##     thread-safe, and a plain mutex would be worse than useless: the reactor
+##     would block for up to a full exchange while the poller finished one,
+##     repeatedly, during exactly the sequences that matter. So gcode submits a
+##     request, the poll thread runs it between polls, and the caller yields the
+##     reactor with reactor.pause() until the answer lands.
+##
+## Copyright (C) 2026, Preston Brown
+##
+## This file may be distributed under the terms of the GNU GPLv3 license
+
+import logging
+import threading
+
+from . import ifs_diagnostics
+from . import ifs_link
+from . import ifs_operations
+from . import ifs_sequences
+from . import ifs_status
+
+
+## How long to wait before rebuilding a link that failed. The board is not going
+## anywhere; retrying in a tight loop only fills the log.
+RECONNECT_DELAY = 5.0
+
+## Consecutive failed polls before the link is torn down and rebuilt. One bad
+## read is noise; a run of them means the port is gone.
+MAX_POLL_FAILURES = 3
+
+## How long a queued command may go unanswered before the caller gives up.
+## Generous: the board answers when it accepts the command, not when the motion
+## finishes, but a busy board can take its time.
+DEFAULT_COMMAND_TIMEOUT = 15.0
+
+## How often the reactor-side waiter looks for its answer. Short enough to feel
+## immediate, long enough not to spin.
+COMMAND_POLL_PAUSE = 0.05
+
+## A move can take a while: a metre of filament at 1200 mm/min is fifty
+## seconds, and a cold-ish nozzle makes a purge slower still.
+DEFAULT_MOVE_TIMEOUT = 120.0
+## A diagnostics read is fourteen queries and takes about five seconds on the
+## board, so it needs longer than an ordinary command.
+DIAGNOSTICS_TIMEOUT = 30.0
+
+## How long a selector jog may take before it is given up on. One full turn of
+## the turret is 16384 steps at roughly 3200 steps/s - about five seconds - and
+## the wait polls the driver rather than trusting that figure.
+SELECTOR_JOG_TIMEOUT = 30.0
+
+## Consecutive standstill readings that end a jog. The standstill bit lags the
+## last step, and a single sample of a bit that toggles is noise; the same rule
+## the move watcher uses for the feeder's motion bit.
+SELECTOR_STANDSTILL_SAMPLES = 3
+## How long to let the board finish acting on a command it already accepted.
+## Clamping is mechanical and quick; this only has to outlast that.
+SETTLE_TIMEOUT = 15.0
+## How fast to poll F13 while a move runs. The background cadence is fine for
+## status but far too coarse to judge motion: the board's motion bit toggles,
+## so three 1s samples can all land in gaps while the motor is running and
+## read as a stall that never happened.
+MOVE_POLL_INTERVAL = 0.2
+
+## How many times a move is re-issued after the board reports a driver fault.
+## The recovery lives in the wait: the moment F13 reads DRV_ERROR, send F15 and
+## re-send the same opcode. Failing the command instead means a driver that
+## dropped out ends the run instead of being recovered from.
+DEFAULT_RETRY_COUNT = 3
+
+## What runs when the board reports filament pushed into a lane: the step that
+## puts a lane in a known position instead of wherever a human left it.
+AUTOINSERT_SCRIPT = "IFS_AUTOINSERT CHANNEL=%d"
+
+## What a move waits for, as the UNTIL= parameter spells it.
+UNTIL_TOOLHEAD = "toolhead"
+UNTIL_CLEAR = "clear"
+UNTIL_DONE = "done"
+## An eject ends when the drive gear runs off the end of the filament. That is
+## NOT the lane's presence sensor going clear, which is the design this
+## replaced: measured on the rig, the tip passes the gear first, grip is lost,
+## and the filament stops while still sitting across the presence sensor - the
+## bit stayed set through a full 1000mm retract and only cleared when the
+## filament was pulled out by hand. So the signal is motion, not presence.
+UNTIL_EJECTED = "ejected"
+
+## The motion bit is sampled, so one quiet reading mid-move is noise rather
+## than the end of the filament. Three at MOVE_POLL_INTERVAL is 0.6s, which at
+## the 3600 mm/min eject is ~36mm of extra spin against the ~700mm this saves.
+EJECT_STILL_SAMPLES = 3
+
+## And the lane that never moves at all. The rule above needs motion SEEN
+## before its absence counts, or every eject would end on its first poll -
+## but that leaves the case measured on the rig: ejecting a lane whose
+## filament is already past the gear moved nothing, armed nothing, and span
+## the full tube. Ten samples is 2s of waiting plus ten ~165ms exchanges -
+## long enough for the board to get going, and measured on that same lane as
+## 11.0s for the whole eject against 24.2s before, clamp and release included.
+EJECT_START_SAMPLES = 10
+
+## Which print_stats states end a print. A pause is not among them: the job
+## resumes with whatever tool map it was printed with, and clearing there
+## would retarget every tool change after a RESUME.
+PRINT_END_STATES = frozenset(("complete", "cancelled", "error", "standby"))
+## How often the reactor reads print_stats.state to notice a print ending.
+## Stock klipper's print_stats sends no event at all (kalico's
+## print_stats:*_printing events are fork additions, and this module runs on
+## any host), so the tool map's lifetime is watched by polling it - one dict
+## read per second, nothing more.
+PRINT_WATCH_INTERVAL = 1.0
+
+
+class IfsBusy(Exception):
+    """A queued command went unanswered, or there was nothing to answer it."""
+
+
+class _Request(object):
+    """One command handed to the poll thread, and the answer coming back."""
+
+    __slots__ = ("command", "action", "done", "response", "error")
+
+    def __init__(self, command, action=None):
+        ## `command` is always the label used in errors. When `action` is set it
+        ## is run against IfsOperations instead of being written to the link, so
+        ## a caller gets the operations layer's payload checking rather than an
+        ## unvalidated write.
+        self.command = command
+        self.action = action
+        self.done = threading.Event()
+        self.response = None
+        self.error = None
+
+    def settle(self, response=None, error=None):
+        self.response = response
+        self.error = error
+        self.done.set()
+
+
+def _open_link(port, send_commit_byte):
+    """Build and open the serial link. The seam tests replace."""
+    link = ifs_link.IfsLink(send_commit_byte=send_commit_byte)
+    link.open()
+    return link
+
+
+class IFS(object):
+    def __init__(self, config, open_link=_open_link):
+        self._open_link = open_link
+        self.printer = config.get_printer()
+        self.reactor = self.printer.get_reactor()
+
+        self.poll_interval = config.getfloat("poll_interval", 1.0, above=0.1)
+        self.port = config.get("port", ifs_link.PORT)
+        self.send_commit_byte = config.getboolean(
+            "send_commit_byte", ifs_link.SEND_COMMIT_BYTE)
+        ## Only used until F19 answers, and kept by a board that never does.
+        self.configured_channels = config.getint(
+            "channel_count", ifs_status.MAX_CHANNELS, minval=1, maxval=8)
+        ## Which filament_switch_sensor speaks for the toolhead. UNTIL=toolhead
+        ## has nothing to wait on without it.
+        self.toolhead_sensor_name = config.get("toolhead_sensor", None)
+        self.retry_count = config.getint(
+            "retry_count", DEFAULT_RETRY_COUNT, minval=1)
+        self.stall_count = config.getint(
+            "stall_count", ifs_sequences.DEFAULT_CONFIRMATIONS, minval=1)
+        self.silk_count = config.getint(
+            "silk_count", ifs_sequences.DEFAULT_RUNOUT_CONFIRMATIONS, minval=1)
+        ## Whether an inserted lane is threaded automatically. Defaults to
+        ## threading it: a printer that moves filament on its own the moment
+        ## someone touches it is worth being able to turn off.
+        self.autoinsert = config.getboolean("autoinsert", True)
+        ## Every speed is tunable, with sane defaults and no ceiling beyond
+        ## "positive". 3600 is what this feeder was measured to hold; a rebuilt
+        ## one may take more or less, and the only honest limit is what the
+        ## machine sounds like. Three of them, because three different things
+        ## bound them: ifs_speed threads a fresh insert into the mechanism,
+        ## ifs_fast_speed retracts against nothing, and load_speed ends on the
+        ## toolhead sensor - see Parameters for the measurements behind each.
+        self.params = ifs_sequences.Parameters(
+            tube_mm=config.getfloat("tube_length", 1000.0, above=0.),
+            ifs_speed=config.getfloat("ifs_speed", 1200.0, above=0.),
+            load_speed=config.getfloat("load_speed", 2400.0, above=0.),
+            ifs_fast_speed=config.getfloat("ifs_fast_speed", 3600.0,
+                                           above=0.))
+
+        ## Which lane each slicer tool loads: tool n aims at _tool_map[n].
+        ## The identity (tool n -> lane n+1) is the numbering the T macros
+        ## have always had, so nothing changes until IFS_MAP_TOOL says so.
+        ## Covers the configured channels, and never persisted: the map
+        ## belongs to one print job and dies with it (see PRINT_END_STATES).
+        ## configured_channels directly, not the channel_count property: no
+        ## probe has run at construction, and the property's lock does not
+        ## exist yet.
+        self._tool_map = list(range(1, self.configured_channels + 1))
+        ## The last print_stats state the watcher saw; None until the first
+        ## read, so a first read of "printing" is not mistaken for an end.
+        self._print_state = None
+
+        self._lock = threading.Lock()
+        self._stopping = threading.Event()
+        ## Wakes the poll thread the moment work arrives, so a queued command
+        ## does not wait out the poll interval before it is sent.
+        self._wake = threading.Event()
+        self._queue = []
+        self._queue_lock = threading.Lock()
+        ## How many callers are watching a move right now. Non-zero means the
+        ## poll thread runs at the move cadence instead of the idle one.
+        self._watchers = 0
+        self._thread = None
+        self._link = None
+        self._ops = None
+        self._failures = 0
+        self._inserts = ifs_status.InsertWatcher()
+        ## Notified with every IfsStatus on the poll thread. Optional
+        ## companions (the IFS Jacker) parse their own fields out of the
+        ## raw line; a listener must be cheap and must never raise.
+        self._status_listeners = []
+
+        ## Guarded by _lock.
+        self._status = None
+        self._capabilities = None
+        self._connected = False
+        self._error = None
+
+        self.printer.register_event_handler("klippy:ready", self._start)
+        for event in ("klippy:disconnect", "klippy:shutdown"):
+            self.printer.register_event_handler(event, self._stop)
+
+        gcode = self.printer.lookup_object("gcode")
+        gcode.register_command("IFS_MAP_TOOL", self.cmd_IFS_MAP_TOOL,
+                               desc="Aim a slicer tool (T<n>) at another IFS "
+                                    "lane, for this print only")
+        gcode.register_command("IFS_REQUIRE_TOOLHEAD",
+                               self.cmd_IFS_REQUIRE_TOOLHEAD,
+                               desc="Fail unless the toolhead sensor sees "
+                                    "filament")
+        gcode.register_command("IFS_STATUS", self.cmd_IFS_STATUS,
+                               desc="Report the IFS board's current state")
+        gcode.register_command("IFS_DIAGNOSTICS", self.cmd_IFS_DIAGNOSTICS,
+                               desc="Report IFS firmware, stall counts and "
+                                    "stepper driver registers")
+        ## Primitives, each blocking until its move is decided. The sequences
+        ## that use them live in macros, so a user can read, run and override
+        ## them from the console.
+        for name, handler, description in (
+                ("IFS_CLAMP", self.cmd_IFS_CLAMP,
+                 "Clamp a channel and wait for the board to confirm"),
+                ("IFS_RELEASE", self.cmd_IFS_RELEASE, "Release a channel"),
+                ("IFS_RELEASE_ALL", self.cmd_IFS_RELEASE_ALL,
+                 "Release every channel"),
+                ("IFS_FEED", self.cmd_IFS_FEED,
+                 "Feed filament towards the toolhead until the sensor sees it"),
+                ("IFS_RETRACT", self.cmd_IFS_RETRACT,
+                 "Pull filament back into its lane"),
+                ("IFS_STOP", self.cmd_IFS_STOP, "Stop the board feeding"),
+                ("IFS_MARK_INSERTED", self.cmd_IFS_MARK_INSERTED,
+                 "Tell the board a channel now holds filament"),
+                ("IFS_RESET_DRIVER", self.cmd_IFS_RESET_DRIVER,
+                 "Reset the board's stepper driver after a fault"),
+                ("IFS_REINIT_DRIVERS", self.cmd_IFS_REINIT_DRIVERS,
+                 "Re-initialise both TMC drivers, including the selector's"),
+                ("IFS_JOG_SELECTOR", self.cmd_IFS_JOG_SELECTOR,
+                 "Diagnostic: drive the selector to an absolute step "
+                 "position without homing")):
+            gcode.register_command(name, handler, desc=description)
+
+    ## -- lifecycle ----------------------------------------------------------
+
+    def _start(self):
+        self._thread = threading.Thread(target=self._poll_loop, name="ifs-poll")
+        self._thread.daemon = True
+        self._thread.start()
+        self.reactor.register_timer(
+            self._watch_print_state,
+            self.reactor.monotonic() + PRINT_WATCH_INTERVAL)
+
+    def _watch_print_state(self, eventtime):
+        """Read print_stats once and reschedule.
+
+        Runs on the reactor, like everything that touches another klipper
+        object. A host without print_stats (no virtual_sdcard) simply never
+        ends a print, so there is nothing to watch.
+        """
+        print_stats = self.printer.lookup_object("print_stats", None)
+        if print_stats is not None:
+            self._note_print_state(print_stats.get_status(eventtime)
+                                   .get("state"))
+        return eventtime + PRINT_WATCH_INTERVAL
+
+    def _note_print_state(self, state):
+        """End the tool map's lifetime when the print it belonged to ends."""
+        ended = (self._print_state == "printing"
+                 and state in PRINT_END_STATES)
+        self._print_state = state
+        if ended:
+            self._reset_tool_map("the print ended")
+
+    def _stop(self):
+        self._stopping.set()
+        self._wake.set()
+        self._fail_queued("the IFS poller is shutting down")
+        thread, self._thread = self._thread, None
+        if thread is not None:
+            thread.join(timeout=2.0)
+        self._drop_link()
+
+    ## -- the polling thread -------------------------------------------------
+
+    def _poll_loop(self):
+        while not self._stopping.is_set():
+            if self._link is None and not self._connect():
+                self._fail_queued("the IFS is not connected")
+                self._stopping.wait(RECONNECT_DELAY)
+                continue
+            ## Queued commands come first and skip the poll interval: a
+            ## sequence waiting on one should not pay for a status poll.
+            if self._run_queued():
+                continue
+            if self._poll_once():
+                self._failures = 0
+            else:
+                self._failures += 1
+                if self._failures >= MAX_POLL_FAILURES:
+                    self._drop_link("%d consecutive poll failures"
+                                    % self._failures)
+            self._wake.wait(self._poll_delay())
+            self._wake.clear()
+
+    def _poll_delay(self):
+        with self._lock:
+            return MOVE_POLL_INTERVAL if self._watchers else self.poll_interval
+
+    def _watch_moves(self, delta):
+        with self._lock:
+            self._watchers += delta
+        if delta > 0:
+            ## Do not make the watcher wait out the idle interval first.
+            self._wake.set()
+
+    def _connect(self):
+        try:
+            link = self._open_link(self.port, self.send_commit_byte)
+        except Exception as exc:
+            self._note_error("cannot open %s: %s" % (self.port, exc))
+            return False
+        capabilities = link.capabilities
+        channels = (capabilities.channel_count
+                    if capabilities is not None and capabilities.probed
+                    else self.configured_channels)
+        self._link = link
+        self._ops = ifs_operations.IfsOperations(link, channel_count=channels)
+        self._failures = 0
+        with self._lock:
+            self._capabilities = capabilities
+            self._connected = True
+            self._error = None
+        logging.info("IFS: connected on %s, %d channels, firmware %s%s",
+                     self.port, channels,
+                     capabilities.version if capabilities else None,
+                     "" if capabilities and capabilities.probed
+                     else " (F19 unanswered)")
+        return True
+
+    def _poll_once(self):
+        """One F13. False on any failure; the loop decides what that costs."""
+        try:
+            status = self._ops.poll_status()
+        except Exception as exc:
+            self._note_error(str(exc))
+            return False
+        with self._lock:
+            self._status = status
+            self._connected = True
+            self._error = None
+        for listener in self._status_listeners:
+            try:
+                listener(status)
+            except Exception as exc:
+                logging.exception("IFS: status listener failed: %s", exc)
+                try:
+                    self._status_listeners.remove(listener)
+                except ValueError:
+                    pass
+        inserted = self._inserts.update(status)
+        if inserted:
+            self.reactor.register_async_callback(
+                lambda eventtime, ch=inserted: self._handle_inserted(ch))
+        return True
+
+    def _handle_inserted(self, channels):
+        """Announce an insert, then thread the lane.
+
+        Runs on the reactor, never on the poll thread. Failures are logged and
+        dropped rather than raised: this is not somebody's command, and a lane
+        that will not thread must not take klippy down with it.
+        """
+        self.printer.send_event("ifs:filament_inserted", channels)
+        if not self.autoinsert:
+            return
+        gcode = self.printer.lookup_object("gcode")
+        for channel in channels:
+            try:
+                gcode.run_script(AUTOINSERT_SCRIPT % channel)
+            except Exception as exc:
+                logging.warning("IFS: auto-insert of channel %d failed: %s",
+                                channel, exc)
+
+    def _drop_link(self, reason=None):
+        if reason:
+            logging.warning("IFS: dropping the link: %s", reason)
+        link, self._link, self._ops = self._link, None, None
+        if link is None:
+            return
+        try:
+            link.close()
+        except Exception as exc:
+            logging.warning("IFS: closing the link failed: %s", exc)
+
+    def _note_error(self, message):
+        logging.info("IFS: %s", message)
+        with self._lock:
+            self._connected = False
+            self._error = message
+
+    ## -- commands from klipper ----------------------------------------------
+
+    def _take_queued(self):
+        with self._queue_lock:
+            return self._queue.pop(0) if self._queue else None
+
+    def _run_queued(self):
+        """Run one queued command. True when there was one to run."""
+        request = self._take_queued()
+        if request is None:
+            return False
+        try:
+            if request.action is not None:
+                request.settle(response=request.action(self._ops))
+            else:
+                request.settle(response=self._link.request(request.command))
+        except Exception as exc:
+            request.settle(error=str(exc))
+            self._note_error("%s failed: %s" % (request.command, exc))
+        return True
+
+    def _fail_queued(self, reason):
+        """Answer everything waiting, so no caller hangs on a dead link."""
+        while True:
+            request = self._take_queued()
+            if request is None:
+                return
+            request.settle(error=reason)
+
+    def _forget(self, request):
+        with self._queue_lock:
+            if request in self._queue:
+                self._queue.remove(request)
+
+    def execute(self, command, timeout=DEFAULT_COMMAND_TIMEOUT):
+        """Run one IFS command from the reactor thread.
+
+        Yields the reactor while waiting rather than blocking it, so klipper
+        keeps servicing its MCUs through a sequence that takes tens of seconds.
+        Raises IfsBusy when nothing answers, RuntimeError when the board or the
+        link did.
+        """
+        return self._submit(_Request(command), command, timeout)
+
+    def run_operation(self, label, action, timeout=DEFAULT_COMMAND_TIMEOUT):
+        """Run one IfsOperations call on the poll thread.
+
+        The operations layer checks the board's reply payload, which is the only
+        thing that says whether a command happened - the board prefixes refusals
+        with "ok." exactly as it prefixes successes.
+        """
+        return self._submit(_Request(label, action=action), label, timeout)
+
+    def _submit(self, request, label, timeout):
+        thread = self._thread
+        if thread is None or not thread.is_alive():
+            raise IfsBusy("the IFS poller is not running")
+        with self._queue_lock:
+            self._queue.append(request)
+        self._wake.set()
+
+        deadline = self.reactor.monotonic() + timeout
+        while not request.done.is_set():
+            if self.reactor.monotonic() > deadline:
+                self._forget(request)
+                raise IfsBusy("no answer to %s within %.1fs"
+                              % (label, timeout))
+            self.reactor.pause(self.reactor.monotonic() + COMMAND_POLL_PAUSE)
+        if request.error is not None:
+            raise RuntimeError(request.error)
+        return request.response
+
+    ## -- readers ------------------------------------------------------------
+
+    def latest_status(self):
+        with self._lock:
+            return self._status
+
+    def add_status_listener(self, listener):
+        """Call `listener(status)` with every F13, on the poll thread.
+
+        One reader owns the link, so a companion that wants the status stream
+        subscribes here rather than opening the port. Exceptions are contained:
+        a broken listener is dropped, never the poll.
+        """
+        self._status_listeners.append(listener)
+
+    @property
+    def capabilities(self):
+        with self._lock:
+            return self._capabilities
+
+    @property
+    def channel_count(self):
+        capabilities = self.capabilities
+        if capabilities is not None and capabilities.probed:
+            return capabilities.channel_count
+        return self.configured_channels
+
+    def has_filament(self, channel):
+        """True/False per channel, or None before the first reading.
+
+        None is deliberately distinct from False: a sensor that has not read yet
+        must not look like a runout.
+        """
+        status = self.latest_status()
+        return None if status is None else status.has_filament(channel)
+
+    def is_moving(self, channel=0):
+        """Whether filament is moving, or None before the first reading."""
+        status = self.latest_status()
+        return None if status is None else status.is_moving(channel)
+
+    def get_status(self, eventtime=None):
+        with self._lock:
+            status, connected, error = self._status, self._connected, self._error
+            capabilities = self._capabilities
+        info = {
+            "connected": connected,
+            "error": error,
+            "channel_count": self.channel_count,
+            "version": capabilities.version if capabilities else None,
+            "probed": bool(capabilities and capabilities.probed),
+            "state": None,
+            "activity": None,
+            "activity_channel": None,
+            "active_channel": None,
+            "loaded_channels": [],
+            "moving_channels": [],
+            "pending_insert_channels": [],
+            ## Macros own the choreography, so they need the numbers. Sourced
+            ## from the printer's own Multicolour block where available.
+            "params": self.params.as_dict(),
+            ## The slicer-tool -> lane table the T macros route through.
+            ## String keys on purpose: this dict is what a status subscriber
+            ## receives, and a JSON object's keys are strings whatever Python
+            ## held, so what we publish and what a WebSocket client parses
+            ## are one and the same shape. The lanes are the 1-based numbers
+            ## SLOT= and loaded_channels speak, never tool indices.
+            "tool_map": {str(tool): lane
+                         for tool, lane in enumerate(self._tool_map)},
+        }
+        if status is not None:
+            info.update({
+                "state": status.state,
+                "activity": status.activity_name,
+                "activity_channel": status.activity_channel,
+                "active_channel": status.active_channel,
+                "loaded_channels": status.loaded_channels,
+                "moving_channels": status.moving_channels,
+                "pending_insert_channels": status.pending_insert_channels,
+            })
+        return info
+
+    ## -- moves, with the wait that decides whether they worked ------------
+
+    def _toolhead_sensor(self):
+        if not self.toolhead_sensor_name:
+            return None
+        return self.printer.lookup_object(
+            "filament_switch_sensor %s" % self.toolhead_sensor_name, None)
+
+    def _toolhead_has_filament(self):
+        """True/False/None from the toolhead sensor, None when we cannot ask."""
+        sensor = self._toolhead_sensor()
+        if sensor is None or not hasattr(sensor, "read_present"):
+            return None
+        return sensor.read_present()
+
+    def _fresh_status(self, previous):
+        """The newest poll, skipping the one that predates our command."""
+        status = self.latest_status()
+        return None if status is previous else status
+
+    def _await(self, gcmd, waiter, timeout, until=None):
+        """Watch until the move ends, yielding the reactor throughout.
+
+        Reads the poller's snapshots rather than issuing its own F13s: the
+        poller is already asking, and doubling the traffic would only slow both.
+        """
+        started = self.reactor.monotonic()
+        deadline = started + timeout
+        before = self.latest_status()
+        self._watch_moves(1)
+        try:
+            return self._await_loop(gcmd, waiter, deadline, started, before,
+                                    until)
+        finally:
+            self._watch_moves(-1)
+
+    def _await_loop(self, gcmd, waiter, deadline, started, before, until):
+        ## UNTIL=ejected state. `moved` matters: the motion bit is FALSE before
+        ## the board gets going, and calling that "ejected" would end every
+        ## eject on its first poll with the filament untouched.
+        moved, still, idle = False, 0, 0
+        while self.reactor.monotonic() < deadline:
+            self.reactor.pause(self.reactor.monotonic() + COMMAND_POLL_PAUSE)
+            elapsed = self.reactor.monotonic() - started
+
+            if until == UNTIL_TOOLHEAD and self._toolhead_has_filament() is True:
+                return ifs_sequences.Outcome(
+                    ifs_sequences.FILAMENT, self.latest_status(), elapsed,
+                    "toolhead sensor sees filament")
+            if until == UNTIL_CLEAR and self._toolhead_has_filament() is False:
+                return ifs_sequences.Outcome(
+                    ifs_sequences.FILAMENT, self.latest_status(), elapsed,
+                    "toolhead sensor is clear")
+
+            status = self._fresh_status(before)
+            if status is None:
+                continue
+            before = status
+
+            ## Before waiter.update, deliberately. With CHECK=1 the waiter
+            ## reads this same standstill as a jam; for an eject it is the
+            ## success condition, so it has to be judged first.
+            if until == UNTIL_EJECTED:
+                if status.is_moving(waiter.channel):
+                    moved, still = True, 0
+                elif moved:
+                    still += 1
+                    if still >= EJECT_STILL_SAMPLES:
+                        return ifs_sequences.Outcome(
+                            ifs_sequences.FILAMENT, status, elapsed,
+                            "the gear has run off the end of the filament")
+                else:
+                    ## Never moved. Either the lane is already clear of the
+                    ## gear or something is holding it; a full tube of
+                    ## spinning answers neither, so say which we cannot tell.
+                    idle += 1
+                    if idle >= EJECT_START_SAMPLES:
+                        return ifs_sequences.Outcome(
+                            ifs_sequences.FILAMENT, status, elapsed,
+                            "the lane never moved - already clear of the "
+                            "gear, or stuck")
+
+            outcome = waiter.update(status, elapsed)
+            if (outcome.kind == ifs_sequences.FINISHED
+                    and until in (UNTIL_TOOLHEAD, UNTIL_CLEAR)):
+                ## The board ran the whole move and came back to READY without
+                ## the sensor this move was aimed at ever changing. That is not
+                ## a finish, it is the move failing quietly: the caller asked to
+                ## feed UNTIL the toolhead, and nothing arrived there. Reporting
+                ## it as success let a load carry on to purge filament that was
+                ## still somewhere in the tube.
+                return ifs_sequences.Outcome(
+                    ifs_sequences.NOT_REACHED, status, elapsed,
+                    "the board finished but the toolhead sensor is still %s"
+                    % ("empty" if until == UNTIL_TOOLHEAD else "blocked"))
+            if outcome.kind != ifs_sequences.WAITING:
+                return outcome
+        return waiter.timed_out(self.latest_status(),
+                                self.reactor.monotonic() - started)
+
+    def _finish(self, gcmd, outcome, what, channel=None, soft=False):
+        """Report an outcome, and stop the board if it was a bad one.
+
+        `soft` reports the problem, stops the board, and returns the outcome
+        without raising, so the caller carries straight on to the co-push
+        purge. That is not laxity, it is the geometry. A load feed ENDS by arriving at
+        the extruder gear, and the IFS cannot push filament past a gear that is
+        not turning - the comment in _IFS_PURGE says so in as many words. So
+        the feed stopping short is the expected way for it to finish, not a
+        fault, and the co-push is what completes the load. Raising there aborts
+        the load before the only step that could have finished it.
+
+        The channel is deliberately NOT released on a soft finish: the purge
+        that follows drives the same lane and needs the clamp the caller took.
+        """
+        if soft and outcome.is_problem:
+            gcmd.respond_info("%s: %s%s - handing off to the extruder"
+                              % (what, outcome.kind,
+                                 " (%s)" % outcome.detail if outcome.detail
+                                 else ""))
+            try:
+                self.execute("F112")
+            except Exception as exc:
+                logging.warning("IFS: could not stop after %s: %s",
+                                outcome.kind, exc)
+            return outcome
+        if not outcome.is_problem:
+            gcmd.respond_info("%s: %s%s"
+                              % (what, outcome.kind,
+                                 " (%s)" % outcome.detail if outcome.detail
+                                 else ""))
+            return outcome
+        ## Leaving a jammed board feeding is how filament gets ground away.
+        try:
+            self.execute("F112")
+        except Exception as exc:
+            logging.warning("IFS: could not stop after %s: %s",
+                            outcome.kind, exc)
+        if outcome.kind == ifs_sequences.TIMED_OUT:
+            ## The timeout path is F112 then F18. A timeout means we no
+            ## longer know which channel the board thinks it is on, so let go
+            ## of all of them.
+            self._let_go("F18", outcome)
+        elif channel is not None:
+            ## A move that failed knows its channel, so it lets go of just that
+            ## one. A klipper macro has no finally, so the release written after
+            ## the feed never runs once the feed raises - which is how two lanes
+            ## sat gripped for hours after one failed run.
+            self._let_go("F39 C%d" % channel, outcome)
+        raise gcmd.error("%s failed: %s%s"
+                         % (what, outcome.kind,
+                            " (%s)" % outcome.detail if outcome.detail else ""))
+
+    def _let_go(self, opcode, outcome):
+        """Best-effort unclamp on a failure. Never masks the original error."""
+        try:
+            self.execute(opcode)
+        except Exception as exc:
+            logging.warning("IFS: could not release after %s: %s",
+                            outcome.kind, exc)
+
+    def _channel(self, gcmd):
+        return gcmd.get_int("CHANNEL", minval=1, maxval=self.channel_count)
+
+    def cmd_IFS_CLAMP(self, gcmd):
+        ## Acknowledged first, then settled on READY - never on CLAMPED. The
+        ## board does pass through `clamped ch=N`, for a few seconds at that
+        ## (measured: 3.8 s on channel 4, 0.2 s on channel 2), but how long is
+        ## the selector's business and a short one is missed between polls.
+        ## The wait is on the acknowledgement and then on READY, which is true
+        ## whether or not the transition was seen.
+        channel = self._channel(gcmd)
+        self._run(gcmd, "F24 C%d" % channel, lambda ops: ops.clamp(channel))
+        self._settle(gcmd, channel, "clamp channel %d" % channel)
+        gcmd.respond_info("clamped channel %d" % channel)
+
+    def cmd_IFS_RELEASE(self, gcmd):
+        channel = self._channel(gcmd)
+        self._run(gcmd, "F39 C%d" % channel,
+                  lambda ops: ops.release(channel))
+        self._settle(gcmd, channel, "release channel %d" % channel)
+        gcmd.respond_info("released channel %d" % channel)
+
+    def cmd_IFS_MARK_INSERTED(self, gcmd):
+        ## The last IFS step of a load. Without it the board is never told the
+        ## lane is occupied, so its own view of which channels hold filament
+        ## goes stale as soon as we load one.
+        channel = self._channel(gcmd)
+        self._run(gcmd, "F23 C%d" % channel,
+                  lambda ops: ops.mark_inserted(channel))
+        gcmd.respond_info("marked channel %d inserted" % channel)
+
+    def cmd_IFS_RELEASE_ALL(self, gcmd):
+        self._run(gcmd, "F18", lambda ops: ops.release_all())
+        gcmd.respond_info("released every channel")
+
+    def cmd_IFS_STOP(self, gcmd):
+        self._run(gcmd, "F112", lambda ops: ops.stop())
+        gcmd.respond_info("stopped")
+
+    def cmd_IFS_RESET_DRIVER(self, gcmd):
+        ## The literal C is what the firmware expects; it is not a channel.
+        ##
+        ## Through the operations layer like everything else: writing the opcode
+        ## straight to the link reported success whatever the board answered,
+        ## and a reset that was refused looked identical to one that worked -
+        ## which matters most here, because this is the recovery path.
+        self._run(gcmd, "F15 C", lambda ops: ops.reset_driver())
+        gcmd.respond_info("driver reset")
+
+    def cmd_IFS_REINIT_DRIVERS(self, gcmd):
+        ## F43 rewrites GCONF, IHOLD_IRUN, TPOWERDOWN, CHOPCONF and PWMCONF on
+        ## BOTH drivers. F15 C, the other "reset", is not a driver operation at
+        ## all - it drops the feeder's enable line and forces the state machine
+        ## to READY - which is why a selector carrying GSTAT's reset flag never
+        ## cleared and had no recovery before this.
+        ##
+        ## Gated on READY because F43 does not stop the state machine first:
+        ## sent mid-move it reconfigures a driver that is being stepped.
+        self._require_ready(gcmd, "re-initialise the drivers")
+        self._run(gcmd, "F43", lambda ops: ops.reinit_drivers())
+        gcmd.respond_info("both TMC drivers re-initialised; run current is "
+                          "back to the board's stock IRUN 9")
+
+    def cmd_IFS_JOG_SELECTOR(self, gcmd):
+        """Drive the selector to an absolute position. Diagnostic only.
+
+        F30 is the only way to move the selector without the full re-home that
+        every F24 performs, which makes it the way to measure the selector's
+        step rate. It is also the sharpest opcode on the board: it bypasses the
+        clamp sequencing, leaves `chan` reporting whichever lane was selected
+        before, and parks the state machine at 129 for ever. The F15 C that
+        frees it runs on every path out of here, including the failing ones.
+        """
+        position = gcmd.get_int("POSITION", minval=0,
+                                maxval=ifs_operations.SELECTOR_STEPS_PER_TURN)
+        try:
+            ## Inside the try, not before it. A jog that fails on the wire is
+            ## the case where the board's state is least known - the firmware
+            ## has no refusal payload for F30, so an unexpected answer means a
+            ## desynced stream, not a command that was declined. Cleaning up
+            ## only after a clean send would skip exactly the case that needs
+            ## it.
+            self._run(gcmd, "F30 D%d" % position,
+                      lambda ops: ops.jog_selector(position))
+            arrived = self._await_selector()
+        finally:
+            ## Unconditional: an unfreed 129 answers every later feed with
+            ## "FFS not ready.", and the failure that stranded it would be
+            ## blamed on whatever ran next.
+            self._free_selector(gcmd)
+        if arrived is None:
+            gcmd.respond_info(
+                "selector jog to %d sent, but the driver never reported "
+                "standstill within %gs" % (position, SELECTOR_JOG_TIMEOUT))
+            return
+        gcmd.respond_info("selector jogged to %d in %.2fs"
+                          % (position, arrived))
+
+    def _await_selector(self):
+        """Seconds the jog took, or None if standstill never confirmed.
+
+        Watches the selector driver's standstill bit, which is the only place
+        this motor reports: F13's stall_state is the feeder's motion bit and
+        stays clear throughout a selector move.
+        """
+        started = self.reactor.monotonic()
+        deadline = started + SELECTOR_JOG_TIMEOUT
+        still = 0
+        while self.reactor.monotonic() < deadline:
+            self.reactor.pause(self.reactor.monotonic() + MOVE_POLL_INTERVAL)
+            try:
+                moving = self.run_operation(
+                    "F63",
+                    lambda ops: ifs_diagnostics.read_driver_motion(
+                        ops.link, ifs_diagnostics.SELECTOR))
+            except Exception:
+                ## One bad read mid-move is not a reason to abandon a move that
+                ## is still running. Unknown, keep watching, and let the
+                ## deadline be what ends this - a link that is really gone
+                ## reaches it soon enough, and the cleanup runs either way.
+                moving = None
+            ## None is "the driver did not answer", not "it has arrived".
+            still = still + 1 if moving is False else 0
+            if still >= SELECTOR_STANDSTILL_SAMPLES:
+                return self.reactor.monotonic() - started
+        return None
+
+    def _free_selector(self, gcmd):
+        """F15 C, the only way out of state 129. Never raises."""
+        try:
+            self.run_operation("F15 C", lambda ops: ops.reset_driver())
+        except Exception as exc:
+            gcmd.respond_info("IFS: the selector may still be parked in state "
+                              "129 - F15 C failed: %s" % exc)
+
+    def _require_ready(self, gcmd, what):
+        status = self.latest_status()
+        if status is None:
+            raise gcmd.error("IFS: cannot %s - the board has not reported its "
+                             "state yet" % what)
+        if not status.is_ready:
+            raise gcmd.error("IFS: cannot %s while the board is %s"
+                             % (what, status.activity_name))
+
+    def _settle(self, gcmd, channel, what, timeout=SETTLE_TIMEOUT):
+        """Wait for the board to come back to READY after a command.
+
+        Both F24 and F39 are followed by this wait, which returns when F13
+        reports READY. The acknowledgement only says the opcode was accepted - the board is still
+        acting on it, and the next opcode sent meanwhile is refused with "FFS
+        not ready.". A feed issued straight after a clamp hit exactly that.
+        """
+        waiter = ifs_sequences.StateWaiter(channel, watch_stall=False)
+        return self._finish(gcmd, self._await(gcmd, waiter, timeout), what)
+
+    def _run(self, gcmd, label, action, timeout=DEFAULT_COMMAND_TIMEOUT):
+        """run_operation, reporting board and link failures as command errors.
+
+        Anything that is not a gcode error reaches klipper as "Internal error on
+        command", which puts klippy into SHUTDOWN and takes the MCUs down with
+        it. A board that refuses an opcode is an ordinary, expected answer - it
+        must fail the command, not the printer. Observed the hard way: a refused
+        F10 shut the printer down and needed a FIRMWARE_RESTART.
+        """
+        try:
+            return self.run_operation(label, action, timeout)
+        except gcmd.error:
+            raise
+        except Exception as exc:
+            raise gcmd.error(str(exc))
+
+    ## Which IfsOperations call each move opcode is. Going through operations
+    ## rather than writing the opcode to the link is what checks the reply: the
+    ## board prefixes a refusal with "ok." exactly as it prefixes a success, so
+    ## an unvalidated send turns "F10 ok. FFS not ready." into a silent
+    ## two-minute wait for a state that was never coming.
+    MOVE_OPERATIONS = {"F10": "feed", "F11": "retract"}
+
+    def _move(self, gcmd, opcode, activity, default_until, what):
+        channel = self._channel(gcmd)
+        length = gcmd.get_float("LENGTH", self.params.tube_mm, above=0.)
+        speed = gcmd.get_float("SPEED", self.params.ifs_speed, above=0.)
+        until = gcmd.get("UNTIL", default_until)
+        timeout = gcmd.get_float("TIMEOUT", DEFAULT_MOVE_TIMEOUT, above=0.)
+
+        if until in (UNTIL_TOOLHEAD, UNTIL_CLEAR):
+            if self._toolhead_has_filament() is None:
+                raise gcmd.error(
+                    "UNTIL=%s needs a toolhead sensor; set toolhead_sensor= "
+                    "in [ifs]" % until)
+        elif until not in (UNTIL_DONE, UNTIL_EJECTED):
+            raise gcmd.error("UNTIL must be %s, %s, %s or %s"
+                             % (UNTIL_TOOLHEAD, UNTIL_CLEAR, UNTIL_DONE,
+                                UNTIL_EJECTED))
+
+        label = "%s C%d L%d S%d" % (opcode, channel, length, speed)
+        operation = self.MOVE_OPERATIONS[opcode]
+        send = lambda ops: getattr(ops, operation)(channel, length, speed)
+        self._run(gcmd, label, send)
+
+        if gcmd.get_int("SLEEP", 0):
+            ## SLEEP=1: fire the opcode and pause for a fixed fraction of
+            ## the move rather than watching state at all. It is used where the
+            ## EXTRUDER is driving the same filament, and there the lane's
+            ## motion bit is not a stall signal - something else is pulling, and
+            ## at the extruder's 300 mm/min the bit reads as stopped within
+            ## seconds. Watching it there failed a co-push that was working.
+            self.reactor.pause(self.reactor.monotonic()
+                               + (length * 20) // speed + 1)
+            return None
+
+        ## CHECK turns on BOTH judgements, silk and stall, against the
+        ## channel's activity state - so a lane that ran out is reported as an
+        ## empty lane rather than as a jam. Only the LOAD feed asks for it: a
+        ## retract is a plain move that waits for READY and nothing else, and
+        ## watching a retract for stalls failed one that had worked: the motion
+        ## stopping IS how a retract ends.
+        ## BACKOFF exists because a klipper macro is rendered ONCE, before any
+        ## of it runs: a template cannot look at the toolhead sensor after its
+        ## own feed, because that read happened before the feed was sent. So
+        ## "retract this much, but only if you actually reached the sensor" has
+        ## to be decided here, where the outcome is known.
+        backoff = gcmd.get_float("BACKOFF", 0., minval=0.)
+        check = gcmd.get_int("CHECK", 0)
+        for attempt in range(self.retry_count):
+            ## A fresh waiter per attempt: the one that saw the fault has a
+            ## stall run part-counted against a board that was not driving.
+            waiter = ifs_sequences.StateWaiter(
+                channel, activity if check else None,
+                watch_stall=bool(check), watch_runout=bool(check),
+                confirmations=self.stall_count,
+                runout_confirmations=self.silk_count)
+            outcome = self._await(gcmd, waiter, timeout, until=until)
+            if outcome.kind != ifs_sequences.DRIVER_ERROR:
+                break
+            ## The driver is reset on every DRV_ERROR, including the last one
+            ## we give up on, so the board is not left faulted.
+            self._run(gcmd, "F15 C", lambda ops: ops.reset_driver())
+            if attempt + 1 < self.retry_count:
+                gcmd.respond_info("%s channel %d: driver fault, reset and "
+                                  "retrying (%d of %d)"
+                                  % (what, channel, attempt + 2,
+                                     self.retry_count))
+                self._run(gcmd, label, send)
+        ## SOFT=1 is the non-fatal feed. Only the load asks for it; an
+        ## autoinsert thread still fails loudly, because nothing follows it that
+        ## could rescue a lane that never arrived.
+        result = self._finish(gcmd, outcome,
+                              "%s channel %d" % (what, channel),
+                              channel=channel,
+                              soft=bool(gcmd.get_int("SOFT", 0)))
+        if backoff and outcome.kind == ifs_sequences.FILAMENT:
+            ## Only when the sensor is what ended the move. A feed that merely
+            ## ran out of length has not arrived anywhere to back away from.
+            self._run(gcmd, "F11 C%d L%d S%d" % (channel, backoff, speed),
+                      lambda ops: ops.retract(channel, backoff, speed))
+            self._settle(gcmd, channel, "back off channel %d" % channel)
+        return result
+
+    def cmd_IFS_FEED(self, gcmd):
+        self._move(gcmd, "F10", ifs_status.LOADING, UNTIL_TOOLHEAD, "feed")
+
+    def cmd_IFS_RETRACT(self, gcmd):
+        self._move(gcmd, "F11", ifs_status.UNLOADING, UNTIL_DONE, "retract")
+
+    ## -- gcode --------------------------------------------------------------
+
+    def _reset_tool_map(self, why):
+        """Put the identity back, and say so when a mapping was dropped.
+
+        No error when the map already is the identity: RESET=1 and a print
+        ending both land here with nothing to do, and neither is a problem.
+        """
+        identity = list(range(1, len(self._tool_map) + 1))
+        if self._tool_map != identity:
+            logging.info("IFS: %s; tool map back to identity", why)
+        self._tool_map = identity
+
+    ## GCODE_SAFE: reads the cached snapshot and raises gcmd.error on a lane
+    ## that cannot fulfill the tool - the outcome this check exists for.
+    def cmd_IFS_MAP_TOOL(self, gcmd):
+        """Aim a slicer tool at a lane, for this print only.
+
+        The T macros read the table, so a file written `T2` loads whichever
+        lane tool 2 is aimed at instead of always lane 3. RESET=1 restores
+        the identity. Nothing here is persisted; the print ending clears the
+        table, and a klippy restart loses it.
+        """
+        if gcmd.get_int("RESET", 0):
+            self._reset_tool_map("IFS_MAP_TOOL RESET")
+            gcmd.respond_info("IFS: tool map reset; every tool back to its "
+                              "own lane")
+            return
+        tool = gcmd.get_int("TOOL", minval=0, maxval=len(self._tool_map) - 1)
+        slot = gcmd.get_int("SLOT", minval=1, maxval=len(self._tool_map))
+        status = self.latest_status()
+        if status is None:
+            raise gcmd.error("IFS_MAP_TOOL: no IFS reading yet, so lane %d "
+                             "cannot be checked for filament" % slot)
+        if slot not in status.loaded_channels:
+            ## Refused here rather than at the T that would load it: a print
+            ## file failing mid-run at a tool change is the expensive way to
+            ## learn the lane was empty, and IFS_LOAD's own guard never sees
+            ## a lane the map never named.
+            raise gcmd.error("IFS_MAP_TOOL: lane %d has no filament; a tool "
+                             "may only be aimed at a lane that can fulfill "
+                             "it" % slot)
+        self._tool_map[tool] = slot
+        gcmd.respond_info("IFS: tool T%d -> lane %d" % (tool, slot))
+
+    ## GCODE_SAFE: reads one sensor and raises gcmd.error, which is the
+    ## command failing - the outcome this whole gate exists to get. The read
+    ## itself returns None rather than raising when there is no sensor.
+    def cmd_IFS_REQUIRE_TOOLHEAD(self, gcmd):
+        """The load's real success test, asked AFTER the co-push.
+
+        A soft feed cannot say whether the load worked, because arriving at the
+        gear and never arriving at all end the same way. The toolhead sensor
+        can, once the extruder has had its turn at the filament - never
+        asking means quietly purging air when a lane did not make it.
+        """
+        present = self._toolhead_has_filament()
+        if present is None:
+            gcmd.respond_info("IFS: no toolhead sensor to check")
+            return
+        if not present:
+            raise gcmd.error("IFS: the toolhead sensor is still empty after "
+                             "the purge - the lane did not reach the extruder")
+        gcmd.respond_info("IFS: toolhead sensor sees filament")
+
+    ## GCODE_SAFE: reads the cached snapshot and formats it. get_status()
+    ## returns a dict with every key present even when the link is down,
+    ## so there is nothing here that can raise.
+    def cmd_IFS_STATUS(self, gcmd):
+        info = self.get_status()
+        if not info["connected"]:
+            gcmd.respond_info("IFS: not connected (%s)"
+                              % (info["error"] or "no reason recorded"))
+            return
+        where = (" ch%d" % info["activity_channel"]
+                 if info["activity_channel"] else "")
+        gcmd.respond_info(
+            "IFS %s, %d channels: %s%s | loaded %s | moving %s"
+            % (info["version"], info["channel_count"], info["activity"], where,
+               info["loaded_channels"] or "none",
+               info["moving_channels"] or "none"))
+
+    def cmd_IFS_DIAGNOSTICS(self, gcmd):
+        if self._link is None:
+            gcmd.respond_info("IFS: not connected")
+            return
+        try:
+            ## Through the queue, like every other command. Reading the link
+            ## straight from klipper's thread raced the poll thread for it: the
+            ## two readers split each other's replies, so the output varied
+            ## between calls - stall counts on one, raw silk on the next - and
+            ## the status poll that landed mid-batch came back empty and
+            ## reported the board as disconnected. Fourteen queries is a long
+            ## race to leave open.
+            diag = self.run_operation(
+                "diagnostics",
+                lambda ops: ifs_diagnostics.read_diagnostics(
+                    ops.link, self.capabilities),
+                timeout=DIAGNOSTICS_TIMEOUT)
+        except Exception as exc:
+            gcmd.respond_info("IFS: diagnostics failed: %s" % exc)
+            return
+        gcmd.respond_info("IFS firmware %s, %s channels"
+                          % (diag.version, diag.channel_count))
+        if diag.stall_counts:
+            gcmd.respond_info("  stall counts: %s" % (diag.stall_counts,))
+        if diag.silk_raw:
+            gcmd.respond_info("  raw silk (low = loaded): %s" % (diag.silk_raw,))
+        for driver in diag.drivers:
+            gcmd.respond_info("  %-8s %s" % (
+                driver.label,
+                ", ".join(driver.flags) if driver.flags else "no flags"))
+        for label, fault in diag.faults:
+            gcmd.respond_info("  !! %s: %s (%s)"
+                              % (label, fault, ifs_diagnostics.describe(fault)))
+        if not diag.faults:
+            gcmd.respond_info("  no driver faults")
+
+
+def load_config(config):
+    return IFS(config)
