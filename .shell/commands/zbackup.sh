@@ -11,7 +11,7 @@ source /opt/config/mod/.shell/common.sh
 CFG_PATH="/opt/config/mod_data/backup.params.cfg"
 
 if [ ! -f $CFG_PATH ]; then
-    cp "/opt/config/mod/.cfg/default/backup.params.cfg" "$CFG_PATH"
+    cp "$MOD_ROOT/.cfg/default/backup.params.cfg" "$CFG_PATH"
 fi
 
 
@@ -43,24 +43,24 @@ TAR_BACKUP_PARAMS=(
 TAR_DEBUG_PARAMS=(
     "${COMMON_CFG_PARAMS[@]}"
     ./mod/sql/version
-    /data/logFiles/boot.log*
-    /data/logFiles/skip.log*
-    /data/logFiles/ssh.log*
-    /data/logFiles/wifi.log*
-    /data/logFiles/netd.log*
-    /data/logFiles/service.log*
-    /data/logFiles/uninstall.log*
-    /data/logFiles/mod/*.log*
-    /data/logFiles/verification.log*
-    /data/logFiles/printer.log*
-    /data/logFiles/moonraker.log*
-    /data/logFiles/console*.log
-    /data/logFiles/firmwareExe.log*
-    /data/logFiles/ffstartup-arm.log
-    /data/logFiles/dmesg.complete.log
+    "$LOG_DIR"/boot.log*
+    "$LOG_DIR"/skip.log*
+    "$LOG_DIR"/ssh.log*
+    "$LOG_DIR"/wifi.log*
+    "$LOG_DIR"/netd.log*
+    "$LOG_DIR"/service.log*
+    "$LOG_DIR"/uninstall.log*
+    "$LOG_DIR"/mod/*.log*
+    "$LOG_DIR"/verification.log*
+    "$LOG_DIR"/printer.log*
+    "$LOG_DIR"/moonraker.log*
+    "$LOG_DIR"/console*.log
+    "$LOG_DIR"/firmwareExe.log*
+    "$LOG_DIR/ffstartup-arm.log"
+    "$LOG_DIR/dmesg.complete.log"
     /root/version
-    /data/.mod/.forge-x/etc/os-release
-    /data/.mod/.forge-x/version.txt
+    "$MOD/etc/os-release"
+    "$MOD/version.txt"
 )
 
 tar_backup() {
@@ -115,7 +115,7 @@ while [ "$#" -gt 0 ]; do
             exit $?
         ;;
         --tar-debug)
-            copy_pipe "/tmp/printer" "/data/logFiles/console_$(date +%Y%m%d_%H%M%S).log"
+            copy_pipe "/tmp/printer" "$LOG_DIR/console_$(date +%Y%m%d_%H%M%S).log"
             tar_backup "debug" TAR_DEBUG_PARAMS
             exit $?
         ;;

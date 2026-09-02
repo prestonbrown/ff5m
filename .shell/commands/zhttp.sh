@@ -1,5 +1,6 @@
 #!/bin/bash
 
+
 ## Auxiliary script for web interface changing
 ##
 ## Copyright (C) 2025, Alexander K <https://github.com/drA1ex>
@@ -7,9 +8,12 @@
 ##
 ## This file may be distributed under the terms of the GNU GPLv3 license
 
-MOD=/data/.mod/.forge-x
+# Board-specific values. platform.sh rather than common.sh: this file needs
+# only the descriptor, not common.sh's bash helpers.
+# shellcheck disable=SC1091
+. /opt/config/mod/.shell/platform.sh
 
-CFG_SCRIPT="/opt/config/mod/.shell/commands/zconf.sh"
+CFG_SCRIPT="$MOD_ROOT/.shell/commands/zconf.sh"
 CFG_PATH="/opt/config/mod_data/web.conf"
 
 DEFAULT_WEB="fluidd"
@@ -18,7 +22,7 @@ DEFAULT_WEB="fluidd"
 load() {
     # Create default configuration if needed
     if [ ! -f "$CFG_PATH" ]; then
-        cp "/opt/config/mod/.cfg/default/web.conf" "$CFG_PATH"
+        cp "$MOD_ROOT/.cfg/default/web.conf" "$CFG_PATH"
     fi
     
     WEB=$($CFG_SCRIPT $CFG_PATH --get "CLIENT" "$DEFAULT_WEB")
@@ -51,7 +55,7 @@ EOF
 
 restart() {
     unset LD_PRELOAD
-    chroot "$MOD" /opt/config/mod/.root/S70httpd restart
+    chroot "$MOD" "$MOD_ROOT/.root/S70httpd" restart
 }
 
 

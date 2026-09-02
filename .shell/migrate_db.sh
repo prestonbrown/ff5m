@@ -1,5 +1,6 @@
 #!/bin/bash
 
+
 ## Apply SQL migrations to Moonraker's database with detailed output
 ##
 ## Copyright (C) 2025, Alexander K <https://github.com/drA1ex>

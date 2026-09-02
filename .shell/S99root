@@ -115,7 +115,7 @@ switch() {
     esac
 }
 
-switch "$@" 2>&1 | logged "/data/logFiles/boot.log" --send-to-screen --screen-no-followup
+switch "$@" 2>&1 | logged "$LOG_DIR/boot.log" --send-to-screen --screen-no-followup
 status=$?
 
 case "$1" in

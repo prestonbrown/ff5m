@@ -17,11 +17,15 @@ FLAGS=("SKIP_MOD" "SKIP_MOD_SOFT" "REMOVE_MOD" "REMOVE_MOD_SOFT" "klipper_mod_sk
 check_special_boot_flag() {
     local path=$1
 
-    # Check firmware image first
-    if ls "$path"/Adventurer5M*.tgz &> /dev/null; then
-        echo "FIRMWARE_IMAGE"
-        return 0
-    fi
+    # Check firmware image first (AD5M: Adventurer5M*.tgz, AD5X: AD5X-*.tgz).
+    # An unmatched glob stays literal, so the -e test rejects it and only a
+    # real file trips FIRMWARE_IMAGE.
+    for image in "$path"/Adventurer5M*.tgz "$path"/AD5X-*.tgz; do
+        if [ -e "$image" ]; then
+            echo "FIRMWARE_IMAGE"
+            return 0
+        fi
+    done
 
     # Check init script
     if [ -f "$path/flashforge_init.sh" ]; then

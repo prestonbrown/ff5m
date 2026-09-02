@@ -8,10 +8,19 @@
 
 USB_BROWSER_SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 source "$USB_BROWSER_SCRIPT_DIR/../boot/usb_storage.sh"
+
+# Board-specific values. platform.sh rather than common.sh: this file needs
+# only the descriptor. Sourced relative to this script so it resolves both
+# on-device and when a test sources this file from the checkout. The chroot
+# rootfs default ($MOD) comes from the descriptor; an injected
+# USB_BROWSER_CHROOT_ROOT (including empty) still overrides it.
+# shellcheck disable=SC1090,SC1091
+source "$USB_BROWSER_SCRIPT_DIR/../platform.sh"
+
 USB_BROWSER_PROC_SWAPS="${USB_BROWSER_PROC_SWAPS:-/proc/swaps}"
 USB_BROWSER_WAIT_SECONDS="${USB_BROWSER_WAIT_SECONDS:-2}"
 USB_BROWSER_DATA_ROOT="${USB_BROWSER_DATA_ROOT:-/data}"
-USB_BROWSER_CHROOT_ROOT="${USB_BROWSER_CHROOT_ROOT-/data/.mod/.forge-x}"
+USB_BROWSER_CHROOT_ROOT="${USB_BROWSER_CHROOT_ROOT-$MOD}"
 
 
 usb_browser_error() {

@@ -1,0 +1,20 @@
+#!/bin/sh
+# AD5X /bin/bash provider (installed as /bin/bash by init_lib.sh provide_host_bash).
+#
+# The stock AD5X host is BusyBox on a read-only squashfs and ships no /bin/bash,
+# and its kernel has no overlayfs, so a #!/bin/bash mod script - the Forge-X
+# gcode_shell_command targets that klippy runs on the host - cannot start.
+# provide_host_bash binds a faithful /bin superset that adds this file as
+# /bin/bash; it re-execs the mod's own Buildroot bash through the rootfs loader
+# (FORGEX_BASH_* from the platform descriptor), so every mod script runs
+# unmodified with its pristine #!/bin/bash. Never invoked on the AD5M, whose
+# host already provides /bin/bash.
+#
+# The descriptor path below is the on-rig MOD_ROOT literal: a file installed as
+# /bin/bash cannot learn the descriptor's location from a variable it has not
+# sourced yet - the same bootstrap constraint, and the same literal, as the
+# ad5x_bootstrap.sh HOOK_LINE.
+# shellcheck source=/dev/null disable=SC1091
+. /usr/data/config/mod/.shell/platform.sh
+# shellcheck disable=SC2154  # FORGEX_BASH_* are defined by the sourced descriptor
+exec "$FORGEX_BASH_LD" --library-path "$FORGEX_BASH_LIBPATH" "$FORGEX_BASH_BIN" "$@"

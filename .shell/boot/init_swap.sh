@@ -7,12 +7,34 @@
 ## This file may be distributed under the terms of the GNU GPLv3 license
 
 
-MOD="${MOD:-/data/.mod/.forge-x}"
-CFG_SCRIPT="${CFG_SCRIPT:-/opt/config/mod/.shell/commands/zconf.sh}"
-CFG_PATH="${CFG_PATH:-/opt/config/mod_data/variables.cfg}"
 SWAP_SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 
+# Board-specific values. platform.sh rather than common.sh: this file needs
+# only the descriptor. Sourced relative to this script so it resolves both
+# on-device and when a test sources this file from the checkout. MOD (chroot
+# rootfs) comes from the descriptor.
+# shellcheck disable=SC1090,SC1091
+source "$SWAP_SCRIPT_DIR/../platform.sh"
+
+CFG_SCRIPT="${CFG_SCRIPT:-$MOD_ROOT/.shell/commands/zconf.sh}"
+CFG_PATH="${CFG_PATH:-/opt/config/mod_data/variables.cfg}"
+
 source "$SWAP_SCRIPT_DIR/usb_storage.sh"
+
+
+# A kernel built without swap support has no /proc/swaps at all, and every
+# swapon in this script would fail with ENOSYS after doing allocation work
+# (measured on the AD5X: its stock 5.10 kernel answers swapon(2) with ENOSYS
+# and SwapTotal reads 0). The entry exists on any swap-capable kernel even
+# with zero swap active - the AD5M and CC1 both have it - so this skips
+# exactly the incapable machines and says why once, before the default MMC
+# mode spends eMMC wear on a file nothing can use. Redirectable for tests,
+# like every other path this script reads.
+PROC_SWAPS="${PROC_SWAPS:-/proc/swaps}"
+if [ ! -e "$PROC_SWAPS" ]; then
+    echo "// Kernel has no swap support (no $PROC_SWAPS); skipping swap setup"
+    exit 0
+fi
 
 
 SWAP_SIZE="${SWAP_SIZE-${1-64M}}"

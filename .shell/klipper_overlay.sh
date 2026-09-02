@@ -6,6 +6,11 @@
 ##
 ## This file may be distributed under the terms of the GNU GPLv3 license
 
+# Board-specific values. Sourced by a path relative to this file so it resolves
+# both on-device and when a test sources this script from the checkout.
+# shellcheck disable=SC1090,SC1091
+. "$(dirname "${BASH_SOURCE[0]}")/platform.sh"
+
 klipper_overlay_ignored() {
     local rel_path="$1"
 
@@ -63,6 +68,51 @@ klipper_overlay_plugin_link_is_current() {
     return 0
 }
 
+# Patches may come from the common `patches/` tree or, when a per-board override
+# exists, from `patches.$PLATFORM/` (which wins). Given a symlink source, echo
+# its path relative to whichever patch tree owns it (checking the override first)
+# and return 0; return 1 if the source is not under any patch tree for this board.
+klipper_overlay_patch_relpath() {
+    local source="$1"
+    local src_dir="$2"
+
+    if [ -n "${PLATFORM:-}" ] && [ -d "$src_dir/patches.$PLATFORM" ]; then
+        case "$source" in
+            "$src_dir/patches.$PLATFORM/"*)
+                printf '%s\n' "${source#"$src_dir/patches.$PLATFORM/"}"
+                return 0
+            ;;
+        esac
+    fi
+
+    case "$source" in
+        "$src_dir/patches/"*)
+            printf '%s\n' "${source#"$src_dir/patches/"}"
+            return 0
+        ;;
+    esac
+
+    return 1
+}
+
+# A board may ship newer stock than a given base patch was written against, in
+# which case overlaying the (older) base patch would regress it. Such files are
+# listed, one relative path per line, in `patches.$PLATFORM/.exclude`, and the
+# base patch is skipped on that board (the board keeps its own stock module).
+# Returns 0 if $rel_file is excluded for this platform. Comment lines (#...) and
+# blank lines never match, so they are effectively ignored.
+klipper_overlay_excluded() {
+    local rel_file="$1"
+    local src_dir="$2"
+    local exclude_file
+
+    [ -n "${PLATFORM:-}" ] || return 1
+    exclude_file="$src_dir/patches.$PLATFORM/.exclude"
+    [ -f "$exclude_file" ] || return 1
+
+    grep -qxF "$rel_file" "$exclude_file"
+}
+
 klipper_overlay_patch_link_is_current() {
     local link="$1"
     local source="$2"
@@ -70,12 +120,7 @@ klipper_overlay_patch_link_is_current() {
     local target_dir="$4"
     local rel_file expected
 
-    case "$source" in
-        "$src_dir/patches/"*) ;;
-        *) return 1 ;;
-    esac
-
-    rel_file=${source#"$src_dir/patches/"}
+    rel_file=$(klipper_overlay_patch_relpath "$source" "$src_dir") || return 1
     expected="$target_dir/$rel_file"
 
     [ "$link" = "$expected" ] || return 1
@@ -85,6 +130,14 @@ klipper_overlay_patch_link_is_current() {
         *) return 1 ;;
     esac
     klipper_overlay_ignored "$rel_file" && return 1
+
+    # A base patch that has since been excluded on this board is no longer
+    # current: its link should be restored to the board's own stock module.
+    case "$source" in
+        "$src_dir/patches/"*)
+            klipper_overlay_excluded "$rel_file" "$src_dir" && return 1
+        ;;
+    esac
 
     return 0
 }
@@ -109,14 +162,75 @@ klipper_overlay_clean_links() {
                     || klipper_overlay_restore_or_remove "$link" \
                     || return 1
             ;;
-            "$src_dir/patches/"*)
-                klipper_overlay_patch_link_is_current \
-                    "$link" "$source" "$src_dir" "$target_dir" \
-                    || klipper_overlay_restore_or_remove "$link" \
-                    || return 1
+            "$src_dir/"*)
+                # Any patch tree for this board (patches/ or patches.$PLATFORM/).
+                # A link into one that is no longer current is restored/removed;
+                # links outside our trees (external) are left untouched.
+                if klipper_overlay_patch_relpath "$source" "$src_dir" \
+                        >/dev/null; then
+                    klipper_overlay_patch_link_is_current \
+                        "$link" "$source" "$src_dir" "$target_dir" \
+                        || klipper_overlay_restore_or_remove "$link" \
+                        || return 1
+                fi
             ;;
         esac
     done < <(find "$target_dir" -type l)
+}
+
+## Tear the overlay back down: every symlink under $target_dir that points into
+## $src_dir goes back to its .bak, or is deleted when it has no backup (those are
+## mod-only additions, so removing them restores the stock tree exactly).
+##
+## The counterpart to klipper_overlay_clean_links, which only drops links that
+## are STALE. This drops all of ours, current ones included, and it is what makes
+## a stood-down mod safe: the overlay outlives the mod that installed it, so
+## stock klippy would otherwise import patched modules whose runtime environment
+## is gone and fail to start.
+klipper_overlay_remove_all() {
+    local src_dir="$1"
+    local target_dir="$2"
+    local link source rc=0
+
+    [ -d "$target_dir" ] || return 0
+
+    while IFS= read -r link; do
+        source=$(readlink "$link") || continue
+        case "$source" in
+            "$src_dir/"*) klipper_overlay_restore_or_remove "$link" || rc=1 ;;
+        esac
+    done < <(find "$target_dir" -type l)
+
+    return "$rc"
+}
+
+## Drop every compiled-bytecode cache under the klipper tree.
+##
+## Both halves of the overlay swap .py files in place, and CPython decides
+## whether a cached .pyc is still good from the source's mtime and size. That
+## check is not trustworthy here: the AD5X has no RTC, so its clock walks from
+## 1970 to a restored time to ntp within a single boot, and the data partition
+## is mounted `sync` with coarse timestamps. A stale .pyc that wins the check is
+## silent and total - klippy imports the OTHER version of the module, and the
+## first symptom is a config option the loaded module has never heard of.
+##
+## Seen for real: a stand-down boot ran stock klippy, which compiled the stock
+## extras into the shared __pycache__; the next mod boot relinked all 151
+## symlinks correctly and klippy still imported stock gcode_shell_command, which
+## does not know `mode:`. The printer halted with no heaters and no motion, and
+## nothing in the bring-up log looked wrong.
+##
+## So purge after linking AND after reverting - a swap in either direction
+## leaves bytecode compiled from the file that is no longer there.
+klipper_overlay_purge_bytecode() {
+    local target_dir="$1"
+
+    [ -d "$target_dir" ] || return 0
+
+    find "$target_dir" -name __pycache__ -type d -exec rm -rf {} + 2>/dev/null
+    find "$target_dir" -name '*.pyc' -delete 2>/dev/null
+
+    return 0
 }
 
 klipper_overlay_link_plugins() {
@@ -150,10 +264,18 @@ klipper_overlay_link_plugins() {
 klipper_overlay_link_patches() {
     local src_dir="$1"
     local target_dir="$2"
-    local file rel_file target parent current
+    local rel_file target parent current winner arch_dir
 
-    while IFS= read -r file; do
-        rel_file=${file#"$src_dir/patches/"}
+    # The common tree, plus a per-board override tree when one exists. A file
+    # present in both is taken from the override; a file present only in the
+    # common tree comes from there. AD5M has no override tree, so this reduces
+    # to the single `patches/` walk it has always done.
+    arch_dir=""
+    if [ -n "${PLATFORM:-}" ] && [ -d "$src_dir/patches.$PLATFORM" ]; then
+        arch_dir="$src_dir/patches.$PLATFORM"
+    fi
+
+    while IFS= read -r rel_file; do
         klipper_overlay_ignored "$rel_file" && continue
 
         case "$rel_file" in
@@ -161,19 +283,31 @@ klipper_overlay_link_patches() {
             *) continue ;;
         esac
 
+        if [ -n "$arch_dir" ] && [ -f "$arch_dir/$rel_file" ]; then
+            winner="$arch_dir/$rel_file"
+        elif klipper_overlay_excluded "$rel_file" "$src_dir"; then
+            # Excluded on this board: leave its own stock module untouched.
+            continue
+        else
+            winner="$src_dir/patches/$rel_file"
+        fi
+
         target="$target_dir/$rel_file"
         if [ -L "$target" ]; then
             current=$(readlink "$target") || return 1
-            [ "$current" = "$file" ] && continue
+            [ "$current" = "$winner" ] && continue
 
-            echo "@@ Refusing to overwrite unmanaged klipper symlink: $target"
-            return 1
-        fi
-
-        parent=${target%/*}
-        mkdir -p "$parent" || return 1
-
-        if [ -e "$target" ]; then
+            # A link already pointing into one of our patch trees (e.g. a base
+            # link now shadowed by an override) is ours to re-point; only a link
+            # to something outside our trees is treated as unmanaged.
+            if klipper_overlay_patch_relpath "$current" "$src_dir" \
+                    >/dev/null; then
+                rm -f "$target" || return 1
+            else
+                echo "@@ Refusing to overwrite unmanaged klipper symlink: $target"
+                return 1
+            fi
+        elif [ -e "$target" ]; then
             if [ ! -e "$target.bak" ] && [ ! -L "$target.bak" ]; then
                 echo "// Create klipper file backup: $target"
                 mv "$target" "$target.bak" || return 1
@@ -182,18 +316,40 @@ klipper_overlay_link_patches() {
                 rm -f "$target" || return 1
             fi
         elif [ ! -e "$target.bak" ] && [ ! -L "$target.bak" ]; then
-            echo "@@ Missing klipper patch target and backup: $target"
-            return 1
+            # No stock module to replace and no prior backup: this patch is a
+            # Forge-X module the board's stock Klipper does not ship (e.g.
+            # gcode_shell_command on the AD5X, whose newer stock omits it). Add
+            # it as a new module; uninstall just removes the link, since there is
+            # no backup to restore.
+            echo "// Add new klipper module (no stock target): $target"
         fi
 
-        echo "// Link patched klipper file: $file"
-        ln -s "$file" "$target" || return 1
-    done < <(find "$src_dir/patches" -type f)
+        # From upstream 1.4.2: a patch may land in a directory the stock tree
+        # does not have, and ln refuses a missing parent.
+        parent=${target%/*}
+        mkdir -p "$parent" || return 1
+
+        echo "// Link patched klipper file: $winner"
+        ln -s "$winner" "$target" || return 1
+    done < <(
+        {
+            find "$src_dir/patches" -type f 2>/dev/null \
+                | while IFS= read -r file; do
+                    printf '%s\n' "${file#"$src_dir/patches/"}"
+                done
+            if [ -n "$arch_dir" ]; then
+                find "$arch_dir" -type f 2>/dev/null \
+                    | while IFS= read -r file; do
+                        printf '%s\n' "${file#"$arch_dir/"}"
+                    done
+            fi
+        } | sort -u
+    )
 }
 
 apply_klipper_patches() {
     local src_dir="${KLIPPER_SRC_DIR:-/opt/config/mod/.py/klipper}"
-    local target_dir="${KLIPPER_TARGET_DIR:-/opt/klipper/klippy}"
+    local target_dir="${KLIPPER_TARGET_DIR:-$KLIPPER_DIR/klippy}"
     local tune_cmd="${KLIPPER_TUNE_CMD:-$CMDS/ztune_klipper.sh}"
 
     klipper_overlay_clean_links "$src_dir" "$target_dir" || return 1
@@ -210,5 +366,18 @@ apply_klipper_patches() {
     echo "Apply fixes..."
     "$tune_cmd" apply || return 1
 
+    klipper_overlay_purge_bytecode "$target_dir"
+
+    sync
+}
+
+## Undo apply_klipper_patches, against the same defaults so the two can never
+## disagree about which tree they operate on.
+revert_klipper_patches() {
+    local src_dir="${KLIPPER_SRC_DIR:-/opt/config/mod/.py/klipper}"
+    local target_dir="${KLIPPER_TARGET_DIR:-$KLIPPER_DIR/klippy}"
+
+    klipper_overlay_remove_all "$src_dir" "$target_dir" || return 1
+    klipper_overlay_purge_bytecode "$target_dir"
     sync
 }

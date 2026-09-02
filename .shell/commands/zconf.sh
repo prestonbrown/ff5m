@@ -1,5 +1,6 @@
 #!/bin/bash
 
+
 ## Update configuration file
 ##
 ## Copyright (C) 2025, Alexander K <https://github.com/drA1ex>erg>

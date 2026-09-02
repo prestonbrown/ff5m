@@ -41,11 +41,18 @@ cleanup() {
 trap cleanup EXIT
 trap 'exit 1' HUP INT TERM
 
-case "$MODEL_ARG" in
-    5M) MODEL=Adventurer5M ;;
-    PRO) MODEL=Adventurer5MPro ;;
-    *) fail "Invalid printer model selected." ;;
-esac
+# AD5X is a single mips product with no 5M/Pro distinction, and the board is
+# headless - it has no Qt model prompt to pass an argument. Fix the model from
+# the platform there; keep the AD5M prompt-driven case map otherwise.
+if [ "$PLATFORM" = ad5x ]; then
+    MODEL=AD5X
+else
+    case "$MODEL_ARG" in
+        5M) MODEL=Adventurer5M ;;
+        PRO) MODEL=Adventurer5MPro ;;
+        *) fail "Invalid printer model selected." ;;
+    esac
+fi
 
 usb_storage_operation_acquire || fail "Another USB operation is already running."
 LOCKED=1

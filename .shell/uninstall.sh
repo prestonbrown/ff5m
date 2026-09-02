@@ -8,35 +8,21 @@
 
 source /opt/config/mod/.shell/common.sh
 
-revert_klipper_patches() {
-    local SRC_DIR="/opt/config/mod/.py/klipper"
-    local TARGET_DIR="/opt/klipper/klippy"
-    
-    # Klipper extensions
-    echo "Remove klipper plugins: "
-    echo $SRC_DIR/plugins/*
-    echo
-    
-    find $SRC_DIR/plugins/ -type f | while read -r file; do
-        local rel_file=${file#"$SRC_DIR/plugins/"}
-        
-        rm -f "$TARGET_DIR/extras/$rel_file"
-        
-        echo "?? Removed \"$rel_file\""
-    done
-    
-    # Klipper patches
-    find $SRC_DIR/patches -type f | while read -r file; do
-        local rel_file=${file#"$SRC_DIR/patches/"}
-        local target="$TARGET_DIR/$rel_file"
-        
-        if [ -f "$target.bak" ]; then
-            mv -f "$target.bak" "$target"
-            echo "?? Restored \"$target\""
-        fi
-    done
+## Klipper overlay teardown comes from klipper_overlay.sh, which owns the rule.
+## This file used to carry its own copy, and the two had drifted: this one walked
+## the SOURCE tree and so only removed plugins whose source file still existed,
+## and only restored patches that had a .bak. Anything whose source had since been
+## deleted was left behind as a dangling symlink into a tree that is about to go
+## away - the exact leftover that stops stock klippy starting. The shared
+## klipper_overlay_remove_all() walks the TARGET tree instead, so it cannot miss
+## those, and it is covered by tests.
+## shellcheck source=/dev/null
+source /opt/config/mod/.shell/klipper_overlay.sh
 
-    # Klipper tunning
+revert_klipper_patches_and_tuning() {
+    revert_klipper_patches || return 1
+
+    # Klipper tunning - not the overlay's business, so it stays here.
     "$CMDS"/ztune_klipper.sh 0
 }
 
@@ -82,7 +68,7 @@ uninstall() {
     
     echo "// Restore klipper..."
     
-    revert_klipper_patches
+    revert_klipper_patches_and_tuning
     
     echo "// Remove mod..."
     
@@ -90,11 +76,11 @@ uninstall() {
     # In case of accidentally run this script after init
     echo "// Unmount paths..."
     
-    mount | grep "/data/.mod" | awk '{print $3}' | xargs -n1 -I {} umount -lf "{}"
+    mount | grep "$DATA_MNT/.mod" | awk '{print $3}' | xargs -n1 -I {} umount -lf "{}"
     mount | grep " /root/printer_data" | awk '{print $3}' | xargs -n1 -I {} umount -lf "{}"
     umount -lf /root/.oh-my-zsh &> /dev/null
 
-    if mount | grep -q /data/.mod || lsof | grep -q /data/.mod; then
+    if mount | grep -q "$DATA_MNT/.mod" || lsof | grep -q "$DATA_MNT/.mod"; then
         echo "@@ Found running mod services."
         fail
     fi
@@ -138,7 +124,7 @@ uninstall() {
         rm -rf /etc/init.d/S50sshd /etc/init.d/S55date /bin/dropbearmulti /bin/dropbear /bin/dropbearkey /bin/scp /etc/dropbear /etc/init.d/S60dropbear
         
         echo "// Removing Beep util..."
-        rm -f /usr/bin/audio /usr/lib/python3.7/site-packages/audio.py /usr/bin/audio_midi.sh /opt/klipper/klippy/extras/gcode_shell_command.py
+        rm -f /usr/bin/audio /usr/lib/python3.7/site-packages/audio.py /usr/bin/audio_midi.sh "$KLIPPER_DIR/klippy/extras/gcode_shell_command.py"
         rm -rf /usr/lib/python3.7/site-packages/mido/
     else
         echo "// Preserve root..."
@@ -149,7 +135,7 @@ uninstall() {
     
     rm -rf /opt/config/mod/
     rm -rf /root/printer_data
-    rm -rf /data/.mod
+    rm -rf "$DATA_MNT/.mod"
     
     echo "// Done!"
     
@@ -165,7 +151,7 @@ uninstall() {
 
 xzcat /opt/config/mod/uninstall.img.xz > /dev/fb0
 
-mv /data/logFiles/uninstall.1.log /data/logFiles/uninstall.log.2 &> /dev/null
-mv /data/logFiles/uninstall.log /data/logFiles/uninstall.log.1   &> /dev/null
+mv "$LOG_DIR/uninstall.1.log" "$LOG_DIR/uninstall.log.2" &> /dev/null
+mv "$LOG_DIR/uninstall.log" "$LOG_DIR/uninstall.log.1"   &> /dev/null
 
-uninstall "$1" 2>&1 | logged "/data/logFiles/uninstall.log" --send-to-screen --screen-no-followup --screen-queue 10
+uninstall "$1" 2>&1 | logged "$LOG_DIR/uninstall.log" --send-to-screen --screen-no-followup --screen-queue 10
