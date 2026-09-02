@@ -193,6 +193,37 @@ this is not used anywhere the machine acts on the answer unattended.
 `DRV_STATUS`'s `CS_ACTUAL` should separate the two cases and has not been
 tried.
 
+### Why the load is 2400 and not 3600
+
+The feeder **retracts** at 3600 and cannot **push** at 3600. Measured: a load
+feed at 3600 stalled 2.7 s in, about 160 mm up the tube and nowhere near the
+toolhead sensor; the same feed at 2400 reached the sensor cleanly. Pulling
+filament down a bowden is a tension problem and pushing it up one is a column
+under friction - the same motor, two different limits.
+
+That is worth stating because two earlier explanations in this repo were
+wrong, and both were wrong the same way. The load was blamed first on the
+toolhead sensor being read too slowly, then on the impact of arriving at the
+extruder gear. Both were plausible, neither was the binding constraint, and
+both survived because only retracts had ever been measured.
+
+The sensor work still earns its place, it just is not what caps the speed:
+
+| what | measured |
+|---|---|
+| overshoot past the trigger | 1.7 mm at 1200, scaling with speed |
+| sensor-to-gear clearance | over 13 mm - fed 13.5 mm into a stationary gear without stalling |
+| push limit | 3600 stalls, 2400 does not |
+
+At the old 0.300 s reporting, overshoot at 2400 would have been ~12 mm against
+13 mm of clearance. So fast sampling is what makes 2400 *safe*; push force is
+what makes 3600 *impossible*.
+
+    [ifs]
+    ifs_speed: 1200          # threading a fresh insert into the mechanism
+    load_speed: 2400         # feeds that end on the toolhead sensor
+    ifs_fast_speed: 3600     # retracts, which pull instead of push
+
 ### Feed speed
 
 Retracts run at `ifs_fast_speed` (3600 mm/min). The full-tube eject goes from

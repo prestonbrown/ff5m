@@ -34,7 +34,7 @@ BARE_HOST = {
     "ifs": {"connected": True, "error": None, "loaded_channels": [1, 2, 4],
             "tool_map": {"0": 1, "1": 2, "2": 3, "3": 4},
             "params": {"tube_mm": 1000.0, "ifs_speed": 1200.0,
-              "ifs_fast_speed": 3600.0,
+              "ifs_fast_speed": 3600.0, "load_speed": 2400.0,
                        "purge_extra_mm": 90.0, "first_purge_mm": 100.0,
                        "first_purge_speed": 300.0, "first_fan": 0.0,
                        "second_purge_mm": 30.0, "second_purge_speed": 300.0,

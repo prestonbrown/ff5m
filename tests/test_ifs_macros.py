@@ -127,7 +127,7 @@ class AutoinsertTest(unittest.TestCase):
     """
 
     PARAMS = {"tube_mm": 1000.0, "ifs_speed": 1200.0,
-              "ifs_fast_speed": 3600.0,
+              "ifs_fast_speed": 3600.0, "load_speed": 2400.0,
               "load_empty_mm": 600.0, "load_full_mm": 550.0,
               "autoinsert_ret_mm": 90.0, "hub_clear_mm": 300.0}
 
@@ -155,7 +155,11 @@ class AutoinsertTest(unittest.TestCase):
         feed = self.feeds(self.render())
         self.assertEqual(len(feed), 1, feed)
         self.assertIn("LENGTH=600", feed[0])
-        self.assertIn("SPEED=1200", feed[0])
+        ## load_speed, not ifs_speed. 2400 and not 3600: the feeder
+        ## STALLS pushing at 3600, ~160mm up the tube and nowhere near
+        ## the sensor - it retracts at 3600 fine, but pushing filament
+        ## up a bowden is a different limit from pulling it down one.
+        self.assertIn("SPEED=2400", feed[0])
         self.assertIn("UNTIL=toolhead", feed[0])
 
     def test_threading_claims_the_shared_path_before_feeding(self):
@@ -274,7 +278,7 @@ class LoadTest(unittest.TestCase):
     """
 
     PARAMS = {"tube_mm": 1000.0, "ifs_speed": 1200.0,
-              "ifs_fast_speed": 3600.0,
+              "ifs_fast_speed": 3600.0, "load_speed": 2400.0,
               "first_purge_mm": 100.0, "first_purge_speed": 300.0,
               "first_fan": 0.0, "second_purge_mm": 30.0,
               "second_purge_speed": 300.0, "second_fan": 255.0}
@@ -354,7 +358,7 @@ class LoadedLaneTest(unittest.TestCase):
     """
 
     PARAMS = {"tube_mm": 1000.0, "ifs_speed": 1200.0,
-              "ifs_fast_speed": 3600.0,
+              "ifs_fast_speed": 3600.0, "load_speed": 2400.0,
               "unload_extruder_mm": 60.0, "unload_ifs_mm": 70.0,
               "unload_speed": 600.0, "first_purge_mm": 100.0,
               "first_purge_speed": 300.0, "first_fan": 0.0,
@@ -1091,7 +1095,7 @@ class MaterialTest(unittest.TestCase):
     """
 
     PARAMS = {"tube_mm": 1000.0, "ifs_speed": 1200.0,
-              "ifs_fast_speed": 3600.0, "purge_extra_mm": 90.0,
+              "ifs_fast_speed": 3600.0, "load_speed": 2400.0, "purge_extra_mm": 90.0,
               "first_purge_mm": 100.0, "first_purge_speed": 300.0,
               "first_fan": 0.0, "second_purge_mm": 30.0,
               "second_purge_speed": 300.0, "second_fan": 255.0,
@@ -1466,7 +1470,7 @@ class ChangeLiftTest(unittest.TestCase):
     """
 
     PARAMS = {"tube_mm": 1000.0, "ifs_speed": 1200.0,
-              "ifs_fast_speed": 3600.0, "purge_extra_mm": 90.0,
+              "ifs_fast_speed": 3600.0, "load_speed": 2400.0, "purge_extra_mm": 90.0,
               "first_purge_mm": 100.0, "first_purge_speed": 300.0,
               "first_fan": 0.0, "second_purge_mm": 30.0,
               "second_purge_speed": 300.0, "second_fan": 255.0,
@@ -1581,7 +1585,7 @@ class ToolChangeTest(unittest.TestCase):
     """
 
     PARAMS = {"tube_mm": 1000.0, "ifs_speed": 1200.0,
-              "ifs_fast_speed": 3600.0, "purge_extra_mm": 90.0,
+              "ifs_fast_speed": 3600.0, "load_speed": 2400.0, "purge_extra_mm": 90.0,
               "first_purge_mm": 100.0, "first_purge_speed": 300.0,
               "first_fan": 0.0, "second_purge_mm": 30.0,
               "second_purge_speed": 300.0, "second_fan": 255.0,
@@ -1783,7 +1787,7 @@ class SensorHealTest(unittest.TestCase):
     """
 
     PARAMS = {"tube_mm": 1000.0, "ifs_speed": 1200.0,
-              "ifs_fast_speed": 3600.0, "purge_extra_mm": 90.0,
+              "ifs_fast_speed": 3600.0, "load_speed": 2400.0, "purge_extra_mm": 90.0,
               "first_purge_mm": 100.0, "first_purge_speed": 300.0,
               "first_fan": 0.0, "second_purge_mm": 30.0,
               "second_purge_speed": 300.0, "second_fan": 255.0,

@@ -228,25 +228,35 @@ class Parameters(object):
         ## FFS not ready." was a clamp that had not settled yet, and a working
         ## load feeds a full 1000.
         "load_empty_mm": 600.0, "load_full_mm": 550.0,
-        ## The tube transit is split in two. The feeder holds 3600 mm/min -
-        ## measured on hardware at 1200, 2400 and 3600 with a lane watched by
-        ## eye, and stopped there because the motor is audibly unhappy long
-        ## before anything skips. But the load ENDS by driving into the
-        ## extruder gear, and arriving at 60 mm/s rather than 20 is three times
-        ## the impact, so only the bulk runs fast: `approach_mm` is the last
-        ## stretch, taken at `ifs_speed`. Setting ifs_fast_speed to ifs_speed
-        ## restores the single-speed behaviour.
-        ##
-        ## The toolhead sensor cannot police this either. It is declared to
-        ## klipper as a thermistor, and klipper reports those every 0.300 s
-        ## (adc_temperature.REPORT_TIME), so the trigger can be up to 18 mm
-        ## late at 3600 however fast this module polls it.
-        ## Retracts only. A load feed ends at the toolhead sensor, which sits
-        ## upstream of the extruder gears, and klipper reports that sensor
-        ## every 0.300s - about 6mm of overshoot at 1200 and 18mm at 3600,
-        ## against a transition zone only 5-10mm wide. A retract stops on
-        ## distance with nothing ahead of it, so it has no such limit.
+        ## Retracts, which stop on distance with nothing ahead of them.
         "ifs_fast_speed": 3600.0,
+        ## Feeds that END on the toolhead sensor: the load, and autoinsert's
+        ## run to the toolhead. Separate from ifs_fast_speed because the thing
+        ## that bounds it is different - not the motor, but how far past the
+        ## trigger the filament coasts before the sensor is noticed, and how
+        ## much room there is before the extruder gear.
+        ##
+        ## 2400, and the number that decides it is NOT the sensor. Measured in
+        ## this order, and the last one was the surprise:
+        ##
+        ##   overshoot   1.7mm at 1200, scaling with speed - what bounds it is
+        ##               ifs.py's 0.05s COMMAND_POLL_PAUSE plus stop latency.
+        ##   clearance   over 13mm. Filament fed 13.5mm past the trigger into
+        ##               a stationary extruder gear without ever stalling.
+        ##   PUSH FORCE  3600 STALLS. The feed stopped moving 2.7s in, ~160mm
+        ##               up the tube, nowhere near the sensor. 2400 reached it.
+        ##
+        ## So the feeder retracts at 3600 happily and cannot PUSH at 3600 at
+        ## all: pulling filament down a bowden is a tension problem, pushing it
+        ## up one is a column under friction, and they are not the same limit.
+        ## Every earlier note here - including one that blamed the sensor and
+        ## another that blamed the extruder gear - was reasoning about the
+        ## wrong constraint, because retracts were the only thing measured.
+        ##
+        ## The sensor work still mattered: at 0.300s reporting the overshoot at
+        ## 2400 would have been ~12mm against 13mm of clearance. It is what
+        ## makes 2400 safe, it just is not what makes 3600 impossible.
+        "load_speed": 2400.0,
         ## How far a freshly threaded lane backs off once its tip reaches the
         ## toolhead sensor, so it rests below the extruder gear rather than in
         ## it.

@@ -186,14 +186,17 @@ class IFS(object):
         ## threading it: a printer that moves filament on its own the moment
         ## someone touches it is worth being able to turn off.
         self.autoinsert = config.getboolean("autoinsert", True)
-        ## Both speeds are tunable, with sane defaults and no ceiling beyond
+        ## Every speed is tunable, with sane defaults and no ceiling beyond
         ## "positive". 3600 is what this feeder was measured to hold; a rebuilt
         ## one may take more or less, and the only honest limit is what the
-        ## machine sounds like. ifs_fast_speed drives retracts only - see
-        ## Parameters for why a load cannot use it.
+        ## machine sounds like. Three of them, because three different things
+        ## bound them: ifs_speed threads a fresh insert into the mechanism,
+        ## ifs_fast_speed retracts against nothing, and load_speed ends on the
+        ## toolhead sensor - see Parameters for the measurements behind each.
         self.params = ifs_sequences.Parameters(
             tube_mm=config.getfloat("tube_length", 1000.0, above=0.),
             ifs_speed=config.getfloat("ifs_speed", 1200.0, above=0.),
+            load_speed=config.getfloat("load_speed", 2400.0, above=0.),
             ifs_fast_speed=config.getfloat("ifs_fast_speed", 3600.0,
                                            above=0.))
 
