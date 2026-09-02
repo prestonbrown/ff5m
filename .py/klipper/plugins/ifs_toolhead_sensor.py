@@ -38,8 +38,11 @@ DEFAULT_ADC = "temperature_sensor filamentValue"
 ## fine for temperature, coarse for a filament tip moving at 20-60 mm/s. At
 ## 0.300s a 1200 mm/min feed travels 6mm between samples and a 3600 one travels
 ## 18mm, against a transition zone measured at only 5-10mm wide. 0.015s is
-## klipper's own figure for adc_button, and puts the same overshoot under a
-## millimetre at any speed this feeder can reach.
+## klipper's own figure for adc_button, and it takes the ADC out of the
+## critical path entirely. What bounds overshoot after that is ifs.py's
+## COMMAND_POLL_PAUSE - the 0.05s wait-loop that reads this sensor - so the
+## figure is 1mm at 1200 mm/min and 3mm at 3600, not the 6mm and 18mm above.
+## Six times better, not twenty: the remaining factor is that loop, not this.
 REPORT_TIME = 0.015
 SAMPLE_TIME = 0.001
 SAMPLE_COUNT = 6

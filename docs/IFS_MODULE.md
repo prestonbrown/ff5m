@@ -183,9 +183,27 @@ to two or three times it, eating into a sensor-to-gear gap nobody has measured.
 #### Sampling the sensor 20x faster
 
 `[ifs_toolhead_sensor]` can take the pin itself instead of reading it through a
-`temperature_sensor`, which samples it every **0.015 s** rather than 0.300 -
-under a millimetre of overshoot at any speed this feeder can reach, instead of
-6 mm at 1200 and 18 mm at 3600.
+`temperature_sensor`, which samples it every **0.015 s** rather than 0.300.
+
+That does not divide overshoot by twenty. It moves the bottleneck: the ADC
+stops being the slow part, and what bounds the stop is then `ifs.py`'s
+`COMMAND_POLL_PAUSE`, the 0.05 s loop that reads the sensor during a move. So
+the figure goes from 6 mm at 1200 mm/min and 18 mm at 3600 to **1 mm and
+3 mm** - six times better, not twenty. Getting the rest of it means shortening
+that loop, which is a separate change and not yet made.
+
+**Measured on the rig at 1200 mm/min: 1.7 mm.** The naive measurement does not
+give you this. Stepping back from the stop point until the sensor clears reads
+5-6 mm, because this is an analog sensor with a transition zone several
+millimetres wide, and that zone is most of what you are measuring. It cancels
+if you measure the same way from a *static* trigger - creep up in 1 mm steps,
+then step back - since a creep has no overshoot to contribute. Static clear
+was 4 mm and three dynamic runs were 6, 5 and 6 mm, so the overshoot is the
+1.7 mm difference, not the 6 mm the direct reading suggests.
+
+Run-to-run spread was 1 mm. At the old 0.300 s reporting the spread *alone*
+would have been up to 6 mm, which is the part that matters for deciding how
+close to the extruder gear it is safe to stop.
 
     # remove [temperature_sensor filamentValue] from printer.base.cfg, then:
     [ifs_toolhead_sensor toolhead]
