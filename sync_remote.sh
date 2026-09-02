@@ -9,6 +9,12 @@
 
 PATH="/bin:/sbin:/usr/bin:/usr/sbin:/opt/bin:/opt/sbin:/opt/bin:/opt/sbin"
 
+# Board-specific values. platform.sh rather than common.sh: this file needs
+# only the descriptor, and it is streamed to the printer over `bash -s` (no
+# $0 path to source relatively from).
+# shellcheck disable=SC1091
+. /opt/config/mod/.shell/platform.sh
+
 
 SKIP_RESTART=$1
 SKIP_MOON_RESTART=$2
@@ -256,7 +262,7 @@ if [ "$NETD_CHANGED" -eq 1 ] && [ -n "$NETD_PID" ]; then
 fi
 
 # To avoid restarting after Moonraker's Git repair.
-SKIP_REBOOT_F="/data/.mod/.forge-x/tmp/mod_skip_reboot"
+SKIP_REBOOT_F="$MOD/tmp/mod_skip_reboot"
 
 if [ "$CHANGED" -eq 1 ] && [ ! -f "$SKIP_REBOOT_F" ]; then
     echo -e "\n${YELLOW}Setup reboot skip for next forge-x update${NC}"
@@ -265,10 +271,21 @@ fi
 
 sync
 
+## Klipper is about to be restarted against whatever macros/ now holds, and the
+## archive ships the committed defaults - macros/hw_base.cfg is the AD5M
+## variant. Normally only the boot path copies the .$PLATFORM overrides over
+## them, so a sync that restarts without rebooting would hand klippy the AD5M
+## [temperature_sensor weightValue] on an AD5X that has no load-cell sensor,
+## and klippy would halt. Call the same function the boot path calls rather
+## than restating the rule; it is a no-op on the AD5M, which ships no overrides.
+# shellcheck disable=SC1090,SC1091
+. "$MOD_ROOT/.shell/init_lib.sh"
+apply_platform_macros
+
 if [ "$CHANGED" -eq 1 ]; then
-    date -u +%Y-%m-%dT%H:%M:%SZ > /opt/config/mod/patch.txt
-    cp -f /opt/config/mod/patch.txt /tmp/version_patch
-    /opt/config/mod/.shell/motd.sh > /etc/motd
+    date -u +%Y-%m-%dT%H:%M:%SZ > "$MOD_ROOT/patch.txt"
+    cp -f "$MOD_ROOT/patch.txt" /tmp/version_patch
+    "$MOD_ROOT/.shell/motd.sh" > /etc/motd
 else
     echo; echo -e "${YELLOW}Printer is already in-sync${NC}"
 fi
@@ -277,17 +294,17 @@ if [ "$CHANGED" -eq 1 ] || [ "$FORCE_RESTART" -eq 1 ] && [ "$SKIP_RESTART" -eq 0
     echo; echo -e "${GREEN}Restarting services...${NC}\n"
     
     run_service "Moonraker" "Stopping"      1   "$SKIP_MOON_RESTART" \
-    "/data/.mod/.forge-x/run/moonraker.pid"    1  /etc/init.d/S99root stop
+    "$MOD/run/moonraker.pid"    1  /etc/init.d/S99root stop
 
-    run_service "Database"  "Migrating"     0   "$SKIP_MIGRATE"           /opt/config/mod/.shell/migrate_db.sh
+    run_service "Database"  "Migrating"     0   "$SKIP_MIGRATE"           "$MOD_ROOT/.shell/migrate_db.sh"
     run_service "Moonraker" "Starting"      0   "$SKIP_MOON_RESTART"      /etc/init.d/S99root start
 
     run_service "Plugins"   "Reloading"     0   "$SKIP_PLUGIN_RELOAD"     /etc/init.d/S00init reload
     
     if [ "$KLIPPER_HARD_RESTART" -ne 1 ]; then
-        run_service "Klipper"   "Reloading"     0   "$SKIP_KLIPPER_RESTART"   /opt/config/mod/.shell/restart_klipper.sh
+        run_service "Klipper"   "Reloading"     0   "$SKIP_KLIPPER_RESTART"   "$MOD_ROOT/.shell/restart_klipper.sh"
     else
-        run_service "Klipper"   "Restarting"    0   "$SKIP_KLIPPER_RESTART"   /opt/config/mod/.shell/restart_klipper.sh --hard
+        run_service "Klipper"   "Restarting"    0   "$SKIP_KLIPPER_RESTART"   "$MOD_ROOT/.shell/restart_klipper.sh" --hard
     fi
     
     echo; echo -e "${GREEN}All done!${NC}"

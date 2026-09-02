@@ -20,6 +20,13 @@ REMOTE_HOST=""
 REMOTE_USER="root"
 REMOTE_DIR="/opt/config/"
 ARCHIVE_NAME="sync_$(date +%Y%m%d_%H%M%S)_$$.tar.gz"
+## Built outside the tree. Creating it in place changes the mtime of "." while
+## tar is reading ".", which GNU tar reports as "file changed as we read it"
+## and exits non-zero on - excluding the archive from the contents does not
+## help, because it is the directory entry that moved. ARCHIVE_NAME stays the
+## basename the remote side is handed.
+ARCHIVE_DIR="$(mktemp -d)"
+ARCHIVE_PATH="${ARCHIVE_DIR}/${ARCHIVE_NAME}"
 
 SKIP_HEAVY=0
 
@@ -240,7 +247,8 @@ fi
 
 
 cleanup() {
-    rm -f "./${ARCHIVE_NAME}"
+    rm -f "$ARCHIVE_PATH"
+    rmdir "$ARCHIVE_DIR" 2>/dev/null
 }
 
 abort() {
@@ -266,19 +274,19 @@ declare -a EXCLUDES=(
     "./sync.sh"
     "*/__pycache__"
     "./sync_remote.sh"
-    "./tests/"
+    "./tests"
     "./.bin/src/"
     "./.bin/lib/"
 )
 
 if [ "$SKIP_HEAVY" -eq 1 ]; then
     EXCLUDES+=(
-        "./.root/docs/"
-        "./.root/config/"
-        "./.root/klippy/"
-        "./.root/moonraker/"
-        "./.zsh/.oh-my-zsh/"
-        "./.bin/"
+        "./.root/docs"
+        "./.root/config"
+        "./.root/klippy"
+        "./.root/moonraker"
+        "./.zsh/.oh-my-zsh"
+        "./.bin"
     )
 fi
 
@@ -300,7 +308,16 @@ for e in "${EXCLUDES[@]}"; do
     if [ "$VERBOSE" -eq 1 ]; then echo "► Excluding: \"$e\""; fi
 done
 
-tar "${EXCLUDE_ARGS[@]}" --disable-copyfile -czf "${ARCHIVE_NAME}" .
+## --disable-copyfile stops macOS tar embedding ._* AppleDouble resource forks
+## in the archive. GNU tar has no such notion and rejects the flag outright, so
+## on Linux the script could not build an archive at all. Keyed on uname rather
+## than probing tar, so the macOS path stays byte-for-byte what it was.
+TAR_OPTS=()
+if [ "$(uname -s)" = "Darwin" ]; then
+    TAR_OPTS+=(--disable-copyfile)
+fi
+
+tar "${EXCLUDE_ARGS[@]}" "${TAR_OPTS[@]}" -czf "$ARCHIVE_PATH" .
 if [ $? -ne 0 ]; then
     echo -e "\n${RED}Unable to create sync archive.${NC}"
     
@@ -309,7 +326,7 @@ if [ $? -ne 0 ]; then
 fi
 
 print_label "Uploading archive to ${REMOTE_HOST}..."
-scp -O "./${ARCHIVE_NAME}" "${REMOTE_USER}@${REMOTE_HOST}:${REMOTE_DIR}"
+scp -O "$ARCHIVE_PATH" "${REMOTE_USER}@${REMOTE_HOST}:${REMOTE_DIR}"
 
 if [ $? -ne 0 ]; then
     echo -e "\n${RED}Unable to upload sync archive to the printer at ${REMOTE_HOST}.${NC}"

@@ -19,3 +19,9 @@ scripts/ui_preview/coverage/
 /feather-ui-designer/
 sql/version
 /.py/klipper/plugins/ui/themes/preview/
+
+# Build output (build_ad5x_image.sh OUT_DIR)
+/dist/
+
+# Git worktrees are created inside the repo; they are checkouts, not content.
+.worktrees/

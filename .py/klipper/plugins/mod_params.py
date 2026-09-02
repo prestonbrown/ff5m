@@ -56,6 +56,10 @@ class ParameterCategory:
 
 
 class ModParamManagement:
+    ## None unless [mod_params] declares one; a class default so the loader
+    ## also works on a partially-built instance (tests drive it directly).
+    defaults_overlay = None
+
     def __init__(self, config):
         self.loaded = False
 
@@ -65,6 +69,7 @@ class ModParamManagement:
 
         self.declaration = self.config.get("declaration")
         self.filename = self.config.get("filename")
+        self.defaults_overlay = self.config.get("defaults_overlay", None)
         self.variables = dict()
         # Both G-code and local UIs use this manager.  Keep their read-modify-
         # write sequences serialized so a full variables-file write cannot
@@ -97,6 +102,36 @@ class ModParamManagement:
     def _run_gcode(self, *cmds: str):
         self.gcode.run_script_from_command("\n".join(cmds))
 
+    def _apply_defaults_overlay(self, data):
+        """Board-specific defaults over the shared declaration.
+
+        A board ships one small JSON of {key: default} instead of a second
+        declaration file to keep in step. Defaults only: a value stored in
+        the variables file still wins, so an existing install never changes
+        behaviour underneath a stored setting.
+        """
+        try:
+            with open(self.defaults_overlay, 'r', encoding="utf-8") as file:
+                overlay = json.load(file)
+        except:
+            msg = "Unable to load defaults overlay file."
+            logging.exception(msg)
+            raise self.printer.command_error(msg)
+
+        if not isinstance(overlay, dict):
+            raise ValueError("[mod_params]: Invalid defaults overlay!")
+
+        unknown = set(overlay) - {
+            param_data["key"] for param_data in data["parameters"]}
+        if unknown:
+            raise ValueError(
+                '[mod_params]: Unknown parameter(s) in defaults overlay: "%s"!'
+                % ", ".join(sorted(unknown)))
+
+        for param_data in data["parameters"]:
+            if param_data["key"] in overlay:
+                param_data["default"] = overlay[param_data["key"]]
+
     def _load_declaration(self):
         try:
             with open(self.declaration, 'r', encoding="utf-8") as file:
@@ -105,6 +140,9 @@ class ModParamManagement:
             msg = "Unable to load declaration file."
             logging.exception(msg)
             raise self.printer.command_error(msg)
+
+        if self.defaults_overlay:
+            self._apply_defaults_overlay(data)
 
         self.type_mapping = {
             "bool": bool,
