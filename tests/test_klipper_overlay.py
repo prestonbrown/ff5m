@@ -39,16 +39,22 @@ class OverlayTree:
         self.tune.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
         self.tune.chmod(0o755)
 
-    def run(self):
+    def run(self, uname_m=None, fn="apply_klipper_patches"):
         env = dict(os.environ)
         env.update({
             "KLIPPER_SRC_DIR": str(self.source),
             "KLIPPER_TARGET_DIR": str(self.target),
             "KLIPPER_TUNE_CMD": str(self.tune),
         })
+        prelude = ""
+        if uname_m is not None:
+            # platform.sh selects its block from `uname -m`; shadow it so the
+            # overlay picks the AD5X block off-printer, the same way
+            # test/platform_vars_test.sh forces each architecture.
+            prelude = "uname() { echo %s; }; " % uname_m
         return subprocess.run(
             ["bash", "-c",
-             'source "$1"; sync() { :; }; apply_klipper_patches',
+             prelude + 'source "$1"; sync() { :; }; ' + fn,
              "overlay-test", str(OVERLAY)],
             env=env, text=True, stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT, check=False)
@@ -83,6 +89,160 @@ class KlipperOverlayTest(unittest.TestCase):
         subprocess.run(
             ["bash", "-n", str(OVERLAY), str(INIT), str(TUNING)],
             check=True)
+
+    def test_platform_patches_override_base_and_leave_base_only_files(self):
+        with tempfile.TemporaryDirectory() as directory:
+            tree = OverlayTree(directory)
+            (tree.patches / "gcode.py").write_text(
+                "BASE_GCODE = True\n", encoding="utf-8")
+            (tree.patches / "extras").mkdir()
+            (tree.patches / "extras" / "led.py").write_text(
+                "BASE_LED = True\n", encoding="utf-8")
+
+            arch = tree.source / "patches.ad5x"
+            (arch / "extras").mkdir(parents=True)
+            (arch / "gcode.py").write_text(
+                "ARCH_GCODE = True\n", encoding="utf-8")
+
+            (tree.target / "gcode.py").write_text(
+                "STOCK_GCODE = True\n", encoding="utf-8")
+            (tree.extras / "led.py").write_text(
+                "STOCK_LED = True\n", encoding="utf-8")
+
+            result = tree.run(uname_m="mips")
+            self.assertEqual(result.returncode, 0, result.stdout)
+
+            gcode = tree.target / "gcode.py"
+            led = tree.extras / "led.py"
+            # The AD5X override wins for gcode.py.
+            self.assertTrue(gcode.is_symlink())
+            self.assertEqual(os.readlink(gcode), str(arch / "gcode.py"))
+            # A file with no AD5X override still comes from the base tree.
+            self.assertTrue(led.is_symlink())
+            self.assertEqual(
+                os.readlink(led), str(tree.patches / "extras" / "led.py"))
+            # The stock file was backed up exactly once.
+            self.assertEqual(
+                (tree.target / "gcode.py.bak").read_text(encoding="utf-8"),
+                "STOCK_GCODE = True\n")
+
+            mtime = os.lstat(gcode).st_mtime_ns
+            again = tree.run(uname_m="mips")
+            self.assertEqual(again.returncode, 0, again.stdout)
+            self.assertTrue(gcode.is_symlink())
+            self.assertEqual(os.readlink(gcode), str(arch / "gcode.py"))
+            self.assertEqual(os.lstat(gcode).st_mtime_ns, mtime)
+
+    def test_patch_with_no_stock_target_is_added(self):
+        with tempfile.TemporaryDirectory() as directory:
+            tree = OverlayTree(directory)
+            # A patch for a module the board's stock Klipper does not ship at all
+            # (e.g. gcode_shell_command on the AD5X): no target file exists.
+            (tree.patches / "extras").mkdir()
+            (tree.patches / "extras" / "shell_command.py").write_text(
+                "ADDED = True\n", encoding="utf-8")
+
+            result = tree.run()
+            self.assertEqual(result.returncode, 0, result.stdout)
+            added = tree.extras / "shell_command.py"
+            # It is added as a new module, symlinked, with no spurious backup.
+            self.assertTrue(added.is_symlink())
+            self.assertEqual(
+                os.readlink(added),
+                str(tree.patches / "extras" / "shell_command.py"))
+            self.assertFalse((tree.extras / "shell_command.py.bak").exists())
+
+    def test_foreign_platform_override_is_ignored(self):
+        with tempfile.TemporaryDirectory() as directory:
+            tree = OverlayTree(directory)
+            (tree.patches / "gcode.py").write_text(
+                "BASE_GCODE = True\n", encoding="utf-8")
+            arch = tree.source / "patches.ad5x"
+            arch.mkdir(parents=True)
+            (arch / "gcode.py").write_text(
+                "ARCH_GCODE = True\n", encoding="utf-8")
+            (tree.target / "gcode.py").write_text(
+                "STOCK_GCODE = True\n", encoding="utf-8")
+
+            # armv7l selects AD5M, so a patches.ad5x subtree must be ignored.
+            result = tree.run(uname_m="armv7l")
+            self.assertEqual(result.returncode, 0, result.stdout)
+            gcode = tree.target / "gcode.py"
+            self.assertTrue(gcode.is_symlink())
+            self.assertEqual(os.readlink(gcode), str(tree.patches / "gcode.py"))
+
+    def test_platform_exclude_list_skips_base_patch(self):
+        with tempfile.TemporaryDirectory() as directory:
+            tree = OverlayTree(directory)
+            (tree.patches / "keep.py").write_text(
+                "KEEP = True\n", encoding="utf-8")
+            (tree.patches / "drop.py").write_text(
+                "FORGEX_OLD = True\n", encoding="utf-8")
+            arch = tree.source / "patches.ad5x"
+            arch.mkdir(parents=True)
+            (arch / ".exclude").write_text(
+                "# AD5X ships newer stock for these\ndrop.py\n",
+                encoding="utf-8")
+            (tree.target / "keep.py").write_text(
+                "STOCK_KEEP = True\n", encoding="utf-8")
+            (tree.target / "drop.py").write_text(
+                "AD5X_STOCK_DROP = True\n", encoding="utf-8")
+
+            result = tree.run(uname_m="mips")
+            self.assertEqual(result.returncode, 0, result.stdout)
+
+            keep = tree.target / "keep.py"
+            drop = tree.target / "drop.py"
+            # A base patch not in the exclude list is applied as usual.
+            self.assertTrue(keep.is_symlink())
+            self.assertEqual(os.readlink(keep), str(tree.patches / "keep.py"))
+            # An excluded base patch is skipped: AD5X's own stock is left in
+            # place, untouched, with no symlink and no backup.
+            self.assertFalse(drop.is_symlink())
+            self.assertTrue(drop.is_file())
+            self.assertEqual(
+                drop.read_text(encoding="utf-8"), "AD5X_STOCK_DROP = True\n")
+            self.assertFalse((tree.target / "drop.py.bak").exists())
+
+    def test_exclude_list_is_ignored_on_other_platform(self):
+        with tempfile.TemporaryDirectory() as directory:
+            tree = OverlayTree(directory)
+            (tree.patches / "drop.py").write_text(
+                "FORGEX = True\n", encoding="utf-8")
+            arch = tree.source / "patches.ad5x"
+            arch.mkdir(parents=True)
+            (arch / ".exclude").write_text("drop.py\n", encoding="utf-8")
+            (tree.target / "drop.py").write_text(
+                "STOCK = True\n", encoding="utf-8")
+
+            # armv7l selects AD5M, so an ad5x exclude list must not apply.
+            result = tree.run(uname_m="armv7l")
+            self.assertEqual(result.returncode, 0, result.stdout)
+            drop = tree.target / "drop.py"
+            self.assertTrue(drop.is_symlink())
+            self.assertEqual(os.readlink(drop), str(tree.patches / "drop.py"))
+
+    def test_excluded_link_is_restored_by_cleanup(self):
+        with tempfile.TemporaryDirectory() as directory:
+            tree = OverlayTree(directory)
+            (tree.patches / "drop.py").write_text(
+                "FORGEX = True\n", encoding="utf-8")
+            arch = tree.source / "patches.ad5x"
+            arch.mkdir(parents=True)
+            # A prior apply: stock backed up, target links to the base patch.
+            (tree.target / "drop.py.bak").write_text(
+                "AD5X_STOCK = True\n", encoding="utf-8")
+            (tree.target / "drop.py").symlink_to(tree.patches / "drop.py")
+            # drop.py then becomes excluded on AD5X.
+            (arch / ".exclude").write_text("drop.py\n", encoding="utf-8")
+
+            result = tree.run(uname_m="mips")
+            self.assertEqual(result.returncode, 0, result.stdout)
+            drop = tree.target / "drop.py"
+            # cleanup restores AD5X's stock from the backup.
+            self.assertFalse(drop.is_symlink())
+            self.assertEqual(drop.read_text(encoding="utf-8"), "AD5X_STOCK = True\n")
+            self.assertFalse((tree.target / "drop.py.bak").exists())
 
     def test_files_are_linked_recursively_and_repeat_is_idempotent(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -272,6 +432,178 @@ class KlipperOverlayTest(unittest.TestCase):
             self.assertFalse((tree.extras / "ui" / "__init__.py").exists())
             self.assertFalse(
                 (tree.extras / "ui" / "themes" / "default.json").exists())
+
+    def test_revert_removes_every_overlay_and_restores_backups(self):
+        # revert_klipper_patches is what the boot failsafe runs when it stands
+        # the mod down. Unlike the stale-only cleanup above it must drop the
+        # CURRENT overlay too: on the AD5X the overlaid tree is stock klipper,
+        # so a link left behind makes stock klippy import a patched module whose
+        # runtime environment is gone, and the printer never finishes booting.
+        with tempfile.TemporaryDirectory() as directory:
+            tree = OverlayTree(directory)
+            tree.add_standard_overlay()
+            (tree.target / "mcu.py").write_text(
+                "STOCK = True\n", encoding="utf-8")
+            self.assertEqual(tree.run().returncode, 0)
+            self.assertTrue((tree.target / "mcu.py").is_symlink())
+            self.assertTrue((tree.extras / "top_level.py").is_symlink())
+
+            result = tree.run(fn="revert_klipper_patches")
+            self.assertEqual(result.returncode, 0, result.stdout)
+
+            # A patched stock file goes back to the stock content, not a link.
+            self.assertFalse((tree.target / "mcu.py").is_symlink())
+            self.assertEqual(
+                (tree.target / "mcu.py").read_text(encoding="utf-8"),
+                "STOCK = True\n")
+            self.assertFalse((tree.target / "mcu.py.bak").exists())
+
+            # Mod-only additions have no backup, so they are removed outright.
+            self.assertFalse((tree.extras / "top_level.py").exists())
+            self.assertFalse((tree.extras / "ui" / "__init__.py").exists())
+            self.assertFalse(
+                (tree.extras / "ui" / "themes" / "default.json").exists())
+
+            # Nothing of ours is left anywhere under the target tree.
+            remaining = [
+                path for path in tree.target.rglob("*")
+                if path.is_symlink()
+                and str(os.readlink(path)).startswith(str(tree.source))
+            ]
+            self.assertEqual(remaining, [])
+
+    def test_revert_is_idempotent_and_leaves_foreign_links_alone(self):
+        with tempfile.TemporaryDirectory() as directory:
+            tree = OverlayTree(directory)
+            tree.add_standard_overlay()
+            self.assertEqual(tree.run().returncode, 0)
+
+            # A symlink that is not ours must survive: reverting our overlay is
+            # not a licence to tidy the stock tree.
+            foreign_target = tree.root / "elsewhere.py"
+            foreign_target.write_text("EXTERNAL = True\n", encoding="utf-8")
+            foreign = tree.extras / "external.py"
+            foreign.symlink_to(foreign_target)
+
+            self.assertEqual(
+                tree.run(fn="revert_klipper_patches").returncode, 0)
+            second = tree.run(fn="revert_klipper_patches")
+            self.assertEqual(second.returncode, 0, second.stdout)
+
+            self.assertTrue(foreign.is_symlink())
+            self.assertEqual(
+                foreign.resolve().read_text(encoding="utf-8"),
+                "EXTERNAL = True\n")
+
+    def test_revert_on_a_never_overlaid_tree_is_a_no_op(self):
+        with tempfile.TemporaryDirectory() as directory:
+            tree = OverlayTree(directory)
+            (tree.target / "mcu.py").write_text(
+                "STOCK = True\n", encoding="utf-8")
+
+            result = tree.run(fn="revert_klipper_patches")
+            self.assertEqual(result.returncode, 0, result.stdout)
+            self.assertEqual(
+                (tree.target / "mcu.py").read_text(encoding="utf-8"),
+                "STOCK = True\n")
+
+
+    def test_overlay_teardown_has_exactly_one_implementation(self):
+        # uninstall.sh used to carry its own revert_klipper_patches(), and the
+        # two had drifted: that copy walked the SOURCE tree, so it only removed
+        # plugins whose source file still existed and only restored patches with
+        # a .bak. Anything whose source had been deleted was left as a dangling
+        # symlink into a tree about to disappear - which is precisely what stops
+        # stock klippy starting. One rule, one implementation.
+        shell = ROOT / ".shell"
+        definers = sorted(
+            path.relative_to(ROOT).as_posix()
+            for path in shell.rglob("*")
+            if path.is_file()
+            and "revert_klipper_patches()" in path.read_text(
+                encoding="utf-8", errors="ignore")
+        )
+        self.assertEqual(
+            definers, ["\u002eshell/klipper_overlay.sh".replace("\u002e", "."),],
+            "revert_klipper_patches() must be defined only in klipper_overlay.sh; "
+            "found in: %s" % definers)
+
+    def test_uninstall_sources_the_shared_overlay_module(self):
+        text = (ROOT / ".shell" / "uninstall.sh").read_text(encoding="utf-8")
+        self.assertIn("klipper_overlay.sh", text)
+        self.assertIn("revert_klipper_patches", text)
+
+
+
+    ## Bytecode caches outlive the file swap that invalidated them.
+    ##
+    ## Regression for a real halt: a stood-down boot ran stock klippy, which
+    ## compiled the stock extras into the target tree's __pycache__. The next
+    ## mod boot relinked every symlink correctly and klippy still imported the
+    ## stock module, because CPython trusted a .pyc whose mtime/size check
+    ## passed on a box with no RTC. The printer came up with no heaters and
+    ## nothing in the bring-up log looked wrong.
+
+    def test_apply_purges_stale_bytecode_in_the_target(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tree = OverlayTree(tmp)
+            tree.add_standard_overlay()
+            cache = tree.extras / "__pycache__"
+            cache.mkdir(parents=True, exist_ok=True)
+            stale = cache / "gcode_shell_command.cpython-38.pyc"
+            stale.write_bytes(b"stock bytecode")
+            loose = tree.target / "kinematics.pyc"
+            loose.write_bytes(b"stock bytecode")
+
+            result = tree.run()
+
+            self.assertEqual(result.returncode, 0, result.stdout)
+            self.assertFalse(stale.exists(),
+                             "stale .pyc survived apply_klipper_patches")
+            self.assertFalse(cache.exists(), "__pycache__ dir survived")
+            self.assertFalse(loose.exists(), "loose .pyc survived")
+
+    def test_revert_purges_bytecode_too(self):
+        ## The other direction matters just as much: standing the mod down
+        ## leaves MOD-compiled bytecode for stock klippy to import.
+        with tempfile.TemporaryDirectory() as tmp:
+            tree = OverlayTree(tmp)
+            tree.add_standard_overlay()
+            tree.run()
+
+            cache = tree.extras / "__pycache__"
+            cache.mkdir(parents=True, exist_ok=True)
+            stale = cache / "mcu.cpython-38.pyc"
+            stale.write_bytes(b"mod bytecode")
+
+            result = tree.run(fn="revert_klipper_patches")
+
+            self.assertEqual(result.returncode, 0, result.stdout)
+            self.assertFalse(stale.exists(),
+                             "mod bytecode survived the stand-down")
+
+    def test_purge_leaves_the_source_tree_alone(self):
+        ## The mod's own __pycache__ under .py/klipper is not ours to delete -
+        ## only the klipper tree we linked into.
+        with tempfile.TemporaryDirectory() as tmp:
+            tree = OverlayTree(tmp)
+            tree.add_standard_overlay()
+            source_cache = tree.plugins / "__pycache__"
+            keeper = source_cache / "top_level.cpython-314.pyc"
+            self.assertTrue(keeper.exists())
+
+            result = tree.run()
+
+            self.assertEqual(result.returncode, 0, result.stdout)
+            self.assertTrue(keeper.exists(),
+                            "purge reached into the mod source tree")
+
+    def test_purge_is_safe_when_there_is_no_cache(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tree = OverlayTree(tmp)
+            tree.add_standard_overlay()
+            result = tree.run()
+            self.assertEqual(result.returncode, 0, result.stdout)
 
 
 class McuTuningTest(unittest.TestCase):

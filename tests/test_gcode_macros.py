@@ -77,11 +77,11 @@ class WorkflowMacroTest(unittest.TestCase):
         assert_order(self, result.commands, (
             "_CONTEXT_BEGIN TYPE=print",
             "_START_PRINT_PREPARE",
-            "_HOME_IF_NEEDED",
+            "_START_PRINT_HEAT_HOME BED_TEMP=80.0",
             "_CONTEXT_STATE NAME=LEVELING",
             '_CONTEXT_STATE NAME="SKIPPING LEVELING"',
+            "_START_PRINT_REHOME",
             "_CONTEXT_STATE NAME=PARKING",
-            "_WAIT_TEMPERATURE CMD=M140 VALUE=80.0 BELOW=2 ABOVE=5",
             "_WAIT_TEMPERATURE CMD=M104 VALUE=245.0",
             "_CONTEXT_STATE NAME=PRIMING",
             "_CONTEXT_STATE NAME=PRINTING",
@@ -164,6 +164,45 @@ class WorkflowMacroTest(unittest.TestCase):
                     path, name, printer=printer, params=params)
                 self.assertIn(context_command, result.commands)
                 self.assertEqual("_CONTEXT_END" in result.commands, completes)
+
+
+class StartPrintPurgeLineTest(unittest.TestCase):
+    """The purge line is the start's prime, whenever priming is enabled.
+
+    With the nozzle clean's flush retired, the line after the reheat is
+    what puts pressure behind the first layer - for every job, swapped or
+    not. Under KAMP it is the adaptive LINE_PURGE; otherwise the
+    configured clear macro.
+    """
+
+    def start_print(self, *, disable_priming, use_kamp):
+        start = macro_status(BASE, "_START_PRINT")
+        return render_macro(BASE, "_START_PRINT", printer={
+            "gcode_macro _START_PRINT": start,
+            "gcode_macro START_PRINT": {"preparation_done": True},
+            "gcode_macro _LINE_PURGE": {"print_area_min": None,
+                                        "print_area_max": None},
+            "mod_params": {"variables": {
+                "safe_z": 10, "chamber_light_mode": "MANUAL", "display": 1,
+                "check_md5": 0, "print_leveling": False, "use_kamp": use_kamp,
+                "bed_mesh_validation": False, "midi_start": "",
+                "weight_check": False,
+                "disable_priming": disable_priming, "zclear": "_CLEAR1",
+            }},
+            "extruder": {"temperature": 25, "can_extrude": False},
+            "bed_mesh": {"profile_name": "default",
+                         "profiles": {"default": {}}},
+        }).commands
+
+    def test_the_line_purges_when_priming_is_enabled(self):
+        commands = self.start_print(disable_priming=0, use_kamp=1)
+        assert_order(self, commands, (
+            "_CONTEXT_STATE NAME=PRIMING", "LINE_PURGE",
+            "_CONTEXT_STATE NAME=PRINTING"))
+
+    def test_no_line_when_priming_is_disabled(self):
+        commands = self.start_print(disable_priming=1, use_kamp=1)
+        self.assertNotIn("LINE_PURGE", commands)
 
 
 class TemperatureMacroTest(unittest.TestCase):
@@ -394,6 +433,33 @@ class MotionAndIntegrationMacroTest(unittest.TestCase):
             "RESTORE_GCODE_STATE NAME=_client_movement",
         ))
 
+    def test_move_safe_relative_targets_stay_in_the_gcode_frame(self):
+        ## MOVE_SAFE built relative targets from toolhead.position - the
+        ## machine frame - and then issued them as absolute GCODE commands.
+        ## The two frames differ by homing_origin, so with a z offset active
+        ## a +5 lift realized 5 + origin (measured +0.58 on a printer with
+        ## -4.42). Build the target from gcode_position so the clamped
+        ## number and the number the G1 targets are the same number.
+        limits = macro_status(BASE, "MOVE_SAFE")
+        result = render_macro(BASE, "MOVE_SAFE", printer={
+            "gcode_macro MOVE_SAFE": limits,
+            "gcode_move": {
+                "gcode_position": {"x": 100.0, "y": 90.0, "z": 0.76},
+                "homing_origin": {"x": 0.0, "y": 0.0, "z": -4.42},
+            },
+            "toolhead": {
+                "axis_maximum": {"z": 230},
+                "position": {"x": 100.0, "y": 90.0, "z": -3.66},
+            },
+        }, params={"Z": 5, "F": 1500, "ABSOLUTE": 0})
+
+        self.assertEqual(result.commands, (
+            "SAVE_GCODE_STATE NAME=_client_movement",
+            "G90",
+            "G1   Z5.76  F1500",
+            "RESTORE_GCODE_STATE NAME=_client_movement",
+        ))
+
     def test_smart_park_uses_fallback_and_rejects_unhomed_motion(self):
         printer = {
             "gcode_macro _KAMP_Settings": {
@@ -522,6 +588,82 @@ class MotionAndIntegrationMacroTest(unittest.TestCase):
             render_macro(
                 BASE, "PREPARE_USB",
                 printer={"idle_timeout": {"state": "Printing"}})
+
+
+class StartPrintCellFrameTest(unittest.TestCase):
+    """Homing and probing must share one load-cell frame.
+
+    The probe's trigger plane moves with the cell's zero, which drifts
+    thermally by grams (measured 2026-08-31: hundreds of grams across a
+    heat-up, and two print starts whose purge tower dug into the plate by the
+    frame mismatch - homing entered one frame, the mid-flow clean tared, and
+    the mesh probed in the new one while Z0 still carried the old). The
+    shared seam tares before deriving Z0 from the probe, at bed temperature,
+    and re-derives Z0 after leveling, so the whole run shares the cell state
+    and drift cancels. A board that follows zmod's unit overrides both seams
+    (see StartPrintZmodPortTest) - these tests hold the shared default.
+    """
+
+    def heat_home(self):
+        return render_macro(BASE, "_START_PRINT_HEAT_HOME", printer={
+            "toolhead": {"homed_axes": ""},
+            "operation_context": {"context_path": []},
+        }, params={"BED_TEMP": 80}).commands
+
+    def test_homing_derives_z0_after_the_tare_when_checking(self):
+        commands = self.heat_home()
+        self.assertLess(commands.index("LOAD_CELL_TARE"),
+                        commands.index("_HOME_IF_NEEDED"))
+
+    def test_the_bed_is_at_print_temperature_before_the_tare(self):
+        ## The load cell lives in the heated bed; its zero is a temperature-
+        ## dependent property. Taring on a cold-climbing bed calibrates one
+        ## sensor and prints with another - zmod heats and waits first, and
+        ## 2026-08-31 cost a PEI sheet to learn it here.
+        commands = self.heat_home()
+        bed_wait = next(i for i, c in enumerate(commands)
+                        if c.startswith("_WAIT_TEMPERATURE CMD=M140"))
+        self.assertLess(bed_wait, commands.index("LOAD_CELL_TARE"))
+        self.assertLess(commands.index("LOAD_CELL_TARE"),
+                        commands.index("_HOME_IF_NEEDED"))
+
+    def test_the_frame_tare_runs_even_with_weight_check_off(self):
+        ## The pre-homing tare is calibration, not protection: it refreshes
+        ## the cell's frame regardless of the watchdog switch. Gating it on
+        ## weight_check once let disarming the watchdog silently home in a
+        ## stale frame, and the print that followed destroyed a sheet.
+        commands = self.heat_home()
+        self.assertEqual(commands.count("LOAD_CELL_TARE"), 1)
+        self.assertLess(commands.index("LOAD_CELL_TARE"),
+                        commands.index("_HOME_IF_NEEDED"))
+
+    def test_z_is_rehomed_after_leveling_in_the_frame_it_left(self):
+        rehome = render_macro(BASE, "_START_PRINT_REHOME", printer={})
+        self.assertEqual(rehome.commands, ("G28 Z", "M400"))
+        for skip in (True, False):
+            with self.subTest(skip_leveling=skip):
+                start = macro_status(BASE, "_START_PRINT",
+                                     zskip_leveling=skip)
+                commands = render_macro(BASE, "_START_PRINT", printer={
+                    "gcode_macro _START_PRINT": start,
+                    "gcode_macro START_PRINT": {"preparation_done": True},
+                    "mod_params": {"variables": {
+                        "safe_z": 10, "chamber_light_mode": "MANUAL",
+                        "display": 1, "check_md5": 0,
+                        "print_leveling": False, "use_kamp": False,
+                        "bed_mesh_validation": False, "midi_start": "",
+                        "weight_check": False, "disable_priming": True,
+                    }},
+                    "extruder": {"temperature": 25, "can_extrude": False},
+                    "bed_mesh": {"profile_name": "default",
+                                 "profiles": {"default": {}}},
+                }).commands
+                leveling = next(i for i, c in enumerate(commands)
+                                if "LEVELING" in c)
+                priming = next(i for i, c in enumerate(commands)
+                               if "PRIMING" in c)
+                rehome_call = commands.index("_START_PRINT_REHOME")
+                self.assertTrue(leveling < rehome_call < priming, commands)
 
 
 if __name__ == "__main__":

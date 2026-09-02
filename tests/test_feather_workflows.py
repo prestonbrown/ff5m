@@ -2583,7 +2583,7 @@ class FilamentAndCalibrationWorkflowTest(unittest.TestCase):
         controller._handle_z_offset_command(Z_OFFSET_UI.RESET)
 
         self.assertEqual(controller.gcode.commands, [
-            "MOVE_SAFE Z=-0.250000 ABSOLUTE=1 F=300"])
+            "MOVE_SAFE Z=-0.500000 ABSOLUTE=1 F=300"])
         self.assertEqual(controller.z_calibration.candidate, 0.0)
         self.assertEqual(rendered, [True])
 
@@ -2607,7 +2607,7 @@ class FilamentAndCalibrationWorkflowTest(unittest.TestCase):
             "MOVE_SAFE Z=-0.125000 ABSOLUTE=1 F=300"])
         self.assertAlmostEqual(controller.z_calibration.trigger_z, -0.625)
         self.assertAlmostEqual(controller.z_calibration.local_z, 0.5)
-        self.assertAlmostEqual(controller.z_calibration.candidate, 0.25)
+        self.assertAlmostEqual(controller.z_calibration.candidate, 0.5)
 
     def test_manual_paper_start_moves_to_half_safe_z_and_enables_controls(self):
         controller = base_controller()
@@ -2628,7 +2628,7 @@ class FilamentAndCalibrationWorkflowTest(unittest.TestCase):
         self.assertTrue(controller.z_calibration.ready_for_paper_test)
         self.assertAlmostEqual(controller.z_calibration.reference_z, 5.0)
         self.assertAlmostEqual(controller.z_calibration.paper_contact_z, 5.0)
-        self.assertAlmostEqual(controller.z_calibration.candidate, 4.75)
+        self.assertAlmostEqual(controller.z_calibration.candidate, 5.0)
 
     def test_manual_paper_start_tracks_custom_safe_z(self):
         controller = base_controller()

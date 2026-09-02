@@ -614,6 +614,27 @@ class UsbStorageTest(unittest.TestCase):
         self.assertIn("Found USB storage: %s" % (self.dev / "sdc"), result.stdout)
         self.assertIn("callback=FIRMWARE_IMAGE", result.stdout)
 
+    def test_check_boot_flag_detects_both_ad5m_and_ad5x_firmware_images(self):
+        # check_special_boot_flag must report FIRMWARE_IMAGE for either board's
+        # image glob (AD5M Adventurer5M*.tgz, AD5X AD5X-*.tgz), and fall through
+        # cleanly when neither is present.
+        for filename in ("Adventurer5M-1.2.3.tgz", "AD5X-ForgeX-1.2.3.tgz"):
+            directory = self.root / ("image-" + filename)
+            directory.mkdir()
+            (directory / filename).touch()
+            result = self._run(
+                INIT_BOOT_FLAG,
+                'check_special_boot_flag "%s"' % directory)
+            self.assertEqual(result.returncode, 0, result.stdout)
+            self.assertIn("FIRMWARE_IMAGE", result.stdout)
+
+        empty = self.root / "image-none"
+        empty.mkdir()
+        result = self._run(
+            INIT_BOOT_FLAG, 'check_special_boot_flag "%s"' % empty)
+        self.assertNotEqual(result.returncode, 0, result.stdout)
+        self.assertNotIn("FIRMWARE_IMAGE", result.stdout)
+
     def test_prepare_prompt_identifies_drive_and_has_two_stage_actions(self):
         result = self._run_prepare("prompt")
 
@@ -708,6 +729,31 @@ class UsbStorageTest(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0, result.stdout)
         self.assertIn("action:prompt_begin", result.stdout)
         self.assertIn("action:prompt_show", result.stdout)
+
+    def test_a_kernel_without_swap_support_skips_before_any_work(self):
+        """The AD5X's stock kernel is built without CONFIG_SWAP.
+
+        Measured on the machine: /proc/swaps does not exist and every swapon
+        fails with ENOSYS, so no mode this script offers can work there. The
+        skip has to happen before allocation: dd-ing a 64 MB swap file and
+        mkswap-ing it, only for swapon to refuse, is wasted eMMC wear. MOD is
+        pointed at an empty temp dir so a gate that fails to fire cannot
+        touch a real rootfs while this test runs.
+        """
+        environment = dict(self.environment)
+        environment["PROC_SWAPS"] = str(self.root / "no-such-proc-swaps")
+        environment["INIT_SWAP_LIBRARY_ONLY"] = "0"
+        environment["MOD"] = str(self.root / "mod")
+
+        result = subprocess.run(
+            ["bash", str(INIT_SWAP)],
+            env=environment, text=True, stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT, check=False)
+
+        self.assertEqual(result.returncode, 0, result.stdout)
+        self.assertIn("no swap support", result.stdout, result.stdout)
+        self.assertNotIn("Generating swap file", result.stdout, result.stdout)
+        self.assertFalse((self.root / "mod" / "root" / "swap").exists())
 
 
 if __name__ == "__main__":

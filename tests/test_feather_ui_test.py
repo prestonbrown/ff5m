@@ -163,9 +163,18 @@ class ArtifactWorkerTest(unittest.TestCase):
             printer_log.write_text("before\n", encoding="utf-8")
             active = root / "active.json"
             active.write_text("{}\n", encoding="utf-8")
+            ## Stride has to come from the fixture, not the host. It defaults
+            ## to /sys/class/graphics/fb0/stride, so on any machine with a real
+            ## framebuffer this read the DESKTOP's geometry and failed with
+            ## "row has 1536 bytes, expected 3200". CI has no fb0, falls back
+            ## to the computed stride and passes - so the bug only ever showed
+            ## up locally.
+            stride = root / "stride"
+            stride.write_text("3200\n", encoding="ascii")
 
             worker = ARTIFACTS.ArtifactWorker(
                 AsyncReactor(), str(run), str(framebuffer), str(printer_log))
+            worker.framebuffer_stride = str(stride)
             printer_log.write_text("before\nafter\n", encoding="utf-8")
             captured = []
             captured_event = threading.Event()
