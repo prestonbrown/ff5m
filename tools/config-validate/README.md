@@ -81,7 +81,7 @@ AD5M copies nothing (it is the default). This harness performs exactly that
 copy in a **disposable mod-tree copy** (`$WORK/modtree`, symlinked to
 `/opt/config/mod`) whenever `--platform` is not `ad5m`, so the real checkout is
 never mutated. `stage_modtree()` is the reference implementation Stage B's
-packaging step mirrors. Set `HELIX_HW_OVERLAY=0` to force the AD5M defaults on
+packaging step mirrors. Set `FORGEX_HW_OVERLAY=0` to force the AD5M defaults on
 any platform (used by the mutation check below).
 
 ## What it found (AD5M `.cfg` on AD5X true-stock), now behind the overlay
@@ -89,7 +89,7 @@ any platform (used by the mutation check below).
 Before the platform hardware-macro overlay existed, the harness FAILED on three
 ordered errors. Each is an AD5M-vs-AD5X **stock divergence**, not a transplant
 bug, and each is now resolved by the AD5X override files above — `--platform
-ad5x` reaches the MCU-connect boundary (PASS). Running with `HELIX_HW_OVERLAY=0`
+ad5x` reaches the MCU-connect boundary (PASS). Running with `FORGEX_HW_OVERLAY=0`
 forces the AD5M defaults back on and reproduces the first error, proving the
 override is what makes it pass. klippy stops at the first error; each line below
 is the next once the previous section is removed:

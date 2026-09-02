@@ -244,8 +244,8 @@ class BedScrewPositionTest(unittest.TestCase):
     """The bed screws are where this machine's screws are.
 
     Inherited at +-94 in the AD5M's frame, every one of them is below the
-    AD5X's position_min of -20, so SCREWS_TILT_CALCULATE - one tap from
-    HelixScreen's bed screw panel - refuses on the first screw.
+    AD5X's position_min of -20, so SCREWS_TILT_CALCULATE - one tap from a bed
+    screw panel in any UI - refuses on the first screw.
     """
 
     def test_all_four_screws_are_on_the_plate(self):
@@ -261,11 +261,11 @@ class BedScrewPositionTest(unittest.TestCase):
     def test_thread_is_left_as_inherited(self):
         """CW-M4 is deliberate and must not drift.
 
-        HelixScreen carries a printer-database override declaring this family
-        physically responds CCW, established empirically (helixscreen
-        640d61193, and d3d329597 for this machine). Correcting the thread
-        string here without dropping that override double-flips it and starts
-        telling users to turn the screw the wrong way.
+        At least one downstream UI carries a printer-database override
+        declaring this family physically responds CCW, established
+        empirically. Correcting the thread string here without also dropping
+        that override double-flips it and starts telling users to turn the
+        screw the wrong way. Change this only together with the consumer.
         """
         self.assertEqual(sections()["screws_tilt_adjust"]["screw_thread"],
                          "CW-M4")

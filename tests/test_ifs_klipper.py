@@ -1147,7 +1147,7 @@ class TestToolheadSensor(unittest.TestCase):
         self.assertTrue(sensor.read_present())
 
     def test_it_registers_as_a_stock_filament_switch_sensor(self):
-        ## This is the surface Moonraker and HelixScreen already watch.
+        ## This is the surface Moonraker and any UI already watch.
         sensor, printer = make_toolhead(adc={self.ADC: 0.008})
         self.assertIs(printer.lookup_object("filament_switch_sensor toolhead"),
                       sensor)

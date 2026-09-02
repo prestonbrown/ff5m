@@ -355,10 +355,10 @@ progress() {
 #
 # We deliberately replace only the WIRED half. The binary also carries
 # `ifconfig wlan0 up` / `udhcpc -i wlan0`, and it would be easy to "finish the
-# job" here - do not. Wi-Fi belongs to HelixScreen's WiFiManager, which owns
-# scanning, credentials and reconnection; a second claimant in a boot script
-# would fight it. This function exists to get the machine on the wire so the
-# bring-up is reachable, nothing more.
+# job" here - do not. Wi-Fi belongs to whatever UI layer manages the network,
+# which owns scanning, credentials and reconnection; a second claimant in a
+# boot script would fight it. This function exists to get the machine on the
+# wire so the bring-up is reachable, nothing more.
 #
 # Step 2 kills it so HEADLESS can own the framebuffer, which silently takes the
 # network with it. A completely successful bring-up then presents as a dead
@@ -373,16 +373,16 @@ NET_WAIT="${AD5X_NET_WAIT:-20}"
 
 ## Development Wi-Fi, and deliberately opt-in.
 ##
-## The rule above still stands: Wi-Fi belongs to HelixScreen's WiFiManager, and
-## an unconditional claimant here would fight it. So this claims wlan0 only when
-## an operator has left credentials at WIFI_CONF. Nothing ships that file and
-## sync never creates it - dropping one in is the opt-in, deleting it is the
-## opt-out, and once WiFiManager owns the radio there is nothing to disable.
+## The rule above still stands: Wi-Fi belongs to the UI layer that manages the
+## network, and an unconditional claimant here would fight it. So this claims
+## wlan0 only when an operator has left credentials at WIFI_CONF. Nothing ships
+## that file and sync never creates it - dropping one in is the opt-in,
+## deleting it is the opt-out, and once a network manager owns the radio there
+## is nothing to disable.
 ##
-## It exists because until HelixScreen is installed this board has no other way
-## to configure Wi-Fi: the stock Qt UI was the network manager and step 2 kills
-## it. A dev printer that came up wired-only would need its cable back after
-## every reboot.
+## It exists because a bare board has no other way to configure Wi-Fi: the
+## stock Qt UI was the network manager and step 2 kills it. A dev printer that
+## came up wired-only would need its cable back after every reboot.
 WIFI_CONF="${AD5X_WIFI_CONF:-/usr/data/config/mod_data/wpa_supplicant.conf}"
 WIFI_IFACE="${AD5X_WIFI_IFACE:-wlan0}"
 ## Where interface presence is read from. A variable only so the tests can
@@ -414,7 +414,7 @@ BOOT_LOGO_DEST="${AD5X_BOOT_LOGO_DEST:-/usr/prog/logo.jpeg}"
 ##
 ## Forge-X's splash binary is an ARM build and this board is MIPS, so once the
 ## stock UI is stopped nothing paints the framebuffer and the panel sits white -
-## a finished boot looks like a hung one. Until HelixScreen owns the screen,
+## a finished boot looks like a hung one. Until some UI owns the screen,
 ## redraw the boot logo with the address the printer actually came up on.
 ## Set AD5X_STATUS_CARD empty to leave the panel alone.
 ## Same late-binding rule as boot_logo_path above.
@@ -906,12 +906,11 @@ run_bootstrap() {
     progress 9
     ## Last, so the panel reflects a bring-up that actually finished. Must be
     ## after the last progress() call: the progress bar paints /dev/fb0
-    ## directly and would tear whatever the UI has drawn. HelixScreen owns the
-    ## panel when the payload ships it (.bin/helixscreen); the status card is
-    ## the fallback for a payload without it, or helixscreen.sh disable.
-    if ! "$SCRIPTS"/helixscreen.sh start; then
-        show_status_card
-    fi
+    ## directly and would tear whatever the status card has drawn.
+    ##
+    ## A UI installed as an add-on takes the panel over from here; Forge-X does
+    ## not launch one, and does not need to know whether one is present.
+    show_status_card
 
     echo "// [ad5x] Bootstrap complete."
     return 0

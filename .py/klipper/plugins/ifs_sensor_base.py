@@ -1,7 +1,7 @@
 ## Shared klipper plumbing for the AD5X filament sensors.
 ##
 ## Both sensors present as stock `filament_switch_sensor` objects - that is the
-## surface Moonraker and HelixScreen already subscribe to, so nothing above has
+## surface Moonraker and any UI already subscribe to, so nothing above has
 ## to learn a new name. What differs between them is only where the reading
 ## comes from, which is the one method a subclass implements.
 ##

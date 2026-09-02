@@ -354,14 +354,14 @@ stage_modtree() {
     # over the default; AD5M is the default and copies nothing. Stage B's
     # packaging step performs this same copy when it assembles a board image.
     #
-    # HELIX_HW_OVERLAY=0 forces the AD5M defaults on any platform (used by the
+    # FORGEX_HW_OVERLAY=0 forces the AD5M defaults on any platform (used by the
     # mutation check, which proves the override is what greens AD5X).
     local work="$1"
     local modtree="$work/modtree"
     mkdir -p "$modtree"
     cp -a "$MOD_DIR/." "$modtree/" || die "cannot stage mod tree copy"
 
-    if [ "$PLATFORM" = "ad5m" ] || [ "${HELIX_HW_OVERLAY:-1}" = "0" ]; then
+    if [ "$PLATFORM" = "ad5m" ] || [ "${FORGEX_HW_OVERLAY:-1}" = "0" ]; then
         vlog "  platform overlay: none (AD5M defaults for platform=$PLATFORM)"
         echo "$modtree"; return 0
     fi

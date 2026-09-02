@@ -8,11 +8,11 @@
 ##
 ## The AD5X has no working on-screen UI yet: Forge-X's splash binary is an ARM
 ## build and this board is MIPS, so nothing paints the framebuffer once the
-## stock UI has been stopped, and the panel is left white. Until HelixScreen
+## stock UI has been stopped, and the panel is left white. Until some UI
 ## lands, this draws the boot logo plus a few status lines and the bring-up
 ## pushes it out with cmd_jpeg_display.
 ##
-## Deliberately font-free: the only TTFs on a real AD5X belong to HelixScreen,
+## Deliberately font-free: the only TTFs on a real AD5X belong to the vendor UI,
 ## and depending on those would invert the dependency. Pillow's bundled bitmap
 ## font upscaled with NEAREST reads as intentional against the logo's terminal
 ## subtitle, and it works on the printer's Pillow 7.0.0 as well as a modern one.

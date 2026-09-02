@@ -687,7 +687,7 @@ case "$out" in
 esac
 
 # --- opt-in Wi-Fi -----------------------------------------------------------
-# Wi-Fi belongs to HelixScreen's WiFiManager; a boot script that always claimed
+# Wi-Fi belongs to the UI layer that manages it; a boot script that always claimed
 # wlan0 would fight it. So the ONLY thing that turns this on is an operator
 # leaving credentials at WIFI_CONF. These pin both halves: that it stays off
 # with no file, and that it actually associates and gets a lease with one.
