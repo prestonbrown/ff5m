@@ -173,9 +173,16 @@ A lane that never moves at all is its own case, and it is the one that bit
 first. The "motion must be seen before its absence counts" rule is what stops
 every eject ending on its first poll, but it also means a lane whose filament
 is *already* past the gear never arms it - measured on the rig as a full tube
-of spinning, 24 s of it, on a lane with nothing left to pull. So after about
-2 s with no motion the move gives up and says so: the lane is already clear of
-the gear, or something is holding it.
+of spinning, 24 s of it, on a lane with nothing left to pull. So after ten
+quiet polls the move gives up and says so: the lane is already clear of the
+gear, or something is holding it.
+
+Measured on that same lane: **24.2 s before, 11.0 s after.** Not the ~2 s the
+poll arithmetic suggests - ten polls at `MOVE_POLL_INTERVAL` is 2 s of
+*waiting*, but each poll also costs a ~165 ms exchange with the board, and the
+clamp and release either side are fixed overhead an eject pays regardless. The
+number that matters is the 13 s of spinning removed, not the detection window
+in isolation.
 
 What it does **not** distinguish is a jam. A gear spinning on nothing and a
 gear stalled against a blockage both show as filament-not-moving, so an eject

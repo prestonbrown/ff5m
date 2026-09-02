@@ -110,8 +110,9 @@ EJECT_STILL_SAMPLES = 3
 ## before its absence counts, or every eject would end on its first poll -
 ## but that leaves the case measured on the rig: ejecting a lane whose
 ## filament is already past the gear moved nothing, armed nothing, and span
-## the full tube. Ten samples is ~2s, long enough for the board to get going
-## and short enough that finding nothing to pull costs 2s rather than 24.
+## the full tube. Ten samples is 2s of waiting plus ten ~165ms exchanges -
+## long enough for the board to get going, and measured on that same lane as
+## 11.0s for the whole eject against 24.2s before, clamp and release included.
 EJECT_START_SAMPLES = 10
 
 ## Which print_stats states end a print. A pause is not among them: the job
