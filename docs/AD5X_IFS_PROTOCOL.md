@@ -408,12 +408,47 @@ filament in 1, 2 and 4).
   three are safe; `F30` actuates.
 - `F12` answers with four numbers: per-channel filament presence, the decimal
   form of `F13`'s `silk_state`.
-- `F37` is reported by an external capture (a Telegram-circulated IFS table) to
-  put the board into **firmware-update mode**. Never probe it from a working
-  install - though it is recoverable: the native screen's IFS firmware update
-  reflashes the board (close the port, run
-  `/usr/prog/PROGRAM/control/IFSCommand /usr/prog/PROGRAM/control/ifs.hex
-  /dev/ttyS4`, re-probe with `F19`), and the board comes back.
+- `F37` puts the board into **firmware-update mode**. The stock updater sends it
+  immediately before writing a new image - that is the whole of what the opcode
+  is for - and the literal `F37` sits in the `ifsF37` binary that sends it.
+  Never probe it from a working install. It is recoverable, though: reflashing
+  the board is something the printer can do to itself, without the native
+  screen. See below.
+
+## Reflashing the IFS board from the printer
+
+The stock control package carries both tools and the image, and its own `run.sh`
+gives the sequence; ninjamida found that it can be driven by hand. Everything is
+under `/usr/prog/PROGRAM/control/`:
+
+| Path | What it is |
+|---|---|
+| `<version>/ifsF37` | sends `F37`, putting the board into update mode |
+| `<version>/IFSCommand` | writes a hex image over the wire |
+| `<version>/ifs.hex` | the image |
+| `IFSCommand`, `ifs.hex` | top-level copies of the last-installed pair, byte-identical to the versioned ones - `run.sh` `cp -f`s them up |
+
+`<version>` is the **control package's** version and not the printer's: `1.1.0`
+alongside a `2B71-0026-FlashForgeAD5X-Control-1.1.1.tar.xz.part` on one rig,
+`1.1.1` on printer firmware 1.2.1. `ifsF37` exists **only** inside that
+directory - unlike `IFSCommand`, it has no top-level copy, so the version
+directory is the one path that matters.
+
+1. **Emergency-stop the printer.** Klippy stays up but closes `/dev/ttyS4` on
+   shutdown, which is what frees the port - measured by watching the descriptor
+   go away from `/proc/<klippy>/fd` across an `M112`. A full klipper stop is not
+   needed.
+2. `cd` to the version directory, then `./ifsF37 /dev/ttyS4`.
+3. `./IFSCommand ./ifs.hex /dev/ttyS4` - or any other image in place of
+   `ifs.hex`.
+4. `FIRMWARE_RESTART` to bring klipper back; it reopens the port. Re-probe with
+   `F19` to read the version off the board.
+
+**Do not run `run.sh` for this.** It is the whole-printer updater: it also burns
+the toolhead M3 firmware over `/dev/ttyS5` via `IAPCommand`, rewrites the main
+board through `NationsCommand`, paints `mcu.img` onto `/dev/fb0`, and finishes
+by deleting the oldest control version directory it finds. Only its last three
+lines are the IFS.
 
 ## The five opcodes nobody had pinned down
 
