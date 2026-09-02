@@ -1,0 +1,40 @@
+name: Tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  shell:
+    name: Shell suite
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install shellcheck
+        run: sudo apt-get update && sudo apt-get install -y shellcheck
+
+      - name: Run shell test suite
+        run: sh test/run.sh
+
+  python:
+    name: Python plugins
+    # Pinned to 22.04 deliberately: ubuntu-latest is 24.04, which cannot
+    # provision Python 3.8 (it reached end of life before 24.04 shipped).
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      # 3.8 is the contract: klippy on the printer runs FlashForge's Python
+      # 3.8.2. Testing only on a newer interpreter would let match statements
+      # and `int | None` annotations through that the printer cannot parse.
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.8'
+
+      # unittest, not pytest, and `tests/` not `test/python/`: the suite moved
+      # and is discovered from the repo root so the plugins import as they do
+      # on the printer.
+      - name: Run plugin tests
+        run: python3 -m unittest discover -s tests -t . -v
