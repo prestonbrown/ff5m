@@ -154,6 +154,7 @@ The existing Klipper implementation for the AD5M is outdated and plagued with bu
 
 The [OpenWiki](openwiki/quickstart.md) provides a code-oriented guide for contributors and advanced users. It complements the operator documentation above; follow the operator guides for installation, calibration, and recovery procedures.
 
+- [Building an image](/docs/BUILDING.md)
 - [Architecture overview](openwiki/architecture.md)
 - [Source map](openwiki/source-map.md)
 - [Chroot environment and web runtime](openwiki/workflows/chroot-and-web-runtime.md)

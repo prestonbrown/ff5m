@@ -18,11 +18,14 @@
 ##   img/forgex-*.raw.xz  flash-time status frames (extra members; painted by
 ##                        the installer - tolerated by the superset contract)
 ##
-## The rootfs is NOT built here. Point BUILDROOT_TAR at a rootfs produced by
-## forgex-br (our buildroot external tree; see ROOTFS.md). Its md5 is verified
-## against rootfs.md5: ours builds are listed KNOWN, the early bring-up borrow
-## is listed FORBIDDEN, and anything unknown needs ALLOW_UNPINNED_ROOTFS=1 -
-## so a release cannot silently embed a foreign or stale rootfs.
+## The rootfs is not built here. Point BUILDROOT_TAR at one produced by
+## forgex-br (our buildroot external tree; see ROOTFS.md), or give none and
+## fetch_rootfs.sh acquires the one rootfs.pin names - downloaded, or built
+## from source with BUILD_ROOTFS=1. NO_AUTO_ROOTFS=1 forbids that and demands
+## BUILDROOT_TAR. However it arrives, its md5 is verified against rootfs.md5:
+## our builds are listed KNOWN, the early bring-up borrow is listed FORBIDDEN,
+## and anything unknown needs ALLOW_UNPINNED_ROOTFS=1 - so a release cannot
+## silently embed a foreign or stale rootfs.
 set -euo pipefail
 exec 3>&1 1>&2   # progress/logs -> stderr; final artifact path -> stdout (fd3)
 
@@ -31,9 +34,10 @@ REPO_ROOT=$(cd "$(dirname "$0")/.." && cd .. && pwd)
 AD5X_DIR="$REPO_ROOT/tools/release/ad5x"
 
 # ---- inputs (all overridable via env) -------------------------------------
-# BUILDROOT_TAR is REQUIRED: the xz-compressed MIPS chroot rootfs tarball that
-# becomes xz/buildroot.tar.xz. No default - a committed script must not embed a
-# path into someone's extracted third-party release.
+# BUILDROOT_TAR: the xz-compressed MIPS chroot rootfs tarball that becomes
+# xz/buildroot.tar.xz. Empty means "go and get the pinned one" (below); there
+# is no path default, because a committed script must not embed a path into
+# someone's extracted third-party release.
 : "${BUILDROOT_TAR:=}"
 # ENTWARE_TAR optional: a real mipsel Entware tarball. Empty => 0-byte stub, so
 # the installer's `[ -s ]` guard skips it cleanly.
@@ -50,12 +54,35 @@ mod_params.json moonraker.conf sql telegram tuning.cfg version.txt"
 
 die() { echo "build_ad5x_image: $*" >&2; exit 1; }
 
-[ -n "$BUILDROOT_TAR" ] || die "BUILDROOT_TAR is required (path to the MIPS rootfs.tar.xz). \
-Build it with forgex-br: see tools/release/ROOTFS.md."
+# ---- the rootfs: supplied, or acquired --------------------------------------
+# fetch_rootfs.sh writes the path it acquired to stdout and everything else to
+# stderr, which is left to flow through: when acquisition fails, its message -
+# which pin it read, and how to proceed by hand - is the one worth reading.
+rootfs_from_source=0
+if [ -z "$BUILDROOT_TAR" ]; then
+    if [ "${NO_AUTO_ROOTFS:-0}" = 1 ]; then
+        die "BUILDROOT_TAR is required (path to the MIPS rootfs.tar.xz): \
+NO_AUTO_ROOTFS=1 forbids acquiring one. Build it with forgex-br: see tools/release/ROOTFS.md."
+    fi
+    echo "build_ad5x_image: no BUILDROOT_TAR given; acquiring the pinned rootfs."
+    echo "  This needs network access. BUILD_ROOTFS=1 builds it from source"
+    echo "  instead, whose first run compiles a cross toolchain and is slow."
+    echo "  NO_AUTO_ROOTFS=1 turns this off and requires BUILDROOT_TAR instead."
+    if ! BUILDROOT_TAR=$("$REPO_ROOT/tools/release/fetch_rootfs.sh"); then
+        die "could not acquire a rootfs."
+    fi
+    if [ "${BUILD_ROOTFS:-0}" = 1 ]; then rootfs_from_source=1; fi
+fi
 [ -f "$BUILDROOT_TAR" ] || die "BUILDROOT_TAR not found: $BUILDROOT_TAR"
 
 # Whose rootfs is this? check_rootfs.sh owns the answer (exit 1 foreign,
 # 2 unpinned without override, 0 known/allowed); its output carries the why.
+# A rootfs built from source moments ago cannot be recorded in rootfs.md5 yet,
+# so it - and only it - is waved through: a download has to match the pin, and
+# a tarball the caller handed us answers to the gate unassisted.
+if [ "$rootfs_from_source" = 1 ]; then
+    export ALLOW_UNPINNED_ROOTFS=1
+fi
 if ! check_out=$("$REPO_ROOT/tools/release/check_rootfs.sh" "$BUILDROOT_TAR" 2>&1); then
     die "rootfs check refused BUILDROOT_TAR:
 $check_out"

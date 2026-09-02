@@ -62,7 +62,9 @@ tree pinned to a specific Buildroot release, with the AD5X ABI
 
 ## Building one
 
-On the build host (zeus), with forgex-br checked out:
+`BUILD_ROOTFS=1 tools/release/build_ad5x_image.sh` does all of this for you in
+Docker - see [BUILDING.md](../../docs/BUILDING.md). By hand, with forgex-br
+checked out:
 
 ```sh
 cd forgex-br/buildroot
@@ -87,6 +89,12 @@ md5sum rootfs.tar.xz   # -> <md5>  ...
 ```
 <md5>  KNOWN  forgex-br ad5x, buildroot <tag>, built <date>
 ```
+
+A rootfs meant to be the one a fresh clone downloads also needs its URL and
+md5 in `rootfs.pin` beside this file, and the release asset published to match.
+`rootfs.md5` says what may ship; `rootfs.pin` says what gets fetched. Moving one
+without the other leaves a build that downloads an artifact its own gate then
+refuses.
 
 `check_rootfs.sh` (run by `build_ad5x_image.sh`) verifies every
 `BUILDROOT_TAR` against that list: `KNOWN` builds pass, the early bring-up
