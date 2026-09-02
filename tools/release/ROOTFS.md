@@ -17,6 +17,28 @@ pinned Buildroot release) and cannot be loaded by the stock rootfs - a binary
 that runs by hand inside the chroot and fails from outside it is that
 mismatch, not a broken build.
 
+### It is not a sealed box
+
+The chroot shares the host's devices and data partitions at identical paths,
+which is what makes it usable rather than an island. Measured on an AD5X:
+
+    /dev/mmcblk0p7   ->  $MOD/data        and  $MOD/opt/config
+    /dev/mmcblk0p6   ->  $MOD/opt/klipper
+    proc, sysfs, configfs, devpts, /dev/shm, the adb functionfs,
+    and tmpfs on /dev, /run and /tmp
+
+`/opt/config` being bind-mounted at the SAME path is the load-bearing one: it
+means one tree is addressable from both sides, so a host path like
+`/opt/config/mod/.bin/...` resolves unchanged inside the chroot. Anything
+installed into the chroot can use host paths verbatim - but they are bind
+mounts, not copies, so a bring-up that stopped mounting them would break
+in-chroot code in a confusing way rather than an obvious one.
+
+Do not assume the AD5M's mount set matches. It does not: the AD5M binds
+`/dev/root` where the AD5X binds real block devices, and it has a
+`root/printer_data` bind that the AD5X does not have at all. Check the board
+you are on.
+
 The ABI the rootfs is built to is not a matter of taste - o32, hard-float
 FP64, NaN2008, matching what the kernel and every stock binary already fix. A
 default mipsel toolchain gets the last two wrong and names its loader
