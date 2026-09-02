@@ -675,13 +675,16 @@ fan object drives an unconnected header and nothing happens.
     required for the dashboard clock.
 
 - **CAMERA_RELOAD**
-  - **Description**: Reloads camera parameters.
+  - **Description**: Rereads image controls from `camera.conf` and applies them
+    without restarting the camera HTTP service.
   - **Parameters**:
     - `SILENT` (int, default: 0): Suppress output (1 = yes).
   - **Defaults**: Runs `S98camera reload`.
 
 - **CAMERA_RESTART**
-  - **Description**: Restarts the camera service.
+  - **Description**: Restarts the camera service for startup-only changes such
+    as resolution, FPS, video device, or memory-reduction mode. Saved image
+    controls are reapplied after the first completed frame.
   - **Parameters**: None.
   - **Defaults**: Runs `S98camera restart`.
 

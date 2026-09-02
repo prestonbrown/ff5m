@@ -243,9 +243,6 @@ klipper_overlay_link_plugins() {
         klipper_overlay_ignored "$rel_file" && continue
 
         target="$target_dir/extras/$rel_file"
-        parent=$(dirname "$target")
-        mkdir -p "$parent" || return 1
-
         if [ -L "$target" ]; then
             current=$(readlink "$target") || return 1
             [ "$current" = "$file" ] && continue
@@ -255,6 +252,9 @@ klipper_overlay_link_plugins() {
             echo "@@ Refusing to overwrite klipper plugin target: $target"
             return 1
         fi
+
+        parent=${target%/*}
+        mkdir -p "$parent" || return 1
 
         echo "// Link klipper plugin file: $file"
         ln -s "$file" "$target" || return 1
@@ -293,9 +293,6 @@ klipper_overlay_link_patches() {
         fi
 
         target="$target_dir/$rel_file"
-        parent=$(dirname "$target")
-        mkdir -p "$parent" || return 1
-
         if [ -L "$target" ]; then
             current=$(readlink "$target") || return 1
             [ "$current" = "$winner" ] && continue
@@ -326,6 +323,11 @@ klipper_overlay_link_patches() {
             # no backup to restore.
             echo "// Add new klipper module (no stock target): $target"
         fi
+
+        # From upstream 1.4.2: a patch may land in a directory the stock tree
+        # does not have, and ln refuses a missing parent.
+        parent=${target%/*}
+        mkdir -p "$parent" || return 1
 
         echo "// Link patched klipper file: $winner"
         ln -s "$winner" "$target" || return 1
