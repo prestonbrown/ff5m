@@ -65,6 +65,12 @@ Managed operations such as `START_PRINT`, `CLEAR_NOZZLE`, bed-mesh validation, f
     - `SPEED` (int, default: 450): Extrusion speed (mm/min).
     - `MATERIAL` (optional): Any name active in `_MATERIAL_CONFIG.heating_slots`. When supplied, the material is saved after a successful load and shown by Feather after restarts.
   - **Defaults**: Uses `load_distance` variable (125 mm).
+  - **On the AD5X**: the verb drives the IFS lane instead of the extruder. `SLOT=`
+    selects the lane and otherwise the loaded lane is re-threaded; with nothing
+    loaded the macro raises an error asking for `SLOT=`. `MATERIAL=` registers
+    the slot's type first (`IFS_SET_MATERIAL TYPE=`), `TEMP=` passes through, and
+    `SPEED=` is accepted and ignored because lane speed is the IFS board's own
+    setting.
 
 - **SET_MATERIAL**
   - **Description**: Saves the currently loaded material without changing temperatures or moving filament.
@@ -83,12 +89,22 @@ Managed operations such as `START_PRINT`, `CLEAR_NOZZLE`, bed-mesh validation, f
   - **Parameters**:
     - `SPEED` (int, default: 450): Retraction speed (mm/min).
   - **Defaults**: Uses `unload_distance` variable (75 mm).
+  - **On the AD5X**: runs `IFS_UNLOAD` on the loaded lane - the filament leaves
+    the nozzle and the lane stays threaded. `TEMP=` passes through; `SPEED=` is
+    accepted and ignored.
 
 - **PURGE_FILAMENT**
   - **Description**: Purges filament with a specified distance and speed, followed by a beep.
   - **Parameters**:
     - `SPEED` (int, default: 450): Extrusion speed (mm/min).
   - **Defaults**: Uses `purge_distance` variable (25 mm).
+  - **On the AD5X**: runs `IFS_PURGE` on the loaded lane at the chute. `TEMP=`
+    passes through; `SPEED=` is accepted and ignored.
+
+On the AD5X all three verbs are lane-aware because the platform file
+(`macros/hw_base.ad5x.cfg`) forwards them to the IFS implementation, so `M600`'s
+change prompt, `LOAD_MATERIAL`'s action menu, and slicer stop-gcode drive the
+lanes without naming an IFS command.
 
 - **LOAD_MATERIAL**
   - **Description**: Guides manual filament loading/changing with material selection prompts.
@@ -110,6 +126,174 @@ Managed operations such as `START_PRINT`, `CLEAR_NOZZLE`, bed-mesh validation, f
 Material workflow macros and defaults live in `config/material.cfg`; see
 [Material slots](/docs/CONFIGURATION.md#material-slots) for ordering, disabling,
 validation, and persistent override examples.
+
+### IFS Filament System (AD5X only)
+
+The AD5X's four-lane IFS. These exist only on that machine; on an AD5M the
+`[ifs]` section is absent and none of them are registered.
+
+**One lane at a time.** All four lanes converge at a hub mounted on the
+toolhead, so only one lane's filament can occupy the path into the extruder.
+Which lane that is gets recorded in `save_variables` (`ifs_loaded` for the
+nozzle, `ifs_at_hub` for the shared path) because the toolhead sensor cannot
+see it: a lane threaded but not loaded sits short of the sensor.
+
+- **IFS_SELECT**
+  - **Description**: Change to another lane. This is the one you want for a
+    colour change - it takes the current filament out of the nozzle, moves that
+    lane out of the way, and loads the new one.
+  - **Parameters**:
+    - `SLOT` (int): The lane to change to.
+    - `TEMP` (optional): Nozzle temperature. Defaults to the incoming
+      material's handling temperature, and to the current target if the slot is
+      unlabelled; must be at least 150 either way.
+  - **Notes**: Does nothing if that lane is already loaded. Purges more when the
+    material type changes, not merely the colour.
+  - **During a print** it also saves and restores the print: position (from
+    `gcode_move.gcode_position`, so bed offsets survive), nozzle target, part
+    fan, and the extrusion mode and `E` position the purge would otherwise
+    clobber. The head returns off the back edge first, travels in X at the
+    lifted height, and comes down in Z last. Idle, none of that happens and the
+    head stays at the chute, which is what somebody standing at the machine
+    wants.
+
+- **T0** / **T1** / **T2** / **T3**
+  - **Description**: What a sliced multi-material file actually contains. Each
+    selects the matching lane - the slicer counts extruders from 0, the IFS
+    counts lanes from 1, so `T0` is slot 1. Klipper runs these synchronously in
+    the gcode stream, which is the blocking behaviour a tool change needs.
+  - **Parameters**: none.
+
+- **IFS_LOAD**
+  - **Description**: Load a lane into the nozzle, purging and wiping at the end.
+    Removes whatever is already loaded first, so `IFS_SELECT` is simply this.
+  - **Parameters**: `SLOT` (int), `TEMP` (optional, as above).
+
+- **IFS_UNLOAD**
+  - **Description**: Take filament out of the NOZZLE. Cuts, wipes, withdraws
+    the stub 60 mm through the extruder, and retracts the lane 70 mm more.
+    **The lane stays threaded and ready.** That 130 mm total is the whole
+    distance the geometry needs: the extruder tip is about 150 mm above the
+    combiner, so the strand ends up in its own bowden, clear of the shared
+    path, and its next load only has to feed that 130 mm back.
+  - **Parameters**: `SLOT` (optional, defaults to the loaded lane), `TEMP`
+    (optional, the lane's own material temperature).
+
+- **IFS_EJECT**
+  - **Description**: Take filament out of the IFS entirely, so a spool can be
+    changed. Retracts the whole tube. Ejecting a lane that is not the loaded one
+    never touches the extruder and works with a cold nozzle. Rarely what you
+    want between colours - that is `IFS_UNLOAD`, which moves 130 mm instead of
+    1000. An eject also gives up the lane's claim on the shared path, since the
+    filament is no longer in the machine to hold it.
+  - **Parameters**: `SLOT` (int), `TEMP` (only needed for the loaded lane).
+
+- **IFS_AUTOINSERT**
+  - **Description**: Thread a lane up to the toolhead sensor and back it off
+    90 mm, ready to load. **Runs by itself** when the board reports filament
+    pushed into a lane. If another lane already holds the hub, the new one is
+    left at the IFS instead, which is still ready - a load feeds the whole
+    tube anyway.
+  - **Parameters**: `CHANNEL` (int).
+  - **Configuration**: `autoinsert: False` in `[ifs]` turns the automatic run
+    off; the command still works by hand.
+
+- **IFS_PURGE**
+  - **Description**: Purge the loaded lane through the nozzle over the chute,
+    then shake and wipe. For a colour that has not fully changed over.
+
+Tool changes purge by colour distance: the first pass scales between 50 mm and
+the printer's full setting (100 mm stock) with how far apart the outgoing and
+incoming slots' registered colours are - close colours flush less, opposite
+colours the full length. An unregistered colour on either side always gets the
+full length, and a material type change gets the full length plus an extra
+flush on top. The scale is visible in the log line
+`IFS: close colours, first purge pass 66.2mm not 100.0mm`.
+  - **Parameters**: `TEMP` (optional; defaults to the loaded material's
+    handling temperature).
+
+- **IFS_MOTION**
+  - **Description**: Say whether the loaded lane has jammed or simply run out -
+    filament stopping looks the same either way, and what tells them apart is
+    whether the lane still holds filament. Pauses only on a jam, and only if a
+    print is running.
+
+- **IFS_MATERIALS** / **IFS_SET_MATERIAL**
+  - **Description**: Report or set what each slot holds. Read from and written
+    to FlashForge's own configuration, so the stock UI agrees and the values
+    survive pulling a lane out and putting it back.
+  - **Usage**: `IFS_SET_MATERIAL SLOT=2 TYPE=PETG COLOR=FF8800`. The colour is
+    bare hex, without `#`: klipper's parser treats `#` as a comment start, so
+    `COLOR=#FF8800` arrives empty (the colour is silently cleared) and
+    `COLOR="#FF8800"` is worse - an unbalanced quote after the `#` truncation
+    is a malformed command, and a malformed command from the console shuts
+    this klipper fork down entirely.
+    Stored and reported with the `#` either way. `TYPE=` and `COLOR=` are
+    independent - pass one to change just that; an empty value clears it.
+    `IFS_SELECT` with no `TEMP=` needs the slot's `TYPE` to be one it knows,
+    so set the type when a lane is first loaded.
+
+- **IFS_STATUS** / **IFS_DIAGNOSTICS**
+  - **Description**: What the board is doing, and its firmware, stall counters
+    and stepper driver registers. Both read-only.
+
+#### Configuration
+
+These live in `macros/hw_base.ad5x.cfg` and rarely need changing. Defaults are
+zmod's, so a machine that works under zmod works here without tuning.
+
+| `[ifs]` option | Default | What it is |
+|---|---|---|
+| `toolhead_sensor` | *(none)* | Which `filament_switch_sensor` a feed ends on. Without it a feed has nothing to stop at and refuses to start. |
+| `tube_length` | 1000 | One lane's run to the toolhead, in mm. A bound on a feed, not a target. |
+| `ifs_speed` | 1200 | Lane speed, mm/min. |
+| `autoinsert` | True | Thread a lane automatically when the board reports filament pushed in. zmod has no switch for this; a printer that moves filament the moment you touch it is worth being able to stop. |
+| `retry_count` | 3 | How many times a move is re-issued after a driver fault. Each retry sends `F15` first. |
+| `stall_count` | 3 | Consecutive 0.2 s polls with no motion before a jam is called. The motion bit toggles, so one sample means nothing. |
+| `silk_count` | 1 | Consecutive polls with an empty lane before a runout is called. The lane's own bit is steady, so one reading is enough. |
+| `poll_interval` | 1.0 | Idle status cadence. Drops to 0.2 s automatically while a move is being watched. |
+| `port` | `/dev/ttyS4` | Where the board is. |
+
+`[ifs_toolhead_sensor toolhead]` takes `present_max` (0.30) and `absent_min`
+(0.72), the ADC thresholds. These are stock's own numbers. The sensor is a
+proximity curve, not a switch: it reads about 0.008 with a strand covering it,
+climbs through 0.023 as the tip backs off, and only reaches 0.398 when the
+toolhead is genuinely empty. `present_max` therefore sits in the one real gap,
+between "filament somewhere near the extruder" and "nothing there at all";
+anything above `absent_min` is higher than any filament position can produce and
+is reported as a sensor fault rather than a runout. The measurements live in
+`.py/klipper/plugins/ifs_sensor_logic.py` and are not repeated in the config,
+because when they were, correcting the measurement left three copies disagreeing.
+
+`[ifs_materials]` takes `path`, defaulting to FlashForge's own
+`Adventurer5M.json`, and a `temp_<TYPE>` for each material's handling
+temperature - what the nozzle is heated to in order to move that filament, not
+what a print runs at. Built in: PLA and PLA-CF 220, SILK and TPU 230, ABS, PETG
+and PETG-CF 250, which are zmod's. Add or override one by name:
+
+```ini
+[ifs_materials]
+temp_ASA: 260
+temp_PLA: 215
+```
+
+A slot whose material is not in the table has no temperature, and a load of it
+insists on an explicit `TEMP=` rather than guessing. zmod substitutes PLA there,
+which runs ABS at 220 and snaps it off in the heatbreak.
+
+Changing material also purges more: `purge_extra_mm` (90, zmod's
+`filament_drop_length_add`) is added to **each** purge pass when the incoming
+slot's type differs from the outgoing one. A different colour of the same
+material does not pay it - stock's own purge volume already covers that.
+
+Lower-level commands, for when something has gone wrong: `IFS_CLAMP`,
+`IFS_RELEASE`, `IFS_RELEASE_ALL`, `IFS_FEED`, `IFS_RETRACT`, `IFS_STOP`,
+`IFS_MARK_INSERTED`, `IFS_RESET_DRIVER`, `IFS_SENSOR_VALUE`. `IFS_RELEASE_ALL`
+is the one to reach for if a lane is left gripped.
+
+A machine with an IFS Jacker pass-through on the serial link additionally
+registers `IFSJ_CHECK` and the `IFSJ_Z*` companion commands; see
+[The AD5X IFS module](IFS_MODULE.md#companion-the-ifs-jacker).
 
 ### Nozzle Cleaning
 
@@ -193,6 +377,13 @@ validation, and persistent override examples.
   - **Description**: Stops all air circulation by disabling fans and resetting servo.
   - **Parameters**: None.
   - **Defaults**: Sets both fans to 0 speed, servo angle to 95°.
+
+The two-fan-plus-servo behaviour above is the AD5M's enclosure. **On the AD5X**
+there is one circulation fan (`[fan_generic chamber_fan]`, wired to PB7, fitted
+with the enclosure kit) and no damper, so there is no path to route between:
+`AIR_CIRCULATION_INTERNAL` and `AIR_CIRCULATION_EXTERNAL` both run that fan at
+full speed and `AIR_CIRCULATION_STOP` stops it. On a machine without the kit the
+fan object drives an unconnected header and nothing happens.
 
 ### Audio and Notifications
 

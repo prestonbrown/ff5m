@@ -84,6 +84,17 @@ Headless mode disables the local UI and is intended for remote control or a cust
 
 Headless mode also uses the `auto` bed-mesh profile. Z offset, camera, and print control must be handled through Forge-X, Fluidd/Mainsail, or your own integration.
 
+### The AD5X panel
+
+The display modes above describe the AD5M. On AD5X the stock Qt UI is stopped
+during bring-up and Forge-X ships no replacement: the boot paints a one-shot
+status card with the address the printer came up on, and leaves the panel
+alone after that.
+
+A touchscreen UI is installed as a separate add-on, which takes the panel over
+from there. Forge-X does not launch one and does not need to know whether one
+is present.
+
 ### Switching to Alternative Screens / Headless
 
 #### Switching to Feather Screen

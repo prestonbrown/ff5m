@@ -287,6 +287,13 @@ SET_MOD PARAM=disable_screen_led VALUE=1
 
 When this is enabled, Stock-screen LED controls no longer work.
 
+On the AD5X, `[led chamber_light]` is declared on the factory's own PA11 pin
+(white LED, no hardware PWM), matching the factory configuration: the
+enclosure kit brings the light, and an open-frame machine simply leaves the
+header unconnected. Stock's own `[led chamber_led]` section is untouched and
+both names address the same pin, so the shared macros drive `chamber_light`
+while the stock application keeps its factory name.
+
 ## Automation
 
 Relevant [configuration parameters](CONFIGURATION.md):
