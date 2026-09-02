@@ -1,5 +1,36 @@
 # The AD5X image rootfs
 
+## Why there is a second userland at all
+
+The AD5X's stock userland is a fixed artifact: glibc 2.33, no compiler, no
+package manager, and nothing on the printer builds anything. Whatever Forge-X
+needs at runtime that the stock image does not already carry - a newer Python,
+libffi, OpenSSL, curl - has to arrive prebuilt, and has to be linked against a
+libc that exists on the machine.
+
+So Forge-X ships its own userland alongside the stock one and runs its
+processes inside it with a chroot. The stock rootfs is left untouched, which
+is what makes the mod removable: nothing of ours overwrites a vendor file, and
+uninstalling is unmounting rather than restoring. The cost is that anything
+built for the chroot is linked against the chroot's glibc (2.41, tracking the
+pinned Buildroot release) and cannot be loaded by the stock rootfs - a binary
+that runs by hand inside the chroot and fails from outside it is that
+mismatch, not a broken build.
+
+The ABI the rootfs is built to is not a matter of taste - o32, hard-float
+FP64, NaN2008, matching what the kernel and every stock binary already fix. A
+default mipsel toolchain gets the last two wrong and names its loader
+`/lib/ld.so.1`, which does not exist on this printer; the real one is
+`/lib/ld-linux-mipsn8.so.1`, and the `n8` is the NaN2008 marker. The reasoning
+and the exact settings - including the trap where Buildroot's MIPS soft-float
+default silently removes both options - are documented in
+[forgex-br](https://github.com/prestonbrown/forgex-br)'s
+`buildroot/external/configs/ad5x_defconfig`, which is where someone changing
+them would work. They are deliberately not duplicated here; two copies of an
+ABI rationale is two copies to disagree.
+
+## The image
+
 The firmware image (`build_ad5x_image.sh`) embeds a MIPS rootfs as
 `xz/buildroot.tar.xz`; the installer unpacks it into `/usr/data/.mod/.forge-x`
 on the printer. That rootfs is ours, built from source by
