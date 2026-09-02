@@ -1,0 +1,19 @@
+# Base klipper patches NOT applied on the AD5X.
+#
+# The AD5X shipped (Sep 2025) a near-mainline Klipper, roughly four years newer
+# than the AD5M stock these base patches were written against. Each patch below
+# is a small upstream fix that AD5X's own stock either already carries in a
+# newer form or predates by only a short window; overlaying Forge-X's older
+# whole-file version would REGRESS AD5X (drop TriggerDispatch/error_mcu in mcu,
+# ProbeSessionHelper in probe, is_shutdown in heaters, and would re-enable a TMC
+# error check FlashForge deliberately disabled). So AD5X keeps its own stock for
+# these modules. The two genuine correctness fixes here (mcu 8e6e467 trsync
+# timing, tmc 8dd798e set_dir_inverted) reach AD5X via a later stock update.
+#
+# One relative path per line, relative to .py/klipper/patches/.
+mcu.py
+extras/gcode_button.py
+extras/heaters.py
+extras/probe.py
+extras/servo.py
+extras/tmc.py
