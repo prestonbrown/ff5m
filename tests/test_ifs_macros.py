@@ -632,6 +632,34 @@ class LoadedLaneTest(unittest.TestCase):
         self.assertEqual(len(back(eject)), 1, eject)
         self.assertIn("LENGTH=1000", back(eject)[0])
 
+    def test_the_eject_stops_when_the_gear_runs_off_the_filament(self):
+        """tube_mm is the cap on an eject, not the plan.
+
+        How far a lane has to come back depends on how far whoever loaded it
+        pushed the filament in, so a fixed 1000mm overshoots by however much
+        it overshoots - measured on the rig as several hundred millimetres of
+        the motor turning against nothing. UNTIL=ejected ends it at the point
+        the gear loses the filament.
+        """
+        commands = self.render("IFS_EJECT", {"SLOT": 2}, recorded=1)
+        back = [c for c in commands if c.startswith("IFS_RETRACT")]
+        self.assertEqual(len(back), 1, commands)
+        self.assertIn("UNTIL=ejected", back[0])
+
+    def test_the_eject_stops_the_board_before_dropping_the_clamp(self):
+        """Ending early leaves the board still driving.
+
+        UNTIL=done could release first because the move was already over.
+        UNTIL=ejected returns mid-move, and letting go of the clamp while the
+        gear is still turning is the one ordering that is worse than waiting.
+        """
+        commands = self.render("IFS_EJECT", {"SLOT": 2}, recorded=1)
+        order = [c.split()[0] for c in commands]
+        self.assertIn("IFS_STOP", order, commands)
+        self.assertIn("IFS_RELEASE", order, commands)
+        self.assertLess(order.index("IFS_STOP"), order.index("IFS_RELEASE"),
+                        commands)
+
     def test_ejecting_an_idle_lane_never_touches_the_extruder(self):
         ## Lane 2 while lane 1 is loaded: nothing of lane 2 is in the nozzle,
         ## so there is nothing to cut and no reason to need heat.

@@ -93,6 +93,18 @@ AUTOINSERT_SCRIPT = "IFS_AUTOINSERT CHANNEL=%d"
 UNTIL_TOOLHEAD = "toolhead"
 UNTIL_CLEAR = "clear"
 UNTIL_DONE = "done"
+## An eject ends when the drive gear runs off the end of the filament. That is
+## NOT the lane's presence sensor going clear, which is the design this
+## replaced: measured on the rig, the tip passes the gear first, grip is lost,
+## and the filament stops while still sitting across the presence sensor - the
+## bit stayed set through a full 1000mm retract and only cleared when the
+## filament was pulled out by hand. So the signal is motion, not presence.
+UNTIL_EJECTED = "ejected"
+
+## The motion bit is sampled, so one quiet reading mid-move is noise rather
+## than the end of the filament. Three at MOVE_POLL_INTERVAL is 0.6s, which at
+## the 3600 mm/min eject is ~36mm of extra spin against the ~700mm this saves.
+EJECT_STILL_SAMPLES = 3
 
 ## Which print_stats states end a print. A pause is not among them: the job
 ## resumes with whatever tool map it was printed with, and clearing there
@@ -606,6 +618,10 @@ class IFS(object):
             self._watch_moves(-1)
 
     def _await_loop(self, gcmd, waiter, deadline, started, before, until):
+        ## UNTIL=ejected state. `moved` matters: the motion bit is FALSE before
+        ## the board gets going, and calling that "ejected" would end every
+        ## eject on its first poll with the filament untouched.
+        moved, still = False, 0
         while self.reactor.monotonic() < deadline:
             self.reactor.pause(self.reactor.monotonic() + COMMAND_POLL_PAUSE)
             elapsed = self.reactor.monotonic() - started
@@ -623,6 +639,20 @@ class IFS(object):
             if status is None:
                 continue
             before = status
+
+            ## Before waiter.update, deliberately. With CHECK=1 the waiter
+            ## reads this same standstill as a jam; for an eject it is the
+            ## success condition, so it has to be judged first.
+            if until == UNTIL_EJECTED:
+                if status.is_moving(waiter.channel):
+                    moved, still = True, 0
+                elif moved:
+                    still += 1
+                    if still >= EJECT_STILL_SAMPLES:
+                        return ifs_sequences.Outcome(
+                            ifs_sequences.FILAMENT, status, elapsed,
+                            "the gear has run off the end of the filament")
+
             outcome = waiter.update(status, elapsed)
             if (outcome.kind == ifs_sequences.FINISHED
                     and until in (UNTIL_TOOLHEAD, UNTIL_CLEAR)):
@@ -892,9 +922,10 @@ class IFS(object):
                 raise gcmd.error(
                     "UNTIL=%s needs a toolhead sensor; set toolhead_sensor= "
                     "in [ifs]" % until)
-        elif until != UNTIL_DONE:
-            raise gcmd.error("UNTIL must be %s, %s or %s"
-                             % (UNTIL_TOOLHEAD, UNTIL_CLEAR, UNTIL_DONE))
+        elif until not in (UNTIL_DONE, UNTIL_EJECTED):
+            raise gcmd.error("UNTIL must be %s, %s, %s or %s"
+                             % (UNTIL_TOOLHEAD, UNTIL_CLEAR, UNTIL_DONE,
+                                UNTIL_EJECTED))
 
         label = "%s C%d L%d S%d" % (opcode, channel, length, speed)
         operation = self.MOVE_OPERATIONS[opcode]

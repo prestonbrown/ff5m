@@ -1213,5 +1213,111 @@ class TestChannelSensor(unittest.TestCase):
         self.assertEqual(results, [True, True, False, True])
 
 
+class TestEjectUntilFilamentStops(unittest.TestCase):
+    """UNTIL=ejected: stop when the gear runs off the end of the filament.
+
+    Measured on the rig, and it is not what the obvious design assumed. An
+    eject does NOT end with the lane's presence sensor going clear. The tip
+    passes the drive gear first, grip is lost, and the filament simply stops -
+    still sitting across the presence sensor, which then reads "loaded" until
+    a human pulls the rest out. A full 1000mm retract left the bit set, and it
+    cleared the instant the filament was pulled by hand.
+
+    So the signal is motion, not presence: the motor is still turning and the
+    filament is no longer moving. F13's `stall_state` is that bit, despite the
+    name - see ifs_status, which calls it motion_mask.
+    """
+
+    def setUp(self):
+        self.obj, self.printer, self.link = make_ifs(replies=[f13()])
+        self.obj._connect()
+        self.obj._thread = AliveThread()
+        self.reactor = self.printer.reactor
+
+        def tick():
+            if not self.obj._run_queued():
+                self.obj._poll_once()
+        self.reactor.on_pause = tick
+
+    def _retract(self, replies, **extra):
+        self.link.replies = replies
+        args = {"CHANNEL": 1, "UNTIL": "ejected", "LENGTH": 1000,
+                "SPEED": 3600, "TIMEOUT": 2.0}
+        args.update(extra)
+        gcmd = fakes.FakeGcmd(args)
+        self.obj.cmd_IFS_RETRACT(gcmd)
+        return gcmd
+
+    def test_the_move_ends_when_the_filament_stops_moving(self):
+        ## Moving, then still for the confirmation run: the gear has run off
+        ## the end. The board is NOT at READY - it would happily keep turning
+        ## for the rest of the 1000mm, which is the dead spin this removes.
+        gcmd = self._retract(
+            ["FFS channel 1 exiting."]
+            + [f13(state=STATUS.UNLOADING, chan=1, stall=0b0001)] * 2
+            + [f13(state=STATUS.UNLOADING, chan=1, stall=0)] * 4)
+        self.assertTrue(any("filament" in r for r in gcmd.gcode.responses),
+                        gcmd.gcode.responses)
+
+    def test_a_move_that_never_moved_is_not_instantly_ejected(self):
+        """The bit is FALSE before the board gets going.
+
+        Treating that as "ejected" would end every eject on its first poll,
+        leaving the filament exactly where it started while reporting success.
+        Motion has to be seen before its absence means anything.
+        """
+        gcmd = self._retract(
+            ["FFS channel 1 exiting."]
+            + [f13(state=STATUS.UNLOADING, chan=1, stall=0)] * 4
+            + [f13(state=STATUS.READY)] * 2)
+        ## It ran to the board's own finish instead of stopping early.
+        self.assertFalse(
+            any("gear has run off" in r for r in gcmd.gcode.responses),
+            gcmd.gcode.responses)
+
+    def test_one_quiet_reading_is_not_the_end(self):
+        ## The bit is sampled, and a single quiet poll mid-move is noise. Only
+        ## a run of them means the filament has actually stopped.
+        gcmd = self._retract(
+            ["FFS channel 1 exiting."]
+            + [f13(state=STATUS.UNLOADING, chan=1, stall=0b0001)]
+            + [f13(state=STATUS.UNLOADING, chan=1, stall=0)]
+            + [f13(state=STATUS.UNLOADING, chan=1, stall=0b0001)] * 2
+            + [f13(state=STATUS.READY)] * 2)
+        ## It ran on to the board's own finish rather than calling that blip
+        ## the end of the filament.
+        self.assertFalse(
+            any("gear has run off" in r for r in gcmd.gcode.responses),
+            gcmd.gcode.responses)
+
+    def test_another_lanes_motion_does_not_count(self):
+        """Channel 4 turning says nothing about channel 1's filament.
+
+        mask_to_channels reads the whole mask; asking the wrong bit would
+        keep an eject running while a different lane happened to be busy.
+        """
+        gcmd = self._retract(
+            ["FFS channel 1 exiting."]
+            + [f13(state=STATUS.UNLOADING, chan=1, stall=0b0001)]
+            + [f13(state=STATUS.UNLOADING, chan=1, stall=0b1000)] * 4)
+        self.assertTrue(any("filament" in r for r in gcmd.gcode.responses),
+                        gcmd.gcode.responses)
+
+    def test_ejected_is_a_valid_until_and_needs_no_toolhead_sensor(self):
+        ## UNTIL=toolhead and UNTIL=clear both refuse without a toolhead
+        ## sensor. This one watches a lane, so that gate must not apply.
+        self.obj._toolhead_has_filament = lambda: None
+        self._retract(["FFS channel 1 exiting."]
+                      + [f13(state=STATUS.UNLOADING, chan=1, stall=0b0001)]
+                      + [f13(state=STATUS.UNLOADING, chan=1, stall=0)] * 4)
+
+    def test_an_unknown_until_is_still_refused(self):
+        self.link.replies = ["FFS channel 1 exiting."]
+        gcmd = fakes.FakeGcmd({"CHANNEL": 1, "UNTIL": "banana",
+                               "LENGTH": 1000, "SPEED": 3600})
+        with self.assertRaises(Exception):
+            self.obj.cmd_IFS_RETRACT(gcmd)
+
+
 if __name__ == "__main__":
     unittest.main()

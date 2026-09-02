@@ -145,6 +145,39 @@ Handling temperatures per material are `[ifs_materials]` options
 (`temp_PETG: 240`), and the load/purge/unload distances come from the
 printer's own `Multicolour` settings block when one exists.
 
+### When an eject is over
+
+`IFS_EJECT` retracts `UNTIL=ejected`, which ends the move when the drive gear
+runs off the end of the filament. `tube_length` is the cap, not the plan: how
+far a lane actually has to travel back depends on how far whoever loaded it
+pushed the filament in, so a fixed length overshoots by however much it
+overshoots - on the rig that was several hundred millimetres of the motor
+turning against nothing at the end of every eject.
+
+**The signal is motion, not the lane's presence sensor**, and that is worth
+stating because the presence sensor is the obvious choice and it does not
+work. Measured: the tip passes the drive gear *before* it reaches the presence
+sensor, so grip is lost first and the filament stops while still sitting
+across that sensor. A full 1000 mm retract left the lane reporting `loaded`,
+and the bit cleared only when the filament was pulled out by hand. An eject
+waiting on it would wait for a human.
+
+So `UNTIL=ejected` watches F13's per-channel motion bit (`stall_state` on the
+wire, `motion_mask` in `ifs_status` - the name is the board's, not ours) and
+ends the move when the filament stops moving having previously moved. The
+"having previously moved" half is not optional: the bit reads false before the
+board gets going, and without it every eject would finish on its first poll
+with the filament untouched.
+
+What it does **not** distinguish is a jam. A gear spinning on nothing and a
+gear stalled against a blockage both show as filament-not-moving, so an eject
+over a jammed lane reports the same ending as a clean one. That is tolerable
+here because an eject is a hands-on operation - you are pulling filament out
+to change a spool, and you can see whether it came out - but it is the reason
+this is not used anywhere the machine acts on the answer unattended.
+`DRV_STATUS`'s `CS_ACTUAL` should separate the two cases and has not been
+tried.
+
 ### Feed speed
 
 Retracts run at `ifs_fast_speed` (3600 mm/min). The full-tube eject goes from
