@@ -106,6 +106,14 @@ UNTIL_EJECTED = "ejected"
 ## the 3600 mm/min eject is ~36mm of extra spin against the ~700mm this saves.
 EJECT_STILL_SAMPLES = 3
 
+## And the lane that never moves at all. The rule above needs motion SEEN
+## before its absence counts, or every eject would end on its first poll -
+## but that leaves the case measured on the rig: ejecting a lane whose
+## filament is already past the gear moved nothing, armed nothing, and span
+## the full tube. Ten samples is ~2s, long enough for the board to get going
+## and short enough that finding nothing to pull costs 2s rather than 24.
+EJECT_START_SAMPLES = 10
+
 ## Which print_stats states end a print. A pause is not among them: the job
 ## resumes with whatever tool map it was printed with, and clearing there
 ## would retarget every tool change after a RESUME.
@@ -621,7 +629,7 @@ class IFS(object):
         ## UNTIL=ejected state. `moved` matters: the motion bit is FALSE before
         ## the board gets going, and calling that "ejected" would end every
         ## eject on its first poll with the filament untouched.
-        moved, still = False, 0
+        moved, still, idle = False, 0, 0
         while self.reactor.monotonic() < deadline:
             self.reactor.pause(self.reactor.monotonic() + COMMAND_POLL_PAUSE)
             elapsed = self.reactor.monotonic() - started
@@ -652,6 +660,16 @@ class IFS(object):
                         return ifs_sequences.Outcome(
                             ifs_sequences.FILAMENT, status, elapsed,
                             "the gear has run off the end of the filament")
+                else:
+                    ## Never moved. Either the lane is already clear of the
+                    ## gear or something is holding it; a full tube of
+                    ## spinning answers neither, so say which we cannot tell.
+                    idle += 1
+                    if idle >= EJECT_START_SAMPLES:
+                        return ifs_sequences.Outcome(
+                            ifs_sequences.FILAMENT, status, elapsed,
+                            "the lane never moved - already clear of the "
+                            "gear, or stuck")
 
             outcome = waiter.update(status, elapsed)
             if (outcome.kind == ifs_sequences.FINISHED

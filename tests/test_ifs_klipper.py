@@ -1275,6 +1275,37 @@ class TestEjectUntilFilamentStops(unittest.TestCase):
             any("gear has run off" in r for r in gcmd.gcode.responses),
             gcmd.gcode.responses)
 
+    def test_a_lane_that_never_moves_at_all_stops_instead_of_spinning(self):
+        """Measured: ejecting a lane whose filament is already past the gear.
+
+        Nothing moves, so the "motion must be seen first" guard never arms and
+        the move ran its full 1000mm turning against nothing - 24 s of it on
+        the rig, which is the dead spin this whole mode exists to remove. A
+        lane that never moves has nothing to eject: it is already clear, or it
+        is stuck, and neither is improved by a full tube of spinning.
+        """
+        gcmd = self._retract(
+            ["FFS channel 1 exiting."]
+            + [f13(state=STATUS.UNLOADING, chan=1, stall=0)] * 14)
+        self.assertTrue(any("never moved" in r for r in gcmd.gcode.responses),
+                        gcmd.gcode.responses)
+
+    def test_the_never_moved_verdict_waits_for_the_board_to_get_going(self):
+        ## The bit is false for the first polls of any move. Calling that
+        ## "never moved" would abandon every eject before it started.
+        gcmd = self._retract(
+            ["FFS channel 1 exiting."]
+            + [f13(state=STATUS.UNLOADING, chan=1, stall=0)] * 3
+            + [f13(state=STATUS.UNLOADING, chan=1, stall=0b0001)] * 3
+            + [f13(state=STATUS.UNLOADING, chan=1, stall=0)] * 4)
+        self.assertFalse(
+            any("never moved" in r for r in gcmd.gcode.responses),
+            gcmd.gcode.responses)
+        ## It ended the right way instead: the gear ran off the filament.
+        self.assertTrue(
+            any("run off" in r for r in gcmd.gcode.responses),
+            gcmd.gcode.responses)
+
     def test_one_quiet_reading_is_not_the_end(self):
         ## The bit is sampled, and a single quiet poll mid-move is noise. Only
         ## a run of them means the filament has actually stopped.
