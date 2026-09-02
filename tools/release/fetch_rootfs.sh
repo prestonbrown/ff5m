@@ -21,7 +21,7 @@
 #                     (default: ${XDG_CACHE_HOME:-$HOME/.cache}/forgex-x/rootfs)
 #   FORCE_ROOTFS=1    download again even when the cache already verifies
 #   BUILD_ROOTFS=1    build from source instead of downloading
-#   FORGEX_BR_DIR     an existing forgex-br checkout to build in
+#   FORGEX_BR_DIR     an existing forgex-buildroot checkout to build in
 set -eu
 
 HERE=$(cd "$(dirname "$0")" && pwd)
@@ -89,7 +89,7 @@ if [ "${BUILD_ROOTFS:-0}" = 1 ]; then
         die "docker is installed but not runnable: start the daemon, or add yourself
   to the docker group (log out and back in), then re-run."
 
-    BR_DIR=${FORGEX_BR_DIR:-$CACHE_DIR/forgex-br}
+    BR_DIR=${FORGEX_BR_DIR:-$CACHE_DIR/forgex-buildroot}
     case $BR_DIR in
         /*) ;;
         *)  BR_DIR=$PWD/$BR_DIR ;;
@@ -129,9 +129,9 @@ if [ "${BUILD_ROOTFS:-0}" = 1 ]; then
 
     say "building in Docker; the first build compiles a cross toolchain and is slow"
     ( cd "$BR_DIR/buildroot" \
-      && docker build -t forgex-br . >&2 \
+      && docker build -t forgex-buildroot . >&2 \
       && docker run --rm -u "$(id -u):$(id -g)" -v "$PWD:$PWD" -w "$PWD" \
-             forgex-br ./build.sh ad5x >&2 ) || die "rootfs build failed in $BR_DIR/buildroot"
+             forgex-buildroot ./build.sh ad5x >&2 ) || die "rootfs build failed in $BR_DIR/buildroot"
 
     built=$BR_DIR/buildroot/output/ad5x/images/rootfs.tar.xz
     [ -f "$built" ] || die "build reported success but produced no $built"

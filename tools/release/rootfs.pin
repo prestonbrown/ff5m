@@ -10,11 +10,11 @@
 # rootfs_md5 must also be listed KNOWN in rootfs.md5 beside this file, or the
 # builder's identity gate would refuse the very artifact this pin names.
 #
-# The release asset does not exist yet: rootfs_url is the address it will be
-# published at, so the download path is inert until it is. Until then, build
-# from source (BUILD_ROOTFS=1) or supply BUILDROOT_TAR by hand.
+# Moving rootfs_url means publishing the new artifact first and recording its
+# md5 as KNOWN in rootfs.md5, or the builder downloads something its own gate
+# then refuses.
 
-rootfs_url   https://github.com/prestonbrown/forgex-br/releases/download/ad5x-rootfs-2026-08-24/rootfs.tar.xz
+rootfs_url   https://github.com/prestonbrown/forgex-buildroot/releases/download/ad5x-rootfs-2026-08-24/rootfs.tar.xz
 rootfs_md5   f7ef1da7e623f39cc6fbe484d9081911
-source_repo  https://github.com/prestonbrown/forgex-br.git
+source_repo  https://github.com/prestonbrown/forgex-buildroot.git
 source_ref   02706123446eb758014f11ca30b37845837dc9a2

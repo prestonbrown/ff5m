@@ -39,7 +39,7 @@ case ${entry:-unknown} in
         note=$(awk -v key="$md5" '$1 == key {print; exit}' "$MD5_FILE")
         echo "check_rootfs: REFUSED - $note" >&2
         echo "This rootfs is tracked as foreign. Build ours instead:" >&2
-        echo "  forgex-br (buildroot external tree) -> build.sh ad5x" >&2
+        echo "  forgex-buildroot (buildroot external tree) -> build.sh ad5x" >&2
         echo "  then append the new md5 to tools/release/rootfs.md5" >&2
         exit 1
         ;;
@@ -49,7 +49,7 @@ case ${entry:-unknown} in
             exit 0
         fi
         echo "check_rootfs: unknown rootfs $md5 (not in $MD5_FILE)." >&2
-        echo "If this is a fresh forgex-br build, record it there;" >&2
+        echo "If this is a fresh forgex-buildroot build, record it there;" >&2
         echo "set ALLOW_UNPINNED_ROOTFS=1 to force this one build." >&2
         exit 2
         ;;

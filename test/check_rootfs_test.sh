@@ -50,7 +50,7 @@ assert_contains "known rootfs names its identity" "$out" "$ours_md5"
 # --- the foreign blob is refused, loudly ------------------------------------
 out=$(run_check "$WORK/theirs.tar.xz"); rc=$?
 assert_ne "forbidden rootfs does not pass" "$rc" 0
-assert_contains "refusal points at forgex-br" "$out" "forgex-br"
+assert_contains "refusal points at forgex-buildroot" "$out" "forgex-buildroot"
 assert_contains "refusal names the tracked entry" "$out" "FORBIDDEN"
 
 # --- unknown needs the override ---------------------------------------------

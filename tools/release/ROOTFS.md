@@ -46,7 +46,7 @@ default mipsel toolchain gets the last two wrong and names its loader
 `/lib/ld-linux-mipsn8.so.1`, and the `n8` is the NaN2008 marker. The reasoning
 and the exact settings - including the trap where Buildroot's MIPS soft-float
 default silently removes both options - are documented in
-[forgex-br](https://github.com/prestonbrown/forgex-br)'s
+[forgex-buildroot](https://github.com/prestonbrown/forgex-buildroot)'s
 `buildroot/external/configs/ad5x_defconfig`, which is where someone changing
 them would work. They are deliberately not duplicated here; two copies of an
 ABI rationale is two copies to disagree.
@@ -56,21 +56,21 @@ ABI rationale is two copies to disagree.
 The firmware image (`build_ad5x_image.sh`) embeds a MIPS rootfs as
 `xz/buildroot.tar.xz`; the installer unpacks it into `/usr/data/.mod/.forge-x`
 on the printer. That rootfs is ours, built from source by
-[forgex-br](https://github.com/prestonbrown/forgex-br) - a Buildroot external
+[forgex-buildroot](https://github.com/prestonbrown/forgex-buildroot) - a Buildroot external
 tree pinned to a specific Buildroot release, with the AD5X ABI
 (o32 / hard-float FP64 / NaN2008) locked in its defconfig.
 
 ## Building one
 
 `BUILD_ROOTFS=1 tools/release/build_ad5x_image.sh` does all of this for you in
-Docker - see [BUILDING.md](../../docs/BUILDING.md). By hand, with forgex-br
+Docker - see [BUILDING.md](../../docs/BUILDING.md). By hand, with forgex-buildroot
 checked out:
 
 ```sh
-cd forgex-br/buildroot
-docker build -t forgex-br .
+cd forgex-buildroot/buildroot
+docker build -t forgex-buildroot .
 docker run --rm -u $(id -u):$(id -g) -v "$PWD:$PWD" -w "$PWD" \
-    forgex-br ./build.sh ad5x
+    forgex-buildroot ./build.sh ad5x
 # -> buildroot/output/ad5x/images/rootfs.tar.xz
 ```
 
@@ -87,7 +87,7 @@ md5sum rootfs.tar.xz   # -> <md5>  ...
 ```
 
 ```
-<md5>  KNOWN  forgex-br ad5x, buildroot <tag>, built <date>
+<md5>  KNOWN  forgex-buildroot ad5x, buildroot <tag>, built <date>
 ```
 
 A rootfs meant to be the one a fresh clone downloads also needs its URL and

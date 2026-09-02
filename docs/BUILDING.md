@@ -39,7 +39,7 @@ The image embeds a MIPS Buildroot rootfs as `xz/buildroot.tar.xz`; the installer
 unpacks it into `/usr/data/.mod/.forge-x` and chroots into it, because the stock
 AD5X userland is glibc 2.33 with no compiler and no package manager. That rootfs
 is ours, built from source by
-[forgex-br](https://github.com/prestonbrown/forgex-br).
+[forgex-buildroot](https://github.com/prestonbrown/forgex-buildroot).
 
 You do not have to build it. With no `BUILDROOT_TAR` set, the image builder
 downloads the pinned one (~18MB) into
@@ -50,7 +50,7 @@ Two files govern this:
 
 | File | What it holds |
 |---|---|
-| `tools/release/rootfs.pin` | the URL and md5 of the rootfs to download, and the forgex-br commit it was built from |
+| `tools/release/rootfs.pin` | the URL and md5 of the rootfs to download, and the forgex-buildroot commit it was built from |
 | `tools/release/rootfs.md5` | which rootfs identities may be embedded at all |
 
 `check_rootfs.sh` verifies every rootfs against `rootfs.md5` no matter how it
@@ -58,17 +58,13 @@ arrived, so a download that is not the pinned artifact is refused rather than
 shipped. The pinned rootfs is recorded there as `KNOWN`, which is why the
 download path needs no override.
 
-> **The release asset is not published yet.** Until it is, the download fails
-> and you need one of the two routes below. The URL in `rootfs.pin` is the one
-> it will live at.
-
 ## Building the rootfs yourself
 
 ```sh
 BUILD_ROOTFS=1 tools/release/build_ad5x_image.sh
 ```
 
-This clones forgex-br at the pinned commit and builds the rootfs in
+This clones forgex-buildroot at the pinned commit and builds the rootfs in
 Docker, then builds the image around it. It needs **Docker** and a lot of
 patience: the first build downloads and compiles a full cross toolchain and is
 slow. Later builds are incremental.
@@ -88,7 +84,7 @@ BUILDROOT_TAR=/path/to/rootfs.tar.xz tools/release/build_ad5x_image.sh
 ```
 
 This is the release path, and the identity gate applies in full: an
-unrecognised rootfs is refused with exit 2. If it is a fresh forgex-br
+unrecognised rootfs is refused with exit 2. If it is a fresh forgex-buildroot
 build you mean to ship, record it in `rootfs.md5` (see
 [ROOTFS.md](../tools/release/ROOTFS.md)). To push one build through without
 recording it, `ALLOW_UNPINNED_ROOTFS=1`.
@@ -101,8 +97,8 @@ recording it, `ALLOW_UNPINNED_ROOTFS=1`.
 | `BUILD_ROOTFS=1` | build the rootfs from source instead of downloading |
 | `NO_AUTO_ROOTFS=1` | never acquire a rootfs; fail unless `BUILDROOT_TAR` is set |
 | `FORCE_ROOTFS=1` | re-download even when the cache already holds a good copy |
-| `ROOTFS_CACHE_DIR` | where downloads and the forgex-br clone live |
-| `FORGEX_BR_DIR` | an existing forgex-br checkout to build in |
+| `ROOTFS_CACHE_DIR` | where downloads and the forgex-buildroot clone live |
+| `FORGEX_BR_DIR` | an existing forgex-buildroot checkout to build in |
 | `ALLOW_UNPINNED_ROOTFS=1` | accept a rootfs that is not recorded in `rootfs.md5` |
 | `ENTWARE_TAR` | a real mipsel Entware tarball; omitted, the installer skips Entware |
 | `OUT_DIR` | where the finished image is written (default `dist/`) |

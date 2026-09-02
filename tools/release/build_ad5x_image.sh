@@ -19,7 +19,7 @@
 ##                        the installer - tolerated by the superset contract)
 ##
 ## The rootfs is not built here. Point BUILDROOT_TAR at one produced by
-## forgex-br (our buildroot external tree; see ROOTFS.md), or give none and
+## forgex-buildroot (our buildroot external tree; see ROOTFS.md), or give none and
 ## fetch_rootfs.sh acquires the one rootfs.pin names - downloaded, or built
 ## from source with BUILD_ROOTFS=1. NO_AUTO_ROOTFS=1 forbids that and demands
 ## BUILDROOT_TAR. However it arrives, its md5 is verified against rootfs.md5:
@@ -62,7 +62,7 @@ rootfs_from_source=0
 if [ -z "$BUILDROOT_TAR" ]; then
     if [ "${NO_AUTO_ROOTFS:-0}" = 1 ]; then
         die "BUILDROOT_TAR is required (path to the MIPS rootfs.tar.xz): \
-NO_AUTO_ROOTFS=1 forbids acquiring one. Build it with forgex-br: see tools/release/ROOTFS.md."
+NO_AUTO_ROOTFS=1 forbids acquiring one. Build it with forgex-buildroot: see tools/release/ROOTFS.md."
     fi
     echo "build_ad5x_image: no BUILDROOT_TAR given; acquiring the pinned rootfs."
     echo "  This needs network access. BUILD_ROOTFS=1 builds it from source"
