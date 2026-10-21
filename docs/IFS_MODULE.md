@@ -106,9 +106,10 @@ can point them at the module instead: rename each verb and forward to
 `macros/hw_base.ad5x.cfg` does on the AD5X, so `M600`'s change prompt,
 `LOAD_MATERIAL`'s action menu and slicer stop-gcode all drive the lanes
 without naming an IFS command. `SLOT=` passes through and otherwise the loaded
-lane is used; `SPEED=` is accepted and ignored, because lane speed is the
-board's own setting; `MATERIAL=` registers the slot's type first
-(`IFS_SET_MATERIAL`'s `TYPE=`).
+lane is used (an unload with no lane on record clears the extruder only, see
+`IFS_UNLOAD` in `docs/MACROS.md`); `SPEED=` is accepted and ignored, because
+lane speed is the board's own setting; `MATERIAL=` registers the slot's type
+first (`IFS_SET_MATERIAL`'s `TYPE=`).
 
 ## Tool remapping
 

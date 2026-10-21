@@ -90,7 +90,8 @@ Managed operations such as `START_PRINT`, `CLEAR_NOZZLE`, bed-mesh validation, f
     - `SPEED` (int, default: 450): Retraction speed (mm/min).
   - **Defaults**: Uses `unload_distance` variable (75 mm).
   - **On the AD5X**: runs `IFS_UNLOAD` on the loaded lane - the filament leaves
-    the nozzle and the lane stays threaded. `TEMP=` passes through; `SPEED=` is
+    the nozzle and the lane stays threaded. With no lane on record it clears
+    the extruder only (see `IFS_UNLOAD`). `TEMP=` passes through; `SPEED=` is
     accepted and ignored.
 
 - **PURGE_FILAMENT**
@@ -176,8 +177,17 @@ see it: a lane threaded but not loaded sits short of the sensor.
     distance the geometry needs: the extruder tip is about 150 mm above the
     combiner, so the strand ends up in its own bowden, clear of the shared
     path, and its next load only has to feed that 130 mm back.
-  - **Parameters**: `SLOT` (optional, defaults to the loaded lane), `TEMP`
-    (optional, the lane's own material temperature).
+  - **Which lane**: `SLOT=` if given, else the lane on record as loaded. With
+    neither, the lane on record at the hub, but only when the toolhead sensor
+    sees filament and that lane still reports some: only one lane fits in the
+    shared path, so the strand at the toolhead is that lane's. It unloads
+    exactly as a loaded lane would and says it fell back to the hub record.
+    With no lane at all it cuts and withdraws the extruder only, retracts no
+    lane, leaves the records alone and warns that only the extruder was
+    cleared - the same fallback `IFS_LOAD` takes.
+  - **Parameters**: `SLOT` (optional, see above), `TEMP` (optional, the lane's
+    own material temperature, else the nozzle target). Below 150 C it refuses:
+    cold filament snaps off in the heatbreak.
 
 - **IFS_EJECT**
   - **Description**: Take filament out of the IFS entirely, so a spool can be

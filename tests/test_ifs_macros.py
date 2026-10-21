@@ -585,13 +585,97 @@ class LoadedLaneTest(unittest.TestCase):
         self.assertIn("CHANNEL=4", clamp[0])
 
     def test_the_selector_position_is_not_mistaken_for_the_loaded_lane(self):
-        ## The regression this replaces: nothing recorded, but the board
-        ## happens to be parked at lane 3. Unloading lane 3 would drag a lane
-        ## that is not in the nozzle.
-        with self.assertRaises(Exception) as caught:
-            self.render("IFS_UNLOAD", {"TEMP": 220}, recorded=0, selector=3,
-                        occupied=True)
-        self.assertIn("nothing is currently loaded", str(caught.exception))
+        ## Nothing recorded, but the board happens to be parked at lane 3.
+        ## Unloading lane 3 would drag a lane that is not in the nozzle, so
+        ## the selector is never a source for the lane to retract.
+        commands = self.render("IFS_UNLOAD", {"TEMP": 220}, recorded=0,
+                               selector=3, occupied=True)
+        self.assertFalse([c for c in commands if "CHANNEL=3" in c], commands)
+
+    def lane_moves(self, commands):
+        return [c for c in commands
+                if c.startswith(("IFS_CLAMP", "IFS_RETRACT", "IFS_RELEASE"))]
+
+    def test_an_unload_names_the_explicit_slot_over_every_record(self):
+        commands = self.render("IFS_UNLOAD", {"SLOT": 1, "TEMP": 220},
+                               recorded=4, at_hub=2, occupied=True)
+        clear = [c for c in commands if c.startswith("_IFS_CLEAR_EXTRUDER")]
+        self.assertEqual(clear, ["_IFS_CLEAR_EXTRUDER TEMP=220 SLOT=1"],
+                         commands)
+        for c in self.lane_moves(commands):
+            self.assertIn("CHANNEL=1", c)
+
+    def test_an_unload_prefers_the_loaded_record_over_the_hub_record(self):
+        commands = self.render("IFS_UNLOAD", {"TEMP": 220}, recorded=4,
+                               at_hub=2, occupied=True)
+        clear = [c for c in commands if c.startswith("_IFS_CLEAR_EXTRUDER")]
+        self.assertEqual(clear, ["_IFS_CLEAR_EXTRUDER TEMP=220 SLOT=4"],
+                         commands)
+        self.assertEqual(self.saved(commands),
+                         {"ifs_loaded": "0", "ifs_at_hub": "0"})
+
+    def test_an_unload_falls_back_to_the_lane_at_the_hub(self):
+        ## Nothing loaded on record, but filament at the toolhead and lane 2
+        ## holding the shared path. Only one lane fits there, so the strand
+        ## the sensor sees is lane 2's, and it unloads exactly like a loaded
+        ## lane would.
+        commands = self.render("IFS_UNLOAD", {"TEMP": 220}, recorded=0,
+                               at_hub=2, occupied=True)
+        clear = [c for c in commands if c.startswith("_IFS_CLEAR_EXTRUDER")]
+        self.assertEqual(clear, ["_IFS_CLEAR_EXTRUDER TEMP=220 SLOT=2"],
+                         commands)
+        moves = self.lane_moves(commands)
+        self.assertEqual(len(moves), 3, commands)
+        for c in moves:
+            self.assertIn("CHANNEL=2", c)
+        self.assertIn("LENGTH=70", [c for c in moves
+                                    if c.startswith("IFS_RETRACT")][0])
+        self.assertEqual(self.saved(commands),
+                         {"ifs_loaded": "0", "ifs_at_hub": "0"})
+        self.assertTrue([c for c in commands if c.startswith("RESPOND")
+                         and "at the hub" in c], commands)
+
+    def assert_extruder_only(self, commands):
+        clear = [c for c in commands if c.startswith("_IFS_CLEAR_EXTRUDER")]
+        self.assertEqual(clear, ["_IFS_CLEAR_EXTRUDER TEMP=220"], commands)
+        self.assertEqual(self.lane_moves(commands), [], commands)
+        ## The records are left as they are: nothing was learned about them.
+        self.assertEqual(self.saved(commands), {}, commands)
+        self.assertTrue([c for c in commands if c.startswith("RESPOND")
+                         and "no lane" in c], commands)
+
+    def test_the_hub_record_is_ignored_when_the_toolhead_reads_empty(self):
+        ## A lane parked at the hub sits short of the sensor; with the sensor
+        ## empty the extruder holds nothing of it to unload.
+        self.assert_extruder_only(self.render(
+            "IFS_UNLOAD", {"TEMP": 220}, recorded=0, at_hub=2,
+            occupied=False))
+
+    def test_the_hub_record_is_ignored_when_its_lane_is_empty(self):
+        ## Lane 3 reports no filament, so the record is stale and retracting
+        ## that lane would drive a feeder with nothing in it.
+        self.assert_extruder_only(self.render(
+            "IFS_UNLOAD", {"TEMP": 220}, recorded=0, at_hub=3,
+            occupied=True))
+
+    def test_an_unload_with_nothing_on_record_clears_only_the_extruder(self):
+        self.assert_extruder_only(self.render(
+            "IFS_UNLOAD", {"TEMP": 220}, recorded=0, at_hub=0,
+            occupied=True))
+
+    def test_an_unload_with_no_slot_takes_the_nozzle_target(self):
+        commands = self.render("IFS_UNLOAD", {}, recorded=0, occupied=True)
+        clear = [c for c in commands if c.startswith("_IFS_CLEAR_EXTRUDER")]
+        self.assertEqual(clear, ["_IFS_CLEAR_EXTRUDER TEMP=220"], commands)
+
+    def test_an_unload_still_refuses_a_cold_nozzle(self):
+        ## Cold filament snaps off in the heatbreak instead of coming out,
+        ## whichever lane is or is not on record.
+        for recorded in (0, 2):
+            with self.assertRaises(MacroActionError) as caught:
+                self.render("IFS_UNLOAD", {"TEMP": 100}, recorded=recorded,
+                            occupied=True)
+            self.assertIn("needs TEMP=", str(caught.exception))
 
     def test_a_load_unloads_the_lane_it_is_replacing(self):
         """Clearing the extruder is not enough when the lane is known.
